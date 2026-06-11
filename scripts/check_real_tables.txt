@@ -1,0 +1,117 @@
+消息 102，级别 15，状态 1，服务器 DESKTOP-QKTHTQP\SQLEXPRESS，第 5 行
+“=”附近有语法错误。
+ 
+--- tSal_InvDetail 鍏抽敭瀛楁 ---
+SIID uniqueidentifier NULL NO
+SIDetailID uniqueidentifier NULL NO
+RowNO char 4 YES
+GDSID uniqueidentifier NULL YES
+UnitNO varchar 5 YES
+StkID uniqueidentifier NULL YES
+GDSNO varchar 20 YES
+CustGDSNO varchar 30 YES
+GDSDesc nvarchar 2000 YES
+BarCode varchar 20 YES
+Qty decimal NULL YES
+CNVQty decimal NULL YES
+StdQty decimal NULL YES
+CPrice money NULL YES
+AInPrice money NULL YES
+APrice money NULL YES
+Price money NULL YES
+DisRate decimal NULL YES
+Amt money NULL YES
+Note nvarchar 250 YES
+ 
+--- tPur_OrderDetail 鍏抽敭瀛楁 ---
+POID uniqueidentifier NULL NO
+PODetailID uniqueidentifier NULL NO
+RowNO char 4 YES
+GDSID uniqueidentifier NULL YES
+StkID uniqueidentifier NULL YES
+GDSNO varchar 20 YES
+GDSDesc nvarchar 50 YES
+BarCode varchar 20 YES
+AInPrice money NULL YES
+Price money NULL YES
+UnitNO varchar 5 YES
+CNVQty decimal NULL YES
+Qty decimal NULL YES
+StdQty decimal NULL YES
+DisRate decimal NULL YES
+Amt money NULL YES
+TaxRate decimal NULL YES
+TaxAmt money NULL YES
+Note nvarchar 250 YES
+PDQty decimal NULL YES
+PRQty decimal NULL YES
+StkQty decimal NULL YES
+PackCnvQty decimal NULL YES
+PackQty decimal NULL YES
+ 
+--- tStk_IODetail 鍏抽敭瀛楁 ---
+IOID uniqueidentifier NULL NO
+IODetailID uniqueidentifier NULL NO
+RowNO char 4 YES
+GDSID uniqueidentifier NULL YES
+SouID uniqueidentifier NULL YES
+GDSNO varchar 20 YES
+GDSDesc nvarchar 50 YES
+BarCode varchar 20 YES
+StkID uniqueidentifier NULL YES
+UnitNO varchar 5 YES
+Qty decimal NULL NO
+CNVQty decimal NULL NO
+StdQty decimal NULL NO
+APrice money NULL YES
+CPrice money NULL YES
+DisRate decimal NULL YES
+Price money NULL YES
+Amt money NULL YES
+TaxRate decimal NULL YES
+TaxAmt money NULL YES
+Flg varchar 5 YES
+Note nvarchar 250 YES
+GDStypeid uniqueidentifier NULL YES
+Brandid uniqueidentifier NULL YES
+Suppid uniqueidentifier NULL YES
+GDStypecode1 char 2 YES
+GDStypecode2 char 4 YES
+StkQty decimal NULL YES
+AQty decimal NULL YES
+GDSStateNo int NULL YES
+AsPrice money NULL YES
+AsAmt money NULL YES
+AccCheckFlg tinyint NULL NO
+AccCheckNote nvarchar 250 YES
+AccCheckID uniqueidentifier NULL YES
+消息 102，级别 15，状态 1，服务器 DESKTOP-QKTHTQP\SQLEXPRESS，第 5 行
+“=”附近有语法错误。
+ 
+--- tStk_StockYM 瀛楁 ---
+AccYM int NULL NO
+StkID uniqueidentifier NULL NO
+GDSID uniqueidentifier NULL NO
+InitQty decimal NULL NO
+inQty decimal NULL NO
+OutQty decimal NULL NO
+EndQty decimal NULL NO
+ 
+--- tStk_StockTranHis 瀛楁 ---
+GDSID uniqueidentifier NULL NO
+StkID uniqueidentifier NULL NO
+LastTranDate datetime NULL NO
+Qty decimal NULL NO
+TranID uniqueidentifier NULL NO
+TranDetailID uniqueidentifier NULL NO
+InQty decimal NULL NO
+OutQty decimal NULL NO
+EndQty decimal NULL NO
+消息 102，级别 15，状态 1，服务器 DESKTOP-QKTHTQP\SQLEXPRESS，第 5 行
+“=”附近有语法错误。
+消息 102，级别 15，状态 1，服务器 DESKTOP-QKTHTQP\SQLEXPRESS，第 5 行
+“璇锋妸涓婇潰鎵”附近有语法错误。
+消息 105，级别 15，状态 1，服务器 DESKTOP-QKTHTQP\SQLEXPRESS，第 6 行
+字符串 '
+GO
+' 后的引号不完整。

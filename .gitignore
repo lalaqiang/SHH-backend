@@ -1,0 +1,27 @@
+# Build outputs
+target/
+
+# Log files
+*.log
+*.err
+*.err.log
+
+# Environment
+.env
+
+# Temp files
+resp.txt
+build_check*.log
+build.log
+short.log
+db_check_v3_out.txt
+errors.log
+full_build.log
+backend.err.log
+backend.log
+server.err*
+server.log
+erp_server*.log
+
+# OS
+.DS_Store

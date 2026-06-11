@@ -1,0 +1,822 @@
+openapi: 3.1.0
+info:
+  title: 深华辉日化 ERP 后端 API
+  version: 0.1.0
+  description: |
+    深华辉日化 ERP 系统后端 OpenAPI 文档。
+    - 公开端点：`/api/health`、`/api/metrics`、`/api/login`
+    - 受保护端点：除公开端点外均需 `Authorization: Bearer <JWT>` 头
+    - 默认限流：登录 10/min、导出 20/min、打印 60/min、写入 120/min、读取 600/min
+  contact:
+    name: 深华辉日化
+    email: dev@shenhua.local
+  license:
+    name: Proprietary
+
+servers:
+  - url: http://localhost:8080
+    description: 本地开发
+  - url: https://erp.example.com
+    description: 生产
+
+tags:
+  - name: 健康监控
+    description: 健康检查 + Prometheus 监控指标
+  - name: 认证
+    description: 登录、登出、密码修改
+  - name: 通用 CRUD
+    description: 动态表查询 / 创建 / 更新 / 删除（基于元数据）
+  - name: 单据审批
+    description: 单据审核与反审（含过账逻辑）
+  - name: 基础资料
+    description: 商品 / 客户 / 供应商 / 仓库 / 品牌 / 员工
+  - name: 库存
+    description: 入出库 / 调拨 / 盘点
+  - name: 采购
+    description: 采购订单 / 入库 / 退货 / 询价
+  - name: 销售
+    description: 销售订单 / 出库 / 退货 / 报价
+  - name: 财务
+    description: 应收 / 应付 / 收付款 / 现金流水
+  - name: 报表
+    description: 采购 / 销售 / 业务 / 库存报表
+  - name: 打印
+    description: 打印模板 + 打印日志
+  - name: 权限
+    description: 角色 + 菜单 + 用户权限
+  - name: 移动端
+    description: 手机端补货 / 盘点 / 特价 / 销售任务等
+  - name: 线上商城
+    description: B2C 商品 / 订单 / 支付 / 地址
+
+paths:
+  # ============================== 健康监控 ==============================
+  /api/health:
+    get:
+      tags: [健康监控]
+      summary: 健康检查（用于 K8s liveness probe / LB）
+      security: []
+      responses:
+        '200':
+          description: 服务健康
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+  /api/metrics:
+    get:
+      tags: [健康监控]
+      summary: Prometheus 监控指标
+      description: |
+        - `format=prom`（默认）→ `text/plain; version=0.0.4`
+        - `format=json` → `application/json`
+      security: []
+      parameters:
+        - in: query
+          name: format
+          schema:
+            type: string
+            enum: [prom, json]
+      responses:
+        '200':
+          description: 指标数据
+
+  # ============================== 认证 ==============================
+  /api/login:
+    post:
+      tags: [认证]
+      summary: 用户登录
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: 用户名或密码错误
+
+  /api/auth/me:
+    get:
+      tags: [认证]
+      summary: 获取当前用户信息
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserInfo'
+
+  /api/auth/logout:
+    post:
+      tags: [认证]
+      summary: 登出（清除 token）
+      responses:
+        '200':
+          description: 登出成功
+
+  /api/auth/change_password:
+    post:
+      tags: [认证]
+      summary: 修改密码
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [old_password, new_password]
+              properties:
+                old_password:
+                  type: string
+                new_password:
+                  type: string
+                  minLength: 6
+      responses:
+        '200':
+          description: 修改成功
+        '400':
+          description: 旧密码错误或新密码不合规
+
+  # ============================== 通用 CRUD ==============================
+  /api/generic/query:
+    post:
+      tags: [通用 CRUD]
+      summary: 通用分页查询（基于表名 + JSON 过滤条件）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueryRequest'
+      responses:
+        '200':
+          description: 查询结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryResponse'
+
+  /api/generic/create:
+    post:
+      tags: [通用 CRUD]
+      summary: 通用创建
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [table, data]
+              properties:
+                table:
+                  type: string
+                  example: tBas_Goods
+                data:
+                  type: object
+      responses:
+        '200':
+          description: 创建成功
+
+  /api/generic/update:
+    post:
+      tags: [通用 CRUD]
+      summary: 通用更新
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [table, primary_key, id, data]
+              properties:
+                table: { type: string }
+                primary_key: { type: string, example: GDSID }
+                id: { type: string }
+                data: { type: object }
+      responses:
+        '200':
+          description: 更新成功
+
+  /api/generic/delete:
+    post:
+      tags: [通用 CRUD]
+      summary: 通用软删除（设置 State='D'）
+      responses:
+        '200':
+          description: 删除成功
+
+  /api/generic/export:
+    post:
+      tags: [通用 CRUD]
+      summary: 通用导出（Excel）
+      responses:
+        '200':
+          description: xlsx 文件
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+
+  /api/generic/import:
+    post:
+      tags: [通用 CRUD]
+      summary: 通用导入（Excel）
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: 导入结果
+
+  # ============================== 单据审批 ==============================
+  /api/doc/approve:
+    post:
+      tags: [单据审批]
+      summary: 审核单据（含过账）
+      description: |
+        单据审核通过后会自动过账到 tStk_Stock，同时写入 tStk_StockTranHis。
+        已审核单据再调此接口幂等，不会重复过账。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveParams'
+      responses:
+        '200':
+          description: 审核成功
+        '400':
+          description: 单据状态不允许（如已删除）
+
+  /api/doc/unapprove:
+    post:
+      tags: [单据审批]
+      summary: 反审单据（撤销过账）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveParams'
+      responses:
+        '200':
+          description: 反审成功
+        '400':
+          description: 单据未审核或已删除
+
+  /api/doc/generate-no:
+    post:
+      tags: [单据审批]
+      summary: 生成单据编号
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                doc_type:
+                  type: string
+                  example: PD
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  doc_no:
+                    type: string
+                    example: PD202606100001
+
+  /api/doc/list-types:
+    get:
+      tags: [单据审批]
+      summary: 列出所有单据类型
+      responses:
+        '200':
+          description: 成功
+
+  /api/doc/print-log:
+    post:
+      tags: [单据审批]
+      summary: 记录打印日志
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrintLogParams'
+      responses:
+        '200':
+          description: 成功
+
+  # ============================== 基础资料 ==============================
+  /api/goods/list:
+    post:
+      tags: [基础资料]
+      summary: 查询商品列表
+      responses:
+        '200':
+          description: 成功
+
+  /api/goods/create:
+    post:
+      tags: [基础资料]
+      summary: 创建商品
+      responses:
+        '200':
+          description: 成功
+
+  /api/cust/list:
+    post:
+      tags: [基础资料]
+      summary: 查询客户列表
+      responses:
+        '200':
+          description: 成功
+
+  /api/supp/list:
+    post:
+      tags: [基础资料]
+      summary: 查询供应商列表
+      responses:
+        '200':
+          description: 成功
+
+  /api/stock/list:
+    post:
+      tags: [基础资料]
+      summary: 查询仓库列表
+      responses:
+        '200':
+          description: 成功
+
+  /api/brand/list:
+    post:
+      tags: [基础资料]
+      summary: 查询品牌列表
+      responses:
+        '200':
+          description: 成功
+
+  /api/emp/list:
+    post:
+      tags: [基础资料]
+      summary: 查询员工列表
+      responses:
+        '200':
+          description: 成功
+
+  /api/dashboard/stats:
+    post:
+      tags: [基础资料]
+      summary: 仪表盘统计
+      responses:
+        '200':
+          description: 成功
+
+  # ============================== 库存 ==============================
+  /api/inventory/stock:
+    post:
+      tags: [库存]
+      summary: 库存余额查询
+      responses:
+        '200':
+          description: 成功
+
+  /api/inventory/flow:
+    post:
+      tags: [库存]
+      summary: 库存流水查询
+      responses:
+        '200':
+          description: 成功
+
+  /api/inventory/io/list:
+    post:
+      tags: [库存]
+      summary: 入出库单列表
+      responses:
+        '200':
+          description: 成功
+
+  /api/inventory/io/create:
+    post:
+      tags: [库存]
+      summary: 创建入出库单
+      responses:
+        '200':
+          description: 成功
+
+  /api/inventory/move/list:
+    post:
+      tags: [库存]
+      summary: 调拨单列表
+      responses:
+        '200':
+          description: 成功
+
+  /api/inventory/check/list:
+    post:
+      tags: [库存]
+      summary: 盘点单列表
+      responses:
+        '200':
+          description: 成功
+
+  /api/inventory/low_stock_alert:
+    post:
+      tags: [库存]
+      summary: 低库存预警
+      responses:
+        '200':
+          description: 成功
+
+  /api/inventory/month_settle:
+    post:
+      tags: [库存]
+      summary: 月度结存
+      responses:
+        '200':
+          description: 成功
+
+  # ============================== 采购 ==============================
+  /api/purchase/orders/list:
+    post:
+      tags: [采购]
+      summary: 采购订单列表
+      responses:
+        '200':
+          description: 成功
+
+  /api/purchase/inbound/list:
+    post:
+      tags: [采购]
+      summary: 采购入库单列表
+      responses:
+        '200':
+          description: 成功
+
+  /api/purchase/return/list:
+    post:
+      tags: [采购]
+      summary: 采购退货单列表
+      responses:
+        '200':
+          description: 成功
+
+  # ============================== 销售 ==============================
+  /api/sales/orders/list:
+    post:
+      tags: [销售]
+      summary: 销售订单列表
+      responses:
+        '200':
+          description: 成功
+
+  /api/sales/outbound/list:
+    post:
+      tags: [销售]
+      summary: 销售出库单列表
+      responses:
+        '200':
+          description: 成功
+
+  /api/sales/return/list:
+    post:
+      tags: [销售]
+      summary: 销售退货单列表
+      responses:
+        '200':
+          description: 成功
+
+  # ============================== 财务 ==============================
+  /api/finance/receivable/list:
+    post:
+      tags: [财务]
+      summary: 应收账款列表
+      responses:
+        '200':
+          description: 成功
+
+  /api/finance/payable/list:
+    post:
+      tags: [财务]
+      summary: 应付账款列表
+      responses:
+        '200':
+          description: 成功
+
+  /api/finance/receipt/list:
+    post:
+      tags: [财务]
+      summary: 收款单列表
+      responses:
+        '200':
+          description: 成功
+
+  /api/finance/payment/list:
+    post:
+      tags: [财务]
+      summary: 付款单列表
+      responses:
+        '200':
+          description: 成功
+
+  /api/finance/ar/customer:
+    get:
+      tags: [财务]
+      summary: 客户应收汇总（从 tStk_IO 实时计算）
+      responses:
+        '200':
+          description: 成功
+
+  /api/finance/ap/supplier:
+    get:
+      tags: [财务]
+      summary: 供应商应付汇总（从 tStk_IO 实时计算）
+      responses:
+        '200':
+          description: 成功
+
+  /api/finance/overdue-accounts:
+    get:
+      tags: [财务]
+      summary: 逾期账款
+      responses:
+        '200':
+          description: 成功
+
+  # ============================== 报表 ==============================
+  /api/report/sales_analysis:
+    post:
+      tags: [报表]
+      summary: 销售分析报表
+      responses:
+        '200':
+          description: 成功
+
+  /api/report/purchase_analysis:
+    post:
+      tags: [报表]
+      summary: 采购分析报表
+      responses:
+        '200':
+          description: 成功
+
+  /api/report/profit_analysis:
+    post:
+      tags: [报表]
+      summary: 利润分析报表
+      responses:
+        '200':
+          description: 成功
+
+  # ============================== 打印 ==============================
+  /api/print/templates:
+    post:
+      tags: [打印]
+      summary: 获取打印模板列表
+      responses:
+        '200':
+          description: 成功
+
+  /api/print/template/get:
+    post:
+      tags: [打印]
+      summary: 获取单个打印模板
+      responses:
+        '200':
+          description: 成功
+
+  /api/print/template/create:
+    post:
+      tags: [打印]
+      summary: 创建打印模板
+      responses:
+        '200':
+          description: 成功
+
+  /api/print/template/update:
+    post:
+      tags: [打印]
+      summary: 更新打印模板
+      responses:
+        '200':
+          description: 成功
+
+  /api/print/template/delete:
+    post:
+      tags: [打印]
+      summary: 删除打印模板
+      responses:
+        '200':
+          description: 成功
+
+  /api/print/log/create:
+    post:
+      tags: [打印]
+      summary: 记录打印日志
+      responses:
+        '200':
+          description: 成功
+
+  # ============================== 权限 ==============================
+  /api/permission/menus:
+    post:
+      tags: [权限]
+      summary: 获取当前用户可见菜单
+      responses:
+        '200':
+          description: 成功
+
+  /api/permission/role-permissions:
+    post:
+      tags: [权限]
+      summary: 获取角色权限
+      responses:
+        '200':
+          description: 成功
+
+  /api/permission/assign-role-permissions:
+    post:
+      tags: [权限]
+      summary: 分配角色权限
+      responses:
+        '200':
+          description: 成功
+
+components:
+  securitySchemes:
+    bearer_auth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 登录后返回的 token，置于 Authorization 头
+
+  schemas:
+    ApiResponse:
+      type: object
+      required: [success]
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+        message:
+          type: string
+        code:
+          type: integer
+
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded]
+        service:
+          type: string
+        version:
+          type: string
+        uptime_seconds:
+          type: integer
+          format: int64
+        database:
+          $ref: '#/components/schemas/DatabaseHealth'
+        timestamp:
+          type: string
+          format: date-time
+
+    DatabaseHealth:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [up, down]
+        latency_ms:
+          type: integer
+        server:
+          type: string
+          nullable: true
+        database:
+          type: string
+          nullable: true
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          example: admin
+        password:
+          type: string
+          format: password
+
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: JWT token（HS256，24h 有效）
+        user:
+          $ref: '#/components/schemas/UserInfo'
+
+    UserInfo:
+      type: object
+      properties:
+        id:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+
+    QueryRequest:
+      type: object
+      required: [table]
+      properties:
+        table:
+          type: string
+          example: tBas_Goods
+        page:
+          type: integer
+          default: 1
+        page_size:
+          type: integer
+          default: 20
+        keyword:
+          type: string
+        filters:
+          type: object
+          additionalProperties: true
+        order_by:
+          type: string
+        order_dir:
+          type: string
+          enum: [asc, desc]
+
+    QueryResponse:
+      type: object
+      properties:
+        total:
+          type: integer
+        items:
+          type: array
+          items:
+            type: object
+        page:
+          type: integer
+        page_size:
+          type: integer
+
+    ApproveParams:
+      type: object
+      required: [table, primary_key, id]
+      properties:
+        table:
+          type: string
+          example: tStk_IO
+          description: 单据主表名
+        primary_key:
+          type: string
+          example: IOID
+          description: 主键字段名
+        id:
+          type: string
+          description: 主键值（UUID 字符串）
+        doc_type:
+          type: string
+          example: PD
+          description: 单据类型（可选）
+
+    PrintLogParams:
+      type: object
+      required: [table, primary_key, id]
+      properties:
+        table: { type: string }
+        primary_key: { type: string }
+        id: { type: string }
+        copies:
+          type: integer
+          default: 1
+
+security:
+  - bearer_auth: []

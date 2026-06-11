@@ -1,0 +1,87 @@
+﻿MD	MDNAME	MDCALLDLL	MDCALLNAME	MDCLASSNAME	MDTYPE	TABLENO	ISPASS	ISSAVETOPASS	ISSAVETONEW	ISEDITTOUNPASS	ISDELETETOUNPASS	ISBAK	ONOPEN	OPENCOUNT	SHOWPASSMSG	SHOWUNPASSMSG	ShareData
+2863e8ac-3605-4e46-bff1-0cc6cdf2f236	用户组	SystemManager.bpl	OpenSysGroup	TfSysGroup	0	GroupNO	0	0	0	0	0	0	0	0	0	0	0
+5dda31e6-2651-45b3-a2c1-0e3efe6bbffe	仓库异动单	Stock.Bpl	OpenStock_InOut	TfStock_InOut	0	IO_NO	1	1	0	1	1	0	0	0	0	0	0
+1288f556-5edd-4e4a-a4ef-109fd9d14d72	系统用户	SystemManager.bpl	OpenSysUser	TfSysUser	0	AccNo	1	0	0	0	0	0	0	0	0	0	0
+b435db1e-b2ed-4360-9dc7-12641e0bf217	客户业务状态变更	Purchase.bpl	OpenPur_Supp_State	TfPur_Supp_State	0	PSS_NO	0	0	0	0	0	0	0	0	0	0	0
+fbc648c5-9e24-40ee-8ab2-1619cf541877	固定资产			TfSelectFIX	0		1	1	1	1	1	1	0	0	0	0	0
+597150ee-f1d0-4e1f-a535-1a41cc9228a9	职称资料	Basic.bpl	OpenJOBTITLE	TfJOBTITLE	0	JOBTITLENO	0	1	0	1	1	1	0	0	0	0	0
+773046aa-3df4-4f0d-b848-1bb429d3bb16	固定资产分类			TfSelectASTtype	0		1	1	1	1	1	1	0	0	0	0	0
+04bbba7f-f6dd-40e8-9b0a-1dc73a59ff03	固定资产建产	AST.bpl	OpenFIX	TfFIX	0	fixno	1	1	1	1	1	1	0	0	0	0	0
+5e39b1b7-e154-4f21-a215-21f00ba08153	运输方式	Basic.bpl	OpenCONVEYANCE	TfCONVEYANCE	0	CONNO	1	1	1	1	1	1	0	0	0	0	1
+fab8e3fa-c83d-414c-a835-25f058561767	客户业务状态变更	SALES.BPL	OpenSale_Cust_State	TfSale_Cust_State	0	CSC_No	1	1	0	1	1	1	0	0	0	0	1
+6b275bd1-245c-491e-9137-28974350d5fa	贸易地区建立	Basic.bpl	OpenCOMMASEA	TfCOMMASEA	0	COMMASEANO	1	1	1	1	1	1	0	0	0	0	1
+acbf11fd-d0dc-49c7-af95-2947fcb6d978	职业分类资料	Basic.bpl	OpenOCCUPATION	TfOCCUPATION	0	OCC_NO	1	1	1	1	1	1	0	0	0	0	1
+2d2fca38-8275-41e5-b760-2aec2cd44394	部门资料建立	Basic.bpl	OpenDept	TfDept	0	deptno	0	0	0	0	0	0	0	0	0	0	1
+1d5e3be2-99e2-432e-9e87-2bdb26fe7e12	固定资产增值	AST.bpl	OpenFIXADD	TfFIXADD	0		1	1	1	1	1	1	0	0	0	0	0
+955d9e90-f416-4cb5-bf9d-2c922769f821	功能模块选择			TfSelectMDName	0		1	1	1	1	1	1	0	0	0	0	0
+d73de503-1039-4561-aacb-2fe3731be16e	单别资料	Stock.Bpl	OpenStock_DocType	TfStock_DocType	0	DocTypeNO	0	0	0	0	0	0	0	0	0	0	1
+c9abd6b1-f4df-4aca-a027-315300af72d6	采购收货单	Purchase.bpl	OpenPur_Receipt	TfPur_Receipt	0	PR_NO	0	0	0	0	0	0	0	0	0	0	0
+71c99b28-c532-4410-ad65-34e29ced47c5	客户报价	SALES.BPL	OpenSALE_Quote	TfSALE_Quote	0	SQ_NO	1	0	0	0	0	0	0	0	0	0	1
+20e59da8-9d81-4b7e-bf07-374aec9b8ee4	银行基本资料	Basic.bpl	OpenBanks	TfBanks	0	BankNO	1	1	1	1	1	1	0	0	0	0	1
+fe9a3872-ace2-4ff8-b369-37b0d34ea97e	货币基本资料	Basic.bpl	OpenCUR	TfCur	0	Cur_NO	0	1	0	1	1	1	0	0	0	0	1
+1ac2596a-4646-4d51-88ec-3913eb8b5b3f	BPL管理	SystemManager.bpl	OpenBplManage		0		0	1	0	1	0	1	0	0	0	0	0
+1ac2596a-397c-4d51-88ec-3913eb8b5b3f	数据表结构管理	SystemManager.bpl	OpenTableManage	TfTABLEMANAGE	0	TABLENAME	0	0	0	0	0	0	0	0	0	0	1
+cb5bfcd6-2e2b-436f-85a3-396a08ef236a	部门			TfSelectDept	0		1	1	1	1	1	1	0	0	0	0	0
+d842f0c6-b046-426f-bbb7-3a74d1f836d6	民族资料	Basic.bpl	OpenFOLK	TfFOLK	0	FOLKNO	1	1	0	1	1	1	0	0	0	0	1
+5a517a3a-9f02-4ba5-a794-3b1cdc32987a	消费动机（来店原因）资料	Basic.bpl	OpenCONSUME_MOTIVATION	TfCONSUME_MOTIVATION	0	MOT_NO	1	1	1	1	1	1	0	0	0	0	1
+07ba5085-04bd-46e5-aa3f-3c3beb52c64b	销售送货单	SALES.BPL	OpenSale_Deliver	TfSale_Deliver	0	Sd_No	1	1	0	1	1	1	0	0	0	0	0
+9a2a09c3-6530-4a75-801a-3ed0735e7cca	固定资产减值	AST.bpl	OpenFIXDel	TfFIXDel	0		1	1	1	1	1	1	0	0	0	0	0
+17d6304e-a2c9-4340-8ba6-48801e59044d	职员基本资料	Basic.bpl	OpenEmployee	TfEmployee	0	emp_no	0	1	0	1	1	1	0	0	0	0	1
+5890cf74-bb41-4666-a24c-4a793cdb8a80	客户选择	SelectMD.bpl	OpenSelectCust	TfSelectCust	1	Cust_No	1	1	1	1	1	1	0	0	0	0	0
+d5e78568-8e1d-4151-ba32-4b9a88fde802	销售退回单	SALES.BPL	OpenSale_Withdrawal	TfSale_Withdrawal	0	SW_No	1	0	0	0	0	0	0	0	0	0	0
+2af1e75f-ed21-4754-92ed-53fe5eb57971	商品分类	Basic.bpl	OpenGDSType	TfGDSType	0	GDSTYPENO	1	1	1	1	1	1	0	0	0	0	1
+96dd56ce-8f49-4290-9cbe-56ce0c29c612	工厂基本资料	Basic.bpl	OpenFACTORY	TfFACTORY	0	FAC_NO	0	0	0	0	0	0	0	0	0	0	1
+c5d7d54c-23bd-41eb-890a-5d0f2b4e07d3	仓库基本资料	Basic.bpl	OpenStock	TfStock	0	STK_NO	0	0	0	0	0	0	0	0	0	0	1
+bb86263a-4f94-4fae-a365-5da15fd72647	学历设置	Basic.bpl	OpenLONGEVITY	TfLONGEVITY	0	LOYNO	1	1	1	1	1	1	0	0	0	0	0
+f6b6ae1c-a04c-4fac-9ff0-65f10036415b	公司基本资料	Basic.bpl	OpenCOMPANY	TfCOMPANY	0	CONO	0	0	0	0	1	0	0	0	0	0	0
+2a49c03c-09eb-470a-b567-6aeef66ee4b6	销售通路选择	SelectMD.bpl	OpenSelectSale_Access	TfSelectSale_Access	1		1	1	1	1	1	1	0	0	0	0	0
+9b4f3d95-a242-42c6-a1e5-6b046843fb35	颜色基本资料	Basic.bpl	OpenCOLORS	TfCOLORS	0	COLORNO	1	0	1	0	0	1	0	0	0	0	1
+9abe08b4-e048-42ce-b465-725978129c20	客户销售价格设定	SALES.BPL	OpenSALE_GDS_PRICE	TfSALE_GDS_PRICE	0		0	1	0	1	1	1	0	0	0	0	1
+a0d3969d-9a03-4c09-ac43-755b60fd30fa	销售网点	Basic.bpl	OpenSale_Stage	TfSale_Stage	0	SSA_NO	0	1	0	1	1	1	0	0	0	0	0
+d981bb23-3919-47ac-81a0-8500a2825d6c	供应商访谈记录	Purchase.bpl	OpenPur_Supp_Access	TfPur_Supp_Access	0	PSA_NO	0	0	0	0	0	0	0	0	0	0	0
+f728ad35-521f-4e90-a4d6-8564d27f34d5	销售订单	SALES.BPL	OpenSale_Order	TfSale_Order	0	So_No	1	0	0	0	0	0	0	0	0	0	1
+77944dd3-746f-4be5-9cc8-8843cbba4a20	参数设置型的窗口			TfBasicDBSet	0		1	1	1	1	1	1	0	0	0	0	0
+0db5fa2a-6140-48ea-8b10-8debb26668fe	权限管理	SystemManager.bpl	OpenSysPower	TfSysPower	0		1	1	1	1	1	1	0	0	0	0	0
+38b812c5-fc44-482d-b66a-8df241ba8b43	仓库资料	SelectMD.bpl	OpenStock	TfSelectStock	1		1	1	1	1	1	1	0	0	0	0	0
+e3d75b50-6dd3-4661-88b3-8e051856c564	客户业务状态变更			TfSale_Cust_State_Change	0		1	1	1	1	1	1	0	0	0	0	0
+bff113f3-e4da-4543-b00e-8e97fd49bfbb	贸易地区	SelectMD.bpl	OpenSelectCOMMASEA	TfSelectCOMMASEA	1		1	1	1	1	1	1	0	0	0	0	0
+9daad1aa-34e9-477f-82f2-8f372fb05ae0	fPHRASE	Basic.bpl	OpenPHRASE	TfPHRASE	0	PHRASENO	0	1	0	1	1	1	0	0	0	0	0
+32336100-4592-4c80-918e-922402e7e65b	单别资料	Purchase.bpl	OpenPur_DocType	TfPur_DocType	0	DocType	0	0	0	0	0	0	0	0	0	0	0
+7a574dac-6fa3-49b4-8703-9277fa8a9055	产品选择	SelectMD.bpl		TfSelectGDS	0		1	1	1	1	1	1	0	0	0	0	0
+a590ef97-eacd-4220-9a2c-92ca26dc7a6f	单据性质	SALES.BPL	OpenSale_DocType	TfSale_DocType	0	DocType	0	0	0	0	0	0	0	0	0	0	0
+238b43a4-ae1b-4b02-a626-9615e9c0942a	固定资产分类	AST.bpl	OpenASTtype	TfASTtype	0		1	1	1	1	1	1	0	0	0	0	0
+efe6833e-4da1-4bf0-a109-9ae9f176f12b	付款方式	Basic.bpl	OpenPAYMENT	TfPAYMENT	0	PAYNO	1	1	1	1	1	1	0	0	0	0	1
+1114bf33-cad6-4ed2-9788-9b1b54313c01	货币选择	SelectMD.bpl	OpenCUR	TfSelectCur	1		1	1	1	1	1	1	0	0	0	0	0
+d6e7b661-fb4f-4528-b711-9f49caa70027	部门	SelectMD.bpl	OpenSelectGdsType	TfSelectGdsType	0		1	1	1	1	1	1	0	0	0	0	0
+fc81cadf-0261-4359-8e89-a34cefd91177	货币基本资料	Basic.bpl	OpenUnit	TfBas_Unit	0	UnitNo	0	0	0	0	0	0	0	0	0	0	1
+3d86ef5a-26f3-4a7e-ba7d-a98717a6962e	供应商资料	Purchase.bpl	OpenSUPP	TfSUPP	0	SUPP_NO	0	0	0	0	0	0	0	0	0	0	1
+2e724487-ba0a-4448-b415-b14b527bab94	客户商品管理	SALES.BPL	OpenSale_Cust_GDS	TfSale_Cust_GDS	0		0	1	0	1	1	0	0	0	0	0	1
+b795014a-c7c4-4fe0-99ec-b236d4eb0968	客户销售价格设定	Purchase.bpl	OpenPur_GDS_PRICE	TfPur_GDS_PRICE	0		1	0	0	0	0	0	0	0	0	0	0
+f2b5e942-bd09-43c8-959c-b4952fdd120a	开发任务安排	SystemManager.bpl	OpenTask	TfSYS_Task	0	TAK_NO	0	0	0	0	0	0	0	0	0	0	1
+ec4710f2-52b5-43ea-9d91-b6164b8bfafb	员工资料选择	SelectMD.bpl	OpenSelectEMP	TfSelectEMP	1		1	1	1	1	1	1	0	0	0	0	0
+2d152455-6c3c-416d-a1a2-b69846e7e951	报表抬头设置	RptManage.bpl	OpenRptTitle	TfRPTTITLE	0		1	1	1	1	1	1	0	0	0	0	0
+0aafc937-7bb0-4e37-87bf-b95f2b76dce2	采购退货单	Purchase.bpl	OpenPur_Withdrawal	TfPur_Withdrawal	0	PW_NO	0	0	0	0	0	0	0	0	0	0	0
+5ce3dae6-4b12-4d4e-9605-bd91f36d3495	fTRADEMARK	Basic.bpl	OpenTRADEMARK	TfTRADEMARK	0	TRADENO	1	1	1	1	1	1	0	0	0	0	0
+a7fa0f65-99f5-4a12-a4af-be9844fc55b9	选择窗口	SystemManager.bpl	OpenSYS_SelectMDFrom	TfSYS_SelectMDFrom	0	MF_NO	0	0	0	0	0	0	0	0	0	0	1
+d43ee2ac-cf9c-45a3-b925-c1601996476c	销售通路	Basic.bpl	OpenSale_Access	TfSale_Access	0	SAS_NO	0	1	0	1	1	1	0	0	0	0	1
+6d5a5940-c2df-4ec8-bcec-c1d92a37e6d8	计提折旧	AST.bpl	OpenFixRun	TfFixRun	0		1	1	1	1	1	1	0	0	0	0	0
+0cba94a2-4b28-460f-96b2-c5d4fd86b3f6	小型数据输入窗口			TfBasicDBMin	0		1	1	1	1	1	1	0	0	0	0	0
+0711afa7-8e3c-4c98-909b-c6d954cac459	采购订单	Purchase.bpl	OpenPur_Order	TfPur_Order	0	PO_No	0	0	0	0	0	0	0	0	0	0	0
+34b909f3-608d-49bd-9e7e-cd4c1d9310f9	地区基本资料	Basic.bpl	OpenAREA	TfAREA	0	AREANO	1	1	1	1	1	1	0	0	0	0	0
+f7f31a44-046a-472d-816c-cee18764cdd6	客户访谈记录	SALES.BPL	OpenSALE_CUST_ACCESS	TfSALE_CUST_ACCESS	0	sca_no	0	0	0	0	0	0	0	0	0	0	0
+420abf95-ddfb-4dbb-b5e3-d66090d692dd	生产线基本资料	Basic.bpl	OpenPRODLINE	TfPRODLINE	0	PRL_NO	0	0	0	0	0	0	0	0	0	0	1
+976f853e-54b3-4de6-a44e-d861d200f789	报表管理	RptManage.bpl	OpenRptManage	TfRptManage	0	RPTNO	0	0	0	0	0	1	0	0	0	0	0
+a1773099-70be-4088-ba7b-d8e51ab84801	银行资料选择	SelectMD.bpl	OpenSelectBank	TfSelectBank	1		1	1	1	1	1	1	0	0	0	0	0
+9230b916-b19f-453b-a3e4-e004b7cefe9b	fBasicDBFrm			TfBasicDBFrm	0		1	1	1	1	1	1	0	0	0	0	0
+6e471ad2-2075-4242-beab-e39e9966a5d2	部门固定资产明细帐查询	AST.bpl	OpenSQFixDept	TfSQFixDept	0		1	1	1	1	1	1	0	0	0	0	0
+2090a98b-18ba-407d-95f7-e63d832694d1	转仓单	Stock.Bpl	OpenStock_Transfer	TfStock_Transfer	0	ST_NO	0	0	0	0	0	0	0	0	0	0	0
+fce1fbf3-4f07-49f2-b5f6-e7ede4fc2b16	客户基本资料	SALES.BPL	OpenCUST	TfCUST	0	CUST_NO	1	1	1	1	1	1	0	0	0	0	1
+54db086f-7487-4872-9b9e-e8746dabdd1e	一般的数据输入窗口			TfBasicDBNormal	0		1	1	1	1	1	1	0	0	0	0	0
+3eabd518-dd61-42cf-9bce-e97646c88203	商品基本资料	Stock.Bpl	OpenGDS	TfGDS	0	GDS_NO	0	0	0	0	0	0	0	0	0	0	1
+be91b5fe-142f-4ca4-9a90-ec8442252fec	费用项目	Basic.bpl	OpenCHARGE_ITEM	TfCHARGE_ITEM	0	CHI_NO	0	1	1	1	1	1	0	0	0	0	1
+355b16c0-a39c-49bf-9a8a-ed6ed1c5c466	客户报价	Purchase.bpl	OpenPur_Quote	TfPur_Quote	0	PQ_NO	1	0	0	0	0	0	0	0	0	0	0
+50e4af43-e4e1-47ce-b349-f4522202d210	国别基本资料	Basic.bpl	OpenBODYS	TfBODYS	0	BODYNO	1	1	1	1	1	1	0	0	0	0	1
+f2821190-47a2-45a3-9225-f5401f5e29bb	系统数据字典	Basic.bpl	OpenDDIC	TfDDIC	0	DIC_ID	0	1	0	1	1	1	0	0	0	0	1
+058e5715-8a1e-463f-9a59-f69cdd4ce871	结算方式	Basic.bpl	OpenBALANCE	TfBALANCE	0	BALANCENO	1	1	1	1	1	1	0	0	0	0	1
+619c947b-f963-4cea-a247-faacd192e487	盘点单	Stock.Bpl	OpenStock_Check	TfStock_Check	0	SCK_No	1	0	0	0	0	0	0	0	0	0	0
+4f8e2e53-9a7a-427a-b8a1-ff3a4be64e6b	供应商选择	SelectMD.bpl	OpenSelectSupp	TfSelectSupp	1	Supp_NO	1	1	1	1	1	1	0	0	0	0	0

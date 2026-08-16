@@ -25,6 +25,15 @@ pub struct Config {
     /// 是否跳过 DB TLS 证书校验（默认 true，兼容自签证书——加密但不去验身份）。
     /// 生产建议在 DB 侧配置有效证书后改为 false。
     pub db_trust_cert: bool,
+    /// 数据库备份目录（BACKUP_DIR，默认 ./backups）。
+    /// Docker 部署建议挂载卷到 /app/backups（compose 已配）。
+    pub backup_dir: String,
+    /// 是否启用定时自动备份（BACKUP_AUTO_ENABLED，默认 false）。
+    pub backup_auto_enabled: bool,
+    /// 自动备份时刻（BACKUP_AUTO_HOUR，0-23，默认凌晨 2 点，越界自动钳制）。
+    pub backup_auto_hour: u32,
+    /// 备份保留天数（BACKUP_KEEP_DAYS，默认 7；自动备份后清理超期文件）。
+    pub backup_keep_days: u32,
     /// 是否开放移动端自助注册（默认关闭）。
     /// /api/mobile/register 是公开端点，开启意味着任何人可匿名创建可登录账号，
     /// 仅在确有业务需要（如门店导购自助开通）且配合验证码/限流时才设为 true。
@@ -90,6 +99,23 @@ impl Config {
             trust_proxy: std::env::var("TRUST_PROXY")
                 .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
                 .unwrap_or(false),
+            backup_dir: {
+                let d = std::env::var("BACKUP_DIR").unwrap_or_else(|_| "./backups".into());
+                d.trim_end_matches(['/']).to_string()
+            },
+            backup_auto_enabled: std::env::var("BACKUP_AUTO_ENABLED")
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(false),
+            backup_auto_hour: std::env::var("BACKUP_AUTO_HOUR")
+                .ok()
+                .and_then(|s| s.parse::<u32>().ok())
+                .map(|h| h.min(23))
+                .unwrap_or(2),
+            backup_keep_days: std::env::var("BACKUP_KEEP_DAYS")
+                .ok()
+                .and_then(|s| s.parse::<u32>().ok())
+                .map(|d| d.max(1))
+                .unwrap_or(7),
             db_encryption: std::env::var("DB_ENCRYPTION")
                 .unwrap_or_else(|_| "not_supported".into()),
             db_trust_cert: std::env::var("DB_TRUST_CERT")

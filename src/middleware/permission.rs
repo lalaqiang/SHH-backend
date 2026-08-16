@@ -445,8 +445,13 @@ fn infer_high_risk_permission(path: &str) -> Option<String> {
     {
         return Some("system.params.update".to_string());
     }
-    // 备份（高危）
-    if path == "/api/backup/create" || path == "/api/backup/delete" {
+    // 备份（高危）：全部端点统一要求 system.backup.manage
+    if path == "/api/backup/create"
+        || path == "/api/backup/delete"
+        || path == "/api/backup/list"
+        || path == "/api/backup/verify"
+        || path == "/api/backup/download"
+    {
         return Some("system.backup.manage".to_string());
     }
     None

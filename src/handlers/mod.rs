@@ -2,6 +2,7 @@ pub mod admin;
 pub mod approval;
 pub mod audit_log;
 pub mod auth;
+pub mod backup;
 pub mod base_data;
 pub mod categories;
 pub mod commission;

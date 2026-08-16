@@ -78,6 +78,9 @@ async fn main() {
     init_pool(&config).await;
     erp_server::db::migrate::run_migrations().await;
 
+    // 定时自动备份（BACKUP_AUTO_ENABLED=true 时每天 BACKUP_AUTO_HOUR 点执行）
+    erp_server::handlers::backup::spawn_auto_backup_scheduler(config.clone());
+
     // CORS：若配置了 CORS_ORIGINS 环境变量则按白名单放行，否则开发环境放行所有
     // P3-29 修复：原 methods/headers 放行 Any，可被利用发送非标准方法或自定义头
     //   收紧为常用方法和常用头（GET/POST/PUT/DELETE/OPTIONS + 标准 HTTP 头）
@@ -989,15 +992,12 @@ async fn main() {
             "/api/notification/unread-count",
             post(notification_backup::get_unread_count),
         )
-        .route("/api/backup/list", post(notification_backup::get_backups))
-        .route(
-            "/api/backup/create",
-            post(notification_backup::create_backup),
-        )
-        .route(
-            "/api/backup/delete",
-            post(notification_backup::delete_backup),
-        )
+        // 数据库备份管理（文件即真相，见 handlers/backup.rs）
+        .route("/api/backup/list", post(backup::list_backups))
+        .route("/api/backup/create", post(backup::create_backup))
+        .route("/api/backup/verify", post(backup::verify_backup))
+        .route("/api/backup/download", post(backup::download_backup))
+        .route("/api/backup/delete", post(backup::delete_backup))
         .route(
             "/api/system-config",
             post(notification_backup::get_system_config),

@@ -23,5 +23,28 @@ server.err*
 server.log
 erp_server*.log
 
+# 密码/密钥相关的调试脚本（含旧版 XOR 密钥，禁止入库）
+check_password.py
+check_password.rs
+check_user_password.sql
+generate_xor_password.py
+reverse_xor_key.py
+verify_password.py
+diagnose.py
+
 # OS
 .DS_Store
+
+# ===== Tokens / 密钥（严禁入库）=====
+*.tok.txt
+*.token
+*.token.txt
+
+# ===== 调试产物 / 手工备份快照，不入库 =====
+/test/
+test_*.json
+check_admin.ps1
+*.rs.head
+*.head.rs
+*.branch.rs
+/recovery/

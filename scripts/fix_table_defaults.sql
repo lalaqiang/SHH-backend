@@ -52,6 +52,36 @@ IF OBJECT_ID('tBas_Emp', 'U') IS NOT NULL BEGIN
     IF COL_LENGTH('tBas_Emp', 'EmpID') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.default_constraints dc JOIN sys.columns c ON dc.parent_object_id = c.object_id AND dc.parent_column_id = c.column_id WHERE c.object_id = OBJECT_ID('tBas_Emp') AND c.name = 'EmpID')
         ALTER TABLE [tBas_Emp] ADD CONSTRAINT [DF_tBas_Emp_EmpID] DEFAULT NEWID() FOR [EmpID];
 END
+GO
+
+-- 1.5 修复历史遗留的 zero-uuid（之前 init 没指定 DEFAULT 时手工插入的占位数据）
+--    任何 uniqueidentifier 列值 = 00000000-0000-0000-0000-000000000000 的，全部刷成 NEWID()
+--    关联：tSys_TableColumnConfig 的 EmpID 0-UUID 会让列设置保存到错误分区
+IF OBJECT_ID('tBas_Emp', 'U') IS NOT NULL BEGIN
+    UPDATE [tBas_Emp] SET [EmpID] = NEWID() WHERE [EmpID] = '00000000-0000-0000-0000-000000000000';
+    PRINT 'Fixed tBas_Emp zero-uuid EmpID rows: ' + CAST(@@ROWCOUNT AS varchar(10));
+END
+IF OBJECT_ID('tBas_Cust', 'U') IS NOT NULL BEGIN
+    UPDATE [tBas_Cust] SET [CustID] = NEWID() WHERE [CustID] = '00000000-0000-0000-0000-000000000000';
+    PRINT 'Fixed tBas_Cust zero-uuid CustID rows: ' + CAST(@@ROWCOUNT AS varchar(10));
+END
+IF OBJECT_ID('tBas_Supp', 'U') IS NOT NULL BEGIN
+    UPDATE [tBas_Supp] SET [SuppID] = NEWID() WHERE [SuppID] = '00000000-0000-0000-0000-000000000000';
+    PRINT 'Fixed tBas_Supp zero-uuid SuppID rows: ' + CAST(@@ROWCOUNT AS varchar(10));
+END
+IF OBJECT_ID('tBas_Stock', 'U') IS NOT NULL BEGIN
+    UPDATE [tBas_Stock] SET [StkID] = NEWID() WHERE [StkID] = '00000000-0000-0000-0000-000000000000';
+    PRINT 'Fixed tBas_Stock zero-uuid StkID rows: ' + CAST(@@ROWCOUNT AS varchar(10));
+END
+IF OBJECT_ID('tBas_Brand', 'U') IS NOT NULL BEGIN
+    UPDATE [tBas_Brand] SET [BrandID] = NEWID() WHERE [BrandID] = '00000000-0000-0000-0000-000000000000';
+    PRINT 'Fixed tBas_Brand zero-uuid BrandID rows: ' + CAST(@@ROWCOUNT AS varchar(10));
+END
+IF OBJECT_ID('tBas_Dept', 'U') IS NOT NULL BEGIN
+    UPDATE [tBas_Dept] SET [DeptID] = NEWID() WHERE [DeptID] = '00000000-0000-0000-0000-000000000000';
+    PRINT 'Fixed tBas_Dept zero-uuid DeptID rows: ' + CAST(@@ROWCOUNT AS varchar(10));
+END
+GO
 
 IF OBJECT_ID('tBas_Stock', 'U') IS NOT NULL BEGIN
     IF COL_LENGTH('tBas_Stock', 'StkID') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.default_constraints dc JOIN sys.columns c ON dc.parent_object_id = c.object_id AND dc.parent_column_id = c.column_id WHERE c.object_id = OBJECT_ID('tBas_Stock') AND c.name = 'StkID')

@@ -5,7 +5,7 @@ use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
 use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
-use crate::handlers::base_data::try_get_value;
+use crate::handlers::base_data::{try_get_value, row_to_json};
 
 #[derive(Deserialize)]
 pub struct CategoryListParams {
@@ -102,17 +102,12 @@ fn resolve_code_col(table: &str) -> &'static str {
     }
 }
 
-fn row_to_json(row: &Row) -> serde_json::Value {
-    let columns = row.columns();
-    let mut map = serde_json::Map::new();
-    for col in columns {
-        let name = col.name().to_string();
-        if name == "_rn" {
-            continue;
-        }
-        map.insert(name.clone(), try_get_value(row, &name));
+fn resolve_sd_col(table: &str) -> &'static str {
+    match table {
+        "tBas_GDSProperty" => "gdsPropertySD",
+        "tBas_GDSKind" => "gdsKindSD",
+        _ => "gdsTypeSD",
     }
-    serde_json::Value::Object(map)
 }
 
 pub async fn get_categories(
@@ -124,12 +119,12 @@ pub async fn get_categories(
     let name_col = resolve_name_col(table);
     let code_col = resolve_code_col(table);
     let page = params.page.unwrap_or(1);
-    let page_size = std::cmp::min(params.page_size.unwrap_or(50), 200);
+    let page_size = std::cmp::min(params.page_size.unwrap_or(50), 1000);
 
     let mut base_query = format!("SELECT t.* FROM [{}] t", table);
     let mut conditions = Vec::new();
     let mut query_params: Vec<Option<String>> = Vec::new();
-    let mut pidx = 1;
+    let pidx = 1;
 
     if !params.include_deleted.unwrap_or(false) {
         conditions.push("t.[Used] <> 'N'".to_string());
@@ -141,7 +136,6 @@ pub async fn get_categories(
                 "(CAST(t.[{}] AS varchar(max)) LIKE @p{} OR CAST(t.[{}] AS varchar(max)) LIKE @p{})",
                 code_col, pidx, name_col, pidx + 1
             ));
-            pidx += 2;
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
         }
@@ -316,11 +310,11 @@ pub async fn create_category(
     let note = params.Note.as_deref().unwrap_or("");
     let used = params.Used.as_deref().unwrap_or("Y");
     let gds_type_sd = params.gdsTypeSD.unwrap_or(0);
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     let sql = format!(
-        "INSERT INTO [{}] ([{}], [{}], [{}], [Flg], [Note], [Used], [LUTime], [gdsTypeSD]) VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)",
-        table, pk, resolve_code_col(table), resolve_name_col(table)
+        "INSERT INTO [{}] ([{}], [{}], [{}], [Flg], [Note], [Used], [LUTime], [{}]) VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)",
+        table, pk, resolve_code_col(table), resolve_name_col(table), resolve_sd_col(table)
     );
 
     conn.execute(
@@ -352,8 +346,8 @@ pub async fn update_category(
     let name_col = resolve_name_col(table);
 
     let sql = format!(
-        "UPDATE [{}] SET [{}] = @p1, [{}] = @p2, [Flg] = @p3, [Note] = @p4, [Used] = @p5, [LUTime] = @p6, [gdsTypeSD] = @p7 WHERE [{}] = @p8",
-        table, code_col, name_col, pk
+        "UPDATE [{}] SET [{}] = @p1, [{}] = @p2, [Flg] = @p3, [Note] = @p4, [Used] = @p5, [LUTime] = @p6, [{}] = @p7 WHERE [{}] = @p8",
+        table, code_col, name_col, resolve_sd_col(table), pk
     );
 
     let code = params.GDSTypeCode.as_deref().unwrap_or("");
@@ -362,7 +356,7 @@ pub async fn update_category(
     let note = params.Note.as_deref().unwrap_or("");
     let used = params.Used.as_deref().unwrap_or("Y");
     let gds_type_sd = params.gdsTypeSD.unwrap_or(0);
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let id_str = params.id.as_str();
 
     conn.execute(

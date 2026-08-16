@@ -20,7 +20,7 @@
 //!   3. 运行：
 //!        cargo test --test posting_flow_test -- --ignored --nocapture
 //!
-//! 验证策略：直接调 approval 模块的 pub 业务函数（apply_stock_delta_qq、query_stock_qty、upsert_stock_tran_his），
+//! 验证策略：直接调 approval 模块的 pub 业务函数（apply_stock_delta、query_stock_qty、upsert_stock_tran_his），
 //! 不走 HTTP 路由，聚焦业务逻辑正确性。
 
 mod common;
@@ -28,8 +28,8 @@ mod common;
 use common::db_tests_enabled;
 use erp_server::config::Config;
 use erp_server::db::init_pool;
-use erp_server::handlers::approval::{
-    apply_stock_delta_qq, query_stock_qty, upsert_stock_ym,
+use erp_server::services::inventory_ledger::{
+    apply_stock_delta, query_stock_qty, upsert_stock_ym,
 };
 use std::time::Duration;
 use uuid::Uuid;
@@ -86,7 +86,7 @@ async fn apply_stock_delta_inserts_new_row() {
     let stkid = test_stkid();
 
     // 第一次：应插入新行，Qty=10
-    let qty = apply_stock_delta_qq(&mut conn, &gdsid, &stkid, 10.0).await;
+    let qty = apply_stock_delta(&mut conn, &gdsid, &stkid, 10.0).await;
     assert_eq!(qty, 10.0, "首次应用 delta=10 后 Qty 应为 10.0");
 
     // 验证：tStk_Stock 中存在该行
@@ -107,10 +107,10 @@ async fn apply_stock_delta_accumulates() {
     let stkid = test_stkid();
 
     // 多次应用：+10, +5, -3 → 累计 12
-    let _ = apply_stock_delta_qq(&mut conn, &gdsid, &stkid, 10.0).await;
-    let q1 = apply_stock_delta_qq(&mut conn, &gdsid, &stkid, 5.0).await;
+    let _ = apply_stock_delta(&mut conn, &gdsid, &stkid, 10.0).await;
+    let q1 = apply_stock_delta(&mut conn, &gdsid, &stkid, 5.0).await;
     assert_eq!(q1, 15.0);
-    let q2 = apply_stock_delta_qq(&mut conn, &gdsid, &stkid, -3.0).await;
+    let q2 = apply_stock_delta(&mut conn, &gdsid, &stkid, -3.0).await;
     assert_eq!(q2, 12.0);
 
     // 验证 QQty 也同步累加
@@ -131,11 +131,11 @@ async fn apply_stock_delta_unapprove_simulates_reverse() {
     let stkid = test_stkid();
 
     // 模拟"过账 +10，审核成功"
-    let _ = apply_stock_delta_qq(&mut conn, &gdsid, &stkid, 10.0).await;
+    let _ = apply_stock_delta(&mut conn, &gdsid, &stkid, 10.0).await;
     assert_eq!(query_stock_qty(&mut conn, &gdsid, &stkid).await, 10.0);
 
     // 模拟"反审 -10，库存回退"
-    let _ = apply_stock_delta_qq(&mut conn, &gdsid, &stkid, -10.0).await;
+    let _ = apply_stock_delta(&mut conn, &gdsid, &stkid, -10.0).await;
     assert_eq!(query_stock_qty(&mut conn, &gdsid, &stkid).await, 0.0);
 
     cleanup(&mut conn, &gdsid, &stkid).await;
@@ -150,10 +150,10 @@ async fn apply_stock_delta_empty_id_skipped() {
     let mut conn = get_conn().await.expect("获取连接");
 
     // 空 ID 应跳过，不抛错
-    let r1 = apply_stock_delta_qq(&mut conn, "", "valid_stk", 10.0).await;
+    let r1 = apply_stock_delta(&mut conn, "", "valid_stk", 10.0).await;
     assert_eq!(r1, 0.0, "空 GDSID 应跳过");
 
-    let r2 = apply_stock_delta_qq(&mut conn, "valid_gds", "", 10.0).await;
+    let r2 = apply_stock_delta(&mut conn, "valid_gds", "", 10.0).await;
     assert_eq!(r2, 0.0, "空 StkID 应跳过");
 }
 
@@ -208,7 +208,7 @@ async fn concurrent_apply_does_not_corrupt() {
         handles.push(tokio::spawn(async move {
             // 每个 task 单独取连接
             let mut c = get_conn().await.unwrap();
-            apply_stock_delta_qq(&mut c, &g, &s, 1.0).await
+            apply_stock_delta(&mut c, &g, &s, 1.0).await
         }));
     }
     for h in handles {
@@ -225,7 +225,7 @@ async fn concurrent_apply_does_not_corrupt() {
 
 /// 公共工具：tiberius Row 读 f64
 fn row_get_f64_pub(row: &tiberius::Row, col: &str) -> f64 {
-    use tiberius::FromSql;
+    
     // tiberius 的 Row 没有 get(name) 直接读，需通过列下标或用 &str
     // 简化：tiberius::Row::get::<&str, T>("col") 返回 Option<T>，T: FromSql
     let opt: Option<f64> = row.get(col);

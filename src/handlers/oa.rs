@@ -5,7 +5,7 @@ use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
 use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
-use crate::handlers::base_data::try_get_value;
+use crate::handlers::base_data::row_to_json;
 
 #[derive(Deserialize)]
 pub struct PaginationParams {
@@ -16,31 +16,17 @@ pub struct PaginationParams {
     pub sort_order: Option<String>,
 }
 
-fn row_to_json(row: &Row) -> serde_json::Value {
-    let columns = row.columns();
-    let mut map = serde_json::Map::new();
-    for col in columns {
-        let name = col.name().to_string();
-        if name == "_rn" {
-            continue;
-        }
-        let val = try_get_value(row, &name);
-        map.insert(name, val);
-    }
-    serde_json::Value::Object(map)
-}
-
 pub async fn get_workflow_list(
     State(_config): State<Config>,
     Json(params): Json<PaginationParams>,
 ) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>> {
     let mut conn = get_pool().get().await?;
     let page = params.page.unwrap_or(1);
-    let page_size = std::cmp::min(params.page_size.unwrap_or(20), 100);
+    let page_size = std::cmp::min(params.page_size.unwrap_or(20), 1000);
 
     let mut base_query = "SELECT * FROM tSys_WorkFlow WHERE State <> 'D'".to_string();
     let mut query_params: Vec<Option<String>> = Vec::new();
-    let mut pidx = 1;
+    let pidx = 1;
 
     if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
@@ -49,7 +35,6 @@ pub async fn get_workflow_list(
                 " AND (WorkFlowNO LIKE @p{} OR WorkFlowDesc LIKE @p{})",
                 pidx, pidx + 1
             ));
-            pidx += 2;
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
         }
@@ -119,11 +104,11 @@ pub async fn get_notice_list(
 ) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>> {
     let mut conn = get_pool().get().await?;
     let page = params.page.unwrap_or(1);
-    let page_size = std::cmp::min(params.page_size.unwrap_or(20), 100);
+    let page_size = std::cmp::min(params.page_size.unwrap_or(20), 1000);
 
     let mut base_query = "SELECT * FROM tOA_InfoDetail WHERE State <> 'D'".to_string();
     let mut query_params: Vec<Option<String>> = Vec::new();
-    let mut pidx = 1;
+    let pidx = 1;
 
     if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
@@ -131,7 +116,6 @@ pub async fn get_notice_list(
                 " AND (Title LIKE @p{} OR InfoType LIKE @p{})",
                 pidx, pidx + 1
             ));
-            pidx += 2;
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
         }
@@ -174,11 +158,11 @@ pub async fn get_email_list(
 ) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>> {
     let mut conn = get_pool().get().await?;
     let page = params.page.unwrap_or(1);
-    let page_size = std::cmp::min(params.page_size.unwrap_or(20), 100);
+    let page_size = std::cmp::min(params.page_size.unwrap_or(20), 1000);
 
     let mut base_query = "SELECT * FROM tOA_Email WHERE State <> 'D'".to_string();
     let mut query_params: Vec<Option<String>> = Vec::new();
-    let mut pidx = 1;
+    let pidx = 1;
 
     if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
@@ -186,7 +170,6 @@ pub async fn get_email_list(
                 " AND (Subject LIKE @p{} OR Sender LIKE @p{})",
                 pidx, pidx + 1
             ));
-            pidx += 2;
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
         }

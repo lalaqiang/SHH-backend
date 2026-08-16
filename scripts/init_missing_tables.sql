@@ -166,9 +166,24 @@ BEGIN
         ColumnConfigID uniqueidentifier   PRIMARY KEY DEFAULT NEWID(),
         EmpID          uniqueidentifier   NULL,
         TableName      nvarchar(100)      NULL,
-        ConfigData     nvarchar(4000)     NULL,
+        -- ★ 列配置 JSON 可能很长（>4KB），必须用 nvarchar(max) 否则被截断
+        --   截断后前端解析失败 / 部分 prop 丢失 → "进表单"等设置看似无效
+        ConfigData     nvarchar(max)      NULL,
         LUTime         datetime           DEFAULT GETDATE()
     )
+END
+ELSE
+BEGIN
+    -- 表已存在时，确保 ConfigData 是 nvarchar(max)（老库可能是 nvarchar(4000)）
+    IF EXISTS (
+        SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('tSys_TableColumnConfig')
+          AND name = 'ConfigData'
+          AND max_length <> -1  -- -1 表示 nvarchar(max)
+    )
+    BEGIN
+        ALTER TABLE tSys_TableColumnConfig ALTER COLUMN ConfigData nvarchar(max) NULL
+    END
 END
 GO
 

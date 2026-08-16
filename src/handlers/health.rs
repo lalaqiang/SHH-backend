@@ -10,7 +10,6 @@ use std::time::Instant;
 use tiberius::Row;
 use crate::config::Config;
 use crate::db::get_pool;
-use crate::error::Result;
 use crate::handlers::base_data::try_get_value;
 
 static SERVER_START: once_cell::sync::Lazy<Instant> = once_cell::sync::Lazy::new(Instant::now);
@@ -67,10 +66,27 @@ pub fn inc_request(success: bool) {
     }
 }
 
+/// 请求计数中间件：统计每个请求的成功/失败
+/// 用法：.layer(axum::middleware::from_fn(health::request_counter))
+pub async fn request_counter(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let resp = next.run(request).await;
+    let success = resp.status().as_u16() < 400;
+    inc_request(success);
+    resp
+}
+
 /// GET /api/health
 /// 用于 K8s liveness probe / 负载均衡器健康检查
 /// 公开端点，不需要鉴权
-pub async fn health_check() -> Json<HealthStatus> {
+///
+/// D5 修复：原逻辑 DB 故障时返回 HTTP 200 + status="degraded"，
+///   K8s/负载均衡器仍认为服务健康继续转发流量，导致用户请求持续失败。
+///   改为：DB 故障时返回 503 Service Unavailable + status="unhealthy"，
+///   K8s readiness probe 会自动从负载均衡中摘除该实例，直到恢复。
+pub async fn health_check() -> Response {
     let start = Instant::now();
     let db_health = match get_pool().get().await {
         Ok(mut conn) => {
@@ -92,7 +108,7 @@ pub async fn health_check() -> Json<HealthStatus> {
                         active_connections: None,
                     }
                 }
-                Err(e) => DatabaseHealth {
+                Err(_e) => DatabaseHealth {
                     status: "down",
                     latency_ms: latency,
                     server: None,
@@ -101,7 +117,7 @@ pub async fn health_check() -> Json<HealthStatus> {
                 }
             }
         }
-        Err(e) => DatabaseHealth {
+        Err(_e) => DatabaseHealth {
             status: "down",
             latency_ms: start.elapsed().as_millis() as u64,
             server: None,
@@ -110,21 +126,30 @@ pub async fn health_check() -> Json<HealthStatus> {
         }
     };
 
-    let overall = if db_health.status == "up" { "healthy" } else { "degraded" };
+    // D5 修复：DB 故障时返回 503，让 K8s readiness probe 自动摘除该实例
+    //   - DB up + 探测查询成功 → 200 healthy
+    //   - DB down（连接池耗尽 / DB 不可达 / 探测查询失败）→ 503 unhealthy
+    let (overall, http_status) = if db_health.status == "up" {
+        ("healthy", StatusCode::OK)
+    } else {
+        ("unhealthy", StatusCode::SERVICE_UNAVAILABLE)
+    };
 
-    Json(HealthStatus {
+    let body = HealthStatus {
         status: overall,
         service: "ERP-Backend",
         version: env!("CARGO_PKG_VERSION"),
         uptime_seconds: SERVER_START.elapsed().as_secs(),
         database: db_health,
         timestamp: chrono::Local::now().to_rfc3339(),
-    })
+    };
+
+    (http_status, Json(body)).into_response()
 }
 
 /// GET /api/metrics
 /// 用于 Prometheus 抓取 / 监控系统
-/// 公开端点，不需要鉴权（生产建议加白名单 IP）
+/// 用于 Prometheus 抓取 / 监控系统（需 JWT 鉴权）
 ///
 /// Query:
 ///   format=prom  → text/plain; version=0.0.4  （Prometheus 抓取格式，默认）
@@ -139,10 +164,11 @@ pub async fn metrics(
     let uptime = SERVER_START.elapsed().as_secs();
     let error_rate = if total > 0 { (failed as f64 / total as f64) * 100.0 } else { 0.0 };
     let (rss, virt) = read_memory_usage().unwrap_or((0, 0));
+    let (pool_max, pool_active, pool_idle) = crate::db::get_pool_stats();
 
     match params.format.as_deref() {
-        Some("json") => render_metrics_json(total, failed, uptime, error_rate, rss, virt).into_response(),
-        Some("prom") | None => render_metrics_prom(total, failed, uptime, error_rate, rss, virt).into_response(),
+        Some("json") => render_metrics_json(total, failed, uptime, error_rate, rss, virt, pool_max, pool_active, pool_idle).into_response(),
+        Some("prom") | None => render_metrics_prom(total, failed, uptime, error_rate, rss, virt, pool_max, pool_active, pool_idle).into_response(),
         Some(other) => {
             (StatusCode::BAD_REQUEST, format!("unsupported format: {}", other)).into_response()
         }
@@ -161,6 +187,9 @@ fn render_metrics_json(
     error_rate: f64,
     rss: u64,
     virt: u64,
+    pool_max: u32,
+    pool_active: u32,
+    pool_idle: u32,
 ) -> Json<MetricsResponse> {
     Json(MetricsResponse {
         uptime_seconds: uptime,
@@ -168,9 +197,9 @@ fn render_metrics_json(
         failed_requests: failed,
         error_rate_percent: (error_rate * 100.0).round() / 100.0,
         database: DatabaseMetrics {
-            pool_max_size: 20,
-            pool_active: 0,
-            pool_idle: 0,
+            pool_max_size: pool_max,
+            pool_active: pool_active,
+            pool_idle: pool_idle,
         },
         memory: MemoryMetrics {
             rss_bytes: rss,
@@ -188,8 +217,10 @@ fn render_metrics_prom(
     error_rate: f64,
     rss: u64,
     virt: u64,
+    pool_max: u32,
+    pool_active: u32,
+    pool_idle: u32,
 ) -> Response {
-    // 帮助文本（Prometheus 可选；便于运维）
     let body = format!(
         "# HELP erp_uptime_seconds 服务运行秒数\n\
          # TYPE erp_uptime_seconds gauge\n\
@@ -209,7 +240,15 @@ fn render_metrics_prom(
          \n\
          # HELP erp_db_pool_max_size 数据库连接池最大连接数\n\
          # TYPE erp_db_pool_max_size gauge\n\
-         erp_db_pool_max_size 20\n\
+         erp_db_pool_max_size {pool_max}\n\
+         \n\
+         # HELP erp_db_pool_active 数据库连接池活跃连接数\n\
+         # TYPE erp_db_pool_active gauge\n\
+         erp_db_pool_active {pool_active}\n\
+         \n\
+         # HELP erp_db_pool_idle 数据库连接池空闲连接数\n\
+         # TYPE erp_db_pool_idle gauge\n\
+         erp_db_pool_idle {pool_idle}\n\
          \n\
          # HELP erp_memory_rss_bytes 进程常驻内存（字节）\n\
          # TYPE erp_memory_rss_bytes gauge\n\

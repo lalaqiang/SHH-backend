@@ -6,9 +6,14 @@
 //!
 //! 包名：`erp_server`（见 Cargo.toml [package].name）
 
+// 结构体字段名与 SQL Server 列名保持一致（StkID/EmpID/PassWordStr 等），
+// 由 serde 直接映射，故统一放行 non_snake_case。
+#![allow(non_snake_case)]
 pub mod config;
 pub mod db;
 pub mod error;
 pub mod handlers;
+pub mod metadata;
 pub mod middleware;
+pub mod services;
 pub mod utils;

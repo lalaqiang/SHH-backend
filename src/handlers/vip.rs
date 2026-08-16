@@ -8,7 +8,9 @@ use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
 use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
-use super::base_data::{try_get_value, row_to_json};
+use super::base_data::row_to_json;
+
+const ZERO_UUID: &str = "00000000-0000-0000-0000-000000000000";
 
 #[derive(Deserialize)]
 pub struct PaginationParams {
@@ -26,19 +28,19 @@ pub async fn list_vip(
     let mut conn = get_pool().get().await?;
 
     let page = params.page.unwrap_or(1);
-    let page_size = std::cmp::min(params.page_size.unwrap_or(20), 100);
+    let page_size = std::cmp::min(params.page_size.unwrap_or(20), 1000);
 
     let mut base_query = "SELECT * FROM tSal_VIP WHERE State <> 'D'".to_string();
     let mut query_params: Vec<Option<String>> = Vec::new();
-    let mut pidx = 1;
+    let pidx = 1;
 
     if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
+            // 对齐 tSal_VIP 实际字段：VIPCode/VIPName/Tel
             base_query.push_str(&format!(
-                " AND (VIPNo LIKE @p{} OR VIPName LIKE @p{} OR Phone LIKE @p{})",
+                " AND (VIPCode LIKE @p{} OR VIPName LIKE @p{} OR Tel LIKE @p{})",
                 pidx, pidx + 1, pidx + 2
             ));
-            pidx += 3;
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
@@ -84,13 +86,6 @@ fn json_f64(v: &serde_json::Value, key: &str) -> f64 {
         .unwrap_or(0.0)
 }
 
-fn json_opt_str(v: &serde_json::Value, key: &str) -> Option<String> {
-    v.get(key)
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-}
-
 fn json_i32(v: &serde_json::Value, key: &str) -> i32 {
     v.get(key)
         .and_then(|v| v.as_i64())
@@ -103,32 +98,36 @@ pub async fn create_vip(
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
 
-    let now = chrono::Local::now().naive_local();
-    let vip_no = json_str(&body, "VIPNo");
-    let vip_no = if vip_no.is_empty() {
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    // 对齐 tSal_VIP 实际字段：VIPID/VIPCode/VIPName/Tel/VIPLevel/SumAmt/SumInt/OutInt/StartDate/State/VIPTypeID/vipsd
+    // 前端字段映射：VIPNo→VIPCode, Phone→Tel, Points→SumInt, Level→VIPLevel
+    let vip_code = json_str(&body, "VIPNo");
+    let vip_code = if vip_code.is_empty() {
         format!("VIP{}", chrono::Local::now().format("%Y%m%d%H%M%S"))
     } else {
-        vip_no
+        vip_code
     };
     let vip_name = json_str(&body, "VIPName");
-    let phone = json_str(&body, "Phone");
-    let balance = json_f64(&body, "Balance");
-    let points = json_i32(&body, "Points");
-    let level = json_opt_str(&body, "Level").unwrap_or_else(|| "普通会员".to_string());
+    let tel = json_str(&body, "Phone");
+    let vip_level = json_i32(&body, "Level");
+    let sum_int = json_f64(&body, "Points"); // 前端 Points → 数据库 SumInt（累计积分）
 
-    let sql = r#"INSERT INTO tSal_VIP (VIPNo, VIPName, Phone, Balance, Points, Level, State, EDate, EUser)
-        VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9)"#;
+    // 必填字段：VIPID(主键), vipsd, OutInt, State
+    let sql = r#"INSERT INTO tSal_VIP (VIPID, VIPCode, VIPName, Tel, VIPLevel, SumAmt, SumInt, OutInt,
+        StartDate, State, VIPTypeID, vipsd, StkID, EmpID)
+        VALUES (NEWID(), @p1, @p2, @p3, @p4, 0, @p5, 0, @p6, @p7, @p8, 0, @p9, @p10)"#;
 
     conn.execute(sql, &[
-        &vip_no.as_str(),
+        &vip_code.as_str(),
         &vip_name.as_str(),
-        &phone.as_str(),
-        &balance,
-        &points,
-        &level.as_str(),
-        &"S",
+        &tel.as_str(),
+        &vip_level,
+        &sum_int,
         &now,
-        &"system",
+        &"S",
+        &ZERO_UUID, // VIPTypeID 默认
+        &ZERO_UUID, // StkID
+        &ZERO_UUID, // EmpID
     ]).await?;
 
     Ok(Json(ApiResponse::msg("会员创建成功")))
@@ -140,32 +139,47 @@ pub async fn update_vip(
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
 
-    let id = json_i32(&body, "ID");
-    if id == 0 {
-        return Ok(Json(ApiResponse::err("记录ID不能为空")));
+    // 对齐 tSal_VIP 实际字段：主键为 VIPID（uniqueidentifier），非 ID
+    let vip_id = json_str(&body, "VIPID");
+    if vip_id.is_empty() {
+        // 兼容前端可能传的 ID 字段
+        let id_alt = json_str(&body, "ID");
+        if id_alt.is_empty() {
+            return Ok(Json(ApiResponse::err("VIPID 不能为空")));
+        }
+        // 如果 ID 不是 UUID 格式，返回错误
+        if id_alt.len() != 36 {
+            return Ok(Json(ApiResponse::err("VIPID 格式错误（需 UUID 格式）")));
+        }
+        update_vip_by_id(&mut conn, &id_alt, &body).await
+    } else {
+        update_vip_by_id(&mut conn, &vip_id, &body).await
     }
+}
 
-    let now = chrono::Local::now().naive_local();
-    let vip_no = json_str(&body, "VIPNo");
-    let vip_name = json_str(&body, "VIPName");
-    let phone = json_str(&body, "Phone");
-    let balance = json_f64(&body, "Balance");
-    let points = json_i32(&body, "Points");
-    let level = json_opt_str(&body, "Level").unwrap_or_else(|| "普通会员".to_string());
+async fn update_vip_by_id(
+    conn: &mut crate::handlers::approval::Conn,
+    vip_id: &str,
+    body: &serde_json::Value,
+) -> Result<Json<ApiResponse<serde_json::Value>>> {
+    // 对齐 tSal_VIP 实际字段：VIPCode/VIPName/Tel/VIPLevel/SumInt
+    // 前端字段映射：VIPNo→VIPCode, Phone→Tel, Points→SumInt, Level→VIPLevel
+    let vip_code = json_str(body, "VIPNo");
+    let vip_name = json_str(body, "VIPName");
+    let tel = json_str(body, "Phone");
+    let vip_level = json_i32(body, "Level");
+    let sum_int = json_f64(body, "Points");
 
-    let sql = r#"UPDATE tSal_VIP SET VIPNo=@p1, VIPName=@p2, Phone=@p3, Balance=@p4,
-        Points=@p5, Level=@p6, EDate=@p7, EUser=@p8 WHERE ID=@p9"#;
+    let sql = r#"UPDATE tSal_VIP SET VIPCode=@p1, VIPName=@p2, Tel=@p3, VIPLevel=@p4,
+        SumInt=@p5 WHERE VIPID=@p6"#;
 
     conn.execute(sql, &[
-        &vip_no.as_str(),
+        &vip_code.as_str(),
         &vip_name.as_str(),
-        &phone.as_str(),
-        &balance,
-        &points,
-        &level.as_str(),
-        &now,
-        &"system",
-        &id,
+        &tel.as_str(),
+        &vip_level,
+        &sum_int,
+        &vip_id,
     ]).await?;
 
     Ok(Json(ApiResponse::msg("会员信息更新成功")))
@@ -186,11 +200,11 @@ pub async fn delete_vip(
         return Ok(Json(ApiResponse::err("请选择要删除的记录")));
     }
 
+    // 对齐 tSal_VIP 实际字段：主键为 VIPID，无 EDate/EUser 字段
     for id in &body.ids {
-        let sql = "UPDATE tSal_VIP SET State = 'D', EDate = @p1, EUser = @p2 WHERE ID = @p3";
-        let now = chrono::Local::now().naive_local();
+        let sql = "UPDATE tSal_VIP SET State = 'D' WHERE VIPID = @p1";
         let id_str = id.as_str();
-        conn.execute(sql, &[&now, &"system", &id_str]).await?;
+        conn.execute(sql, &[&id_str]).await?;
     }
 
     Ok(Json(ApiResponse::msg(&format!("成功删除{}条会员记录", body.ids.len()))))

@@ -9,22 +9,8 @@ use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
 use crate::utils::{ApiResponse, build_pagination_sql_with_sort, row_get_f64};
-use crate::handlers::base_data::try_get_value;
+use crate::handlers::base_data::row_to_json;
 use crate::middleware::auth::Claims;
-
-fn row_to_json(row: &Row) -> serde_json::Value {
-    let columns = row.columns();
-    let mut map = serde_json::Map::new();
-    for col in columns {
-        let name = col.name().to_string();
-        if name == "_rn" {
-            continue;
-        }
-        let val = try_get_value(row, &name);
-        map.insert(name, val);
-    }
-    serde_json::Value::Object(map)
-}
 
 #[derive(Deserialize)]
 pub struct GetNotificationsParams {
@@ -38,13 +24,13 @@ pub struct GetNotificationsParams {
 }
 
 pub async fn get_notifications(
-    Extension(claims): Extension<Claims>,
+    Extension(_claims): Extension<Claims>,
     State(_config): State<Config>,
     Json(params): Json<GetNotificationsParams>,
 ) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>> {
     let mut conn = get_pool().get().await?;
     let page = params.page.unwrap_or(1);
-    let page_size = std::cmp::min(params.page_size.unwrap_or(50), 200);
+    let page_size = std::cmp::min(params.page_size.unwrap_or(50), 1000);
 
     let mut base_query = r#"SELECT m.MsgID, m.TEmpID, m.FEmpID, m.Msg AS Content, m.MsgType,
         m.State AS IsRead, m.SDate AS CreateDate, m.RDate AS ReadDate,
@@ -68,7 +54,6 @@ pub async fn get_notifications(
     if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
             base_query.push_str(&format!(" AND (m.Msg LIKE @p{})", pidx));
-            pidx += 1;
             query_params.push(Some(format!("%{}%", kw)));
         }
     }
@@ -108,7 +93,7 @@ pub async fn create_notification(
     Json(body): Json<CreateNotificationParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     let msg_type = body.MsgType.unwrap_or(0);
     let f_emp_id = body.FEmpID.as_deref().unwrap_or("");
@@ -148,7 +133,7 @@ pub async fn mark_notification_read(
     Json(body): Json<MarkNotificationReadParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     if body.notify_ids.is_empty() {
         return Ok(Json(ApiResponse::err("请选择要标记的通知")));
@@ -191,7 +176,7 @@ pub async fn get_backups(
 ) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>> {
     let mut conn = get_pool().get().await?;
     let page = params.page.unwrap_or(1);
-    let page_size = std::cmp::min(params.page_size.unwrap_or(50), 200);
+    let page_size = std::cmp::min(params.page_size.unwrap_or(50), 1000);
 
     let base_query = "SELECT * FROM tSys_DataPack ORDER BY EDate DESC";
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
@@ -222,12 +207,11 @@ pub struct CreateBackupParams {
 }
 
 pub async fn create_backup(
-    Extension(claims): Extension<Claims>,
+    Extension(_claims): Extension<Claims>,
     State(config): State<Config>,
-    Json(body): Json<CreateBackupParams>,
+    Json(_body): Json<CreateBackupParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
-    let now = chrono::Local::now().naive_local();
     let db_name = &config.db_database;
 
     let backup_path = format!("C:\\Backup\\{}_{}.bak", db_name, chrono::Local::now().format("%Y%m%d%H%M%S"));
@@ -286,7 +270,6 @@ pub async fn get_system_config(
     if let Some(pk) = &params.p_kind {
         if !pk.is_empty() {
             sql.push_str(&format!(" AND PKind = @p{}", pidx));
-            pidx += 1;
             query_params.push(Some(pk.clone()));
         }
     }
@@ -316,7 +299,7 @@ pub async fn save_system_config(
     Json(body): Json<SaveSystemConfigParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     let check_sql = "SELECT COUNT(*) as cnt FROM tSys_Parameters WHERE PCode = @p1";
     let stream = conn.query(check_sql, &[&body.PCode.as_str()]).await?;
@@ -390,13 +373,13 @@ pub async fn get_dashboard_stats(
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let this_month_start = chrono::Local::now().format("%Y-%m-01").to_string();
 
-    let today_sales_sql = "SELECT ISNULL(SUM(TotalAmt), 0) as total FROM tSal_Inv WHERE State <> 'D' AND CONVERT(varchar(10), EDate, 120) = @p1";
+    let today_sales_sql = "SELECT ISNULL(SUM(SumAmt), 0) as total FROM tSal_Inv WHERE State <> 'D' AND CONVERT(varchar(10), EDate, 120) = @p1";
     if let Some(row) = conn.query(today_sales_sql, &[&today.as_str()]).await?.into_row().await? {
         let total: f64 = row_get_f64(&row, "total");
         stats.insert("today_sales".to_string(), serde_json::Number::from_f64(total).map(serde_json::Value::Number).unwrap_or(serde_json::Value::Null));
     }
 
-    let month_sales_sql = "SELECT ISNULL(SUM(TotalAmt), 0) as total FROM tSal_Inv WHERE State <> 'D' AND CONVERT(varchar(10), EDate, 120) >= @p1";
+    let month_sales_sql = "SELECT ISNULL(SUM(SumAmt), 0) as total FROM tSal_Inv WHERE State <> 'D' AND CONVERT(varchar(10), EDate, 120) >= @p1";
     if let Some(row) = conn.query(month_sales_sql, &[&this_month_start.as_str()]).await?.into_row().await? {
         let total: f64 = row_get_f64(&row, "total");
         stats.insert("month_sales".to_string(), serde_json::Number::from_f64(total).map(serde_json::Value::Number).unwrap_or(serde_json::Value::Null));
@@ -412,14 +395,14 @@ pub async fn get_dashboard_stats(
         stats.insert("unread_msg_count".to_string(), serde_json::Value::Number(serde_json::Number::from(row.get::<i32, _>("cnt").unwrap_or(0))));
     }
 
-    let sales_trend_sql = r#"SELECT CONVERT(varchar(10), EDate, 120) as SaleDate, ISNULL(SUM(TotalAmt), 0) as TotalAmt
+    let sales_trend_sql = r#"SELECT CONVERT(varchar(10), EDate, 120) as SaleDate, ISNULL(SUM(SumAmt), 0) as SumAmt
         FROM tSal_Inv WHERE State <> 'D' AND EDate >= DATEADD(day, -30, GETDATE())
         GROUP BY CONVERT(varchar(10), EDate, 120) ORDER BY SaleDate"#;
     let trend_stream = conn.query(sales_trend_sql, &[]).await?;
     let trend_rows: Vec<Row> = trend_stream.into_first_result().await?;
     let sales_trend: Vec<serde_json::Value> = trend_rows.iter().map(|r| {
         let date = r.get::<&str, _>("SaleDate").unwrap_or("").to_string();
-        let amt = row_get_f64(&r, "TotalAmt");
+        let amt = row_get_f64(&r, "SumAmt");
         serde_json::json!({ "date": date, "amount": amt })
     }).collect();
     stats.insert("sales_trend".to_string(), serde_json::Value::Array(sales_trend));

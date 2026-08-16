@@ -3,7 +3,6 @@
 
 use axum::{extract::State, Json};
 use serde::Serialize;
-use tiberius::Row;
 use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;

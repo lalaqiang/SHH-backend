@@ -248,5 +248,5 @@ CREATE TABLE [tStk_Reserve] (
     [EDate]           DATETIME      NULL,
     [EUser]           VARCHAR(20)   NULL
 );
-CREATE INDEX [IX_tStk_Reserve_Doc] ON [tStk_Reserve]([DocType], [DocID]);
-CREATE INDEX [IX_tStk_Reserve_Gds] ON [tStk_Reserve]([GDSID], [StkID]);
+-- 索引已由 add_docno_and_indexes.sql (IX_tStk_Reserve_DocType_DocID) 和 DB-02 (idx_Reserve_GDSID_StkID) 创建
+-- 此处不再重复创建，避免重复索引（见 DB-02-cleanup-duplicate-indexes.sql）

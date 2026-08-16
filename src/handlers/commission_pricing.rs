@@ -9,164 +9,14 @@ use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
 use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
-use crate::handlers::base_data::try_get_value;
+use crate::handlers::base_data::{row_to_json};
 use crate::middleware::auth::Claims;
 
-fn row_to_json(row: &Row) -> serde_json::Value {
-    let columns = row.columns();
-    let mut map = serde_json::Map::new();
-    for col in columns {
-        let name = col.name().to_string();
-        if name == "_rn" {
-            continue;
-        }
-        let val = try_get_value(row, &name);
-        map.insert(name, val);
-    }
-    serde_json::Value::Object(map)
-}
-
-#[derive(Deserialize)]
-pub struct GetCommissionTemplatesParams {
-    pub page: Option<u32>,
-    pub page_size: Option<u32>,
-    pub keyword: Option<String>,
-    pub sort_prop: Option<String>,
-    pub sort_order: Option<String>,
-}
-
-pub async fn get_commission_templates(
-    State(_config): State<Config>,
-    Json(params): Json<GetCommissionTemplatesParams>,
-) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>> {
-    let mut conn = get_pool().get().await?;
-    let page = params.page.unwrap_or(1);
-    let page_size = std::cmp::min(params.page_size.unwrap_or(50), 200);
-
-    let base_query = "SELECT p.ParametersID, p.PCode, p.PName AS TemplateName, p.PKind AS CalcMethod, p.PValue AS Rate, p.PHelp AS Remark, p.EDate, p.EUser FROM tSys_Parameters p WHERE p.PKind = 'commission' AND p.State <> 'D'";
-    let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
-    let paginated_sql = build_pagination_sql_with_sort(base_query, page, page_size, params.sort_prop.as_deref(), params.sort_order.as_deref());
-
-    let mut total: i32 = 0;
-    let count_stream = conn.query(&count_sql, &[]).await?;
-    if let Some(row) = count_stream.into_row().await? {
-        total = row.get::<i32, _>("cnt").unwrap_or(0);
-    }
-
-    let data_stream = conn.query(&paginated_sql, &[]).await?;
-    let rows: Vec<Row> = data_stream.into_first_result().await?;
-    let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
-
-    Ok(Json(ApiResponse::ok_paginated(data, total as u64, page, page_size)))
-}
-
-#[derive(Deserialize)]
-pub struct CreateCommissionTemplateParams {
-    pub TemplateName: Option<String>,
-    pub CalcMethod: Option<String>,
-    pub Rate: Option<String>,
-    pub Remark: Option<String>,
-}
-
-pub async fn create_commission_template(
-    Extension(claims): Extension<Claims>,
-    State(_config): State<Config>,
-    Json(body): Json<CreateCommissionTemplateParams>,
-) -> Result<Json<ApiResponse<serde_json::Value>>> {
-    let mut conn = get_pool().get().await?;
-    let now = chrono::Local::now().naive_local();
-
-    let template_name = body.TemplateName.as_deref().unwrap_or("");
-    let calc_method = body.CalcMethod.as_deref().unwrap_or("rate");
-    let rate = body.Rate.as_deref().unwrap_or("0");
-    let remark = body.Remark.as_deref().unwrap_or("");
-    let p_code = format!("COMM_{}", chrono::Local::now().format("%Y%m%d%H%M%S"));
-
-    let sql = r#"INSERT INTO tSys_Parameters (ParametersID, PCode, PName, PKind, PHelp, PValue, EUser, EDate)
-        VALUES (NEWID(), @p1, @p2, 'commission', @p3, @p4, @p5, @p6)"#;
-
-    conn.execute(sql, &[
-        &p_code.as_str(),
-        &template_name,
-        &remark,
-        &rate,
-        &claims.user_code.as_str(),
-        &now,
-    ]).await?;
-
-    Ok(Json(ApiResponse::msg("提成模板创建成功")))
-}
-
-#[derive(Deserialize)]
-pub struct UpdateCommissionTemplateParams {
-    pub ParametersID: String,
-    pub TemplateName: Option<String>,
-    pub CalcMethod: Option<String>,
-    pub Rate: Option<String>,
-    pub Remark: Option<String>,
-}
-
-pub async fn update_commission_template(
-    Extension(claims): Extension<Claims>,
-    State(_config): State<Config>,
-    Json(body): Json<UpdateCommissionTemplateParams>,
-) -> Result<Json<ApiResponse<serde_json::Value>>> {
-    let mut conn = get_pool().get().await?;
-    let now = chrono::Local::now().naive_local();
-
-    let template_name = body.TemplateName.as_deref().unwrap_or("");
-    let rate = body.Rate.as_deref().unwrap_or("0");
-    let remark = body.Remark.as_deref().unwrap_or("");
-
-    let sql = "UPDATE tSys_Parameters SET PName = @p1, PValue = @p2, PHelp = @p3, EDate = @p4, EUser = @p5 WHERE ParametersID = @p6";
-
-    conn.execute(sql, &[
-        &template_name,
-        &rate,
-        &remark,
-        &now,
-        &claims.user_code.as_str(),
-        &body.ParametersID.as_str(),
-    ]).await?;
-
-    Ok(Json(ApiResponse::msg("提成模板更新成功")))
-}
-
-#[derive(Deserialize)]
-pub struct DeleteCommissionTemplateParams {
-    pub ids: Vec<String>,
-}
-
-pub async fn delete_commission_template(
-    State(_config): State<Config>,
-    Json(body): Json<DeleteCommissionTemplateParams>,
-) -> Result<Json<ApiResponse<serde_json::Value>>> {
-    let mut conn = get_pool().get().await?;
-
-    if body.ids.is_empty() {
-        return Ok(Json(ApiResponse::err("请选择要删除的模板")));
-    }
-
-    for id in &body.ids {
-        let sql = "DELETE FROM tSys_Parameters WHERE ParametersID = @p1";
-        conn.execute(sql, &[&id.as_str()]).await?;
-    }
-
-    Ok(Json(ApiResponse::msg(&format!("成功删除{}个模板", body.ids.len()))))
-}
-
-#[derive(Deserialize)]
-pub struct GetCommissionRulesParams {
-    pub template_id: Option<String>,
-    pub rule_type: Option<String>,
-}
-
-pub async fn get_commission_rules(
-    State(_config): State<Config>,
-    Json(_params): Json<GetCommissionRulesParams>,
-) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>> {
-    Ok(Json(ApiResponse::ok(vec![])))
-}
+// =====================================================================
+// 定价模板（pricing）相关 handler
+// 注：提成模板（commission）的 CRUD 已统一改用 /generic/* 接口操作
+//     tSys_Parameters 表，原 commission 端点已删除（避免重复维护）
+// =====================================================================
 
 #[derive(Deserialize)]
 pub struct GetPricingTemplatesParams {
@@ -183,7 +33,7 @@ pub async fn get_pricing_templates(
 ) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>> {
     let mut conn = get_pool().get().await?;
     let page = params.page.unwrap_or(1);
-    let page_size = std::cmp::min(params.page_size.unwrap_or(50), 200);
+    let page_size = std::cmp::min(params.page_size.unwrap_or(50), 1000);
 
     let base_query = "SELECT p.ParametersID, p.PCode, p.PName AS TemplateName, p.PKind AS PriceType, p.PValue AS Rate, p.PHelp AS Remark, p.EDate, p.EUser FROM tSys_Parameters p WHERE p.PKind = 'pricing' AND p.State <> 'D'";
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
@@ -204,10 +54,12 @@ pub async fn get_pricing_templates(
 
 #[derive(Deserialize)]
 pub struct CreatePricingTemplateParams {
-    pub TemplateName: Option<String>,
-    pub PriceType: Option<String>,
-    pub Rate: Option<String>,
-    pub Remark: Option<String>,
+    pub PCode: Option<String>,
+    pub PName: Option<String>,
+    pub PKind: Option<String>,
+    pub PTerm: Option<String>,
+    pub PHelp: Option<String>,
+    pub PValue: Option<String>,
 }
 
 pub async fn create_pricing_template(
@@ -216,23 +68,33 @@ pub async fn create_pricing_template(
     Json(body): Json<CreatePricingTemplateParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
-    let template_name = body.TemplateName.as_deref().unwrap_or("");
-    let price_type = body.PriceType.as_deref().unwrap_or("sale");
-    let rate = body.Rate.as_deref().unwrap_or("0");
-    let remark = body.Remark.as_deref().unwrap_or("");
-    let p_code = format!("PRICE_{}", chrono::Local::now().format("%Y%m%d%H%M%S"));
+    let p_code = body.PCode.as_deref().unwrap_or("");
+    let p_name = body.PName.as_deref().unwrap_or("");
+    let p_kind = body.PKind.as_deref().unwrap_or("pricing");
+    let p_term = body.PTerm.as_deref().unwrap_or("ALL");
+    let p_help = body.PHelp.as_deref().unwrap_or("");
+    let p_value = body.PValue.as_deref().unwrap_or("{}");
+    // ★ EUser 是 uniqueidentifier 列，必须传 UUID 字符串（claims.emp_id 是 UUID）
+    //   claims.user_code 是 "admin" 等业务编码，SQL Server 无法转换为 uniqueidentifier
+    let e_user: &str = if !claims.emp_id.is_empty() { claims.emp_id.as_str() } else { return Ok(Json(ApiResponse::err("登录用户缺少 EmpID，无法写入审计字段"))) };
 
-    let sql = r#"INSERT INTO tSys_Parameters (ParametersID, PCode, PName, PKind, PHelp, PValue, EUser, EDate)
-        VALUES (NEWID(), @p1, @p2, 'pricing', @p3, @p4, @p5, @p6)"#;
+    if p_name.is_empty() {
+        return Ok(Json(ApiResponse::err("模板名称不能为空")));
+    }
+
+    let sql = r#"INSERT INTO tSys_Parameters (ParametersID, PCode, PName, PKind, PTerm, PHelp, PValue, EUser, EDate)
+        VALUES (NEWID(), @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)"#;
 
     conn.execute(sql, &[
-        &p_code.as_str(),
-        &template_name,
-        &remark,
-        &rate,
-        &claims.user_code.as_str(),
+        &p_code,
+        &p_name,
+        &p_kind,
+        &p_term,
+        &p_help,
+        &p_value,
+        &e_user,
         &now,
     ]).await?;
 
@@ -242,10 +104,12 @@ pub async fn create_pricing_template(
 #[derive(Deserialize)]
 pub struct UpdatePricingTemplateParams {
     pub ParametersID: String,
-    pub TemplateName: Option<String>,
-    pub PriceType: Option<String>,
-    pub Rate: Option<String>,
-    pub Remark: Option<String>,
+    pub PCode: Option<String>,
+    pub PName: Option<String>,
+    pub PKind: Option<String>,
+    pub PTerm: Option<String>,
+    pub PHelp: Option<String>,
+    pub PValue: Option<String>,
 }
 
 pub async fn update_pricing_template(
@@ -254,20 +118,32 @@ pub async fn update_pricing_template(
     Json(body): Json<UpdatePricingTemplateParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
-    let template_name = body.TemplateName.as_deref().unwrap_or("");
-    let rate = body.Rate.as_deref().unwrap_or("0");
-    let remark = body.Remark.as_deref().unwrap_or("");
+    let p_code = body.PCode.as_deref().unwrap_or("");
+    let p_name = body.PName.as_deref().unwrap_or("");
+    let p_kind = body.PKind.as_deref().unwrap_or("pricing");
+    let p_term = body.PTerm.as_deref().unwrap_or("ALL");
+    let p_help = body.PHelp.as_deref().unwrap_or("");
+    let p_value = body.PValue.as_deref().unwrap_or("{}");
+    // ★ EUser 是 uniqueidentifier 列，必须传 UUID 字符串（claims.emp_id 是 UUID）
+    let e_user: &str = if !claims.emp_id.is_empty() { claims.emp_id.as_str() } else { return Ok(Json(ApiResponse::err("登录用户缺少 EmpID，无法写入审计字段"))) };
 
-    let sql = "UPDATE tSys_Parameters SET PName = @p1, PValue = @p2, PHelp = @p3, EDate = @p4, EUser = @p5 WHERE ParametersID = @p6";
+    if p_name.is_empty() {
+        return Ok(Json(ApiResponse::err("模板名称不能为空")));
+    }
+
+    let sql = "UPDATE tSys_Parameters SET PCode = @p1, PName = @p2, PKind = @p3, PTerm = @p4, PHelp = @p5, PValue = @p6, EUser = @p7, EDate = @p8 WHERE ParametersID = @p9";
 
     conn.execute(sql, &[
-        &template_name,
-        &rate,
-        &remark,
+        &p_code,
+        &p_name,
+        &p_kind,
+        &p_term,
+        &p_help,
+        &p_value,
+        &e_user,
         &now,
-        &claims.user_code.as_str(),
         &body.ParametersID.as_str(),
     ]).await?;
 
@@ -342,7 +218,6 @@ pub async fn get_customer_prices(
     if let Some(gid) = &params.gds_id {
         if !gid.is_empty() {
             sql.push_str(&format!(" AND cp.BrandID = @p{}", pidx));
-            pidx += 1;
             query_params.push(Some(gid.clone()));
         }
     }
@@ -363,7 +238,7 @@ pub struct SaveCustomerPriceParams {
 }
 
 pub async fn save_customer_price(
-    Extension(claims): Extension<Claims>,
+    Extension(_claims): Extension<Claims>,
     State(_config): State<Config>,
     Json(body): Json<SaveCustomerPriceParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {

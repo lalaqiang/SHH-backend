@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Query, State},
+    extract::State,
     Json,
 };
 use serde::Deserialize;
@@ -7,7 +7,8 @@ use tiberius::Row;
 use tiberius::ColumnType;
 use crate::config::Config;
 use crate::db::get_pool;
-use crate::utils::{ApiResponse, build_pagination_sql, build_pagination_sql_with_sort};
+use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
+use crate::utils::password::hash_password;
 
 #[derive(Deserialize)]
 pub struct PaginationParams {
@@ -19,114 +20,105 @@ pub struct PaginationParams {
     pub include_deleted: Option<bool>,
 }
 
-#[derive(Deserialize)]
-pub struct TableDataParams {
-    pub table_name: String,
-    pub page: Option<u32>,
-    pub page_size: Option<u32>,
-    pub keyword: Option<String>,
-}
-
-#[derive(serde::Serialize, Clone)]
-pub struct TableInfo {
-    #[serde(rename = "TABLE_NAME")]
-    pub table_name: String,
-}
-
 pub fn row_to_json(row: &Row) -> serde_json::Value {
     let columns = row.columns();
     let mut map = serde_json::Map::new();
     for col in columns {
-        let name = col.name().to_string();
-        let val = try_get_value(row, &name);
-        map.insert(name, val);
+        let name = col.name();
+        // 跳过分页辅助列 _rn（ROW_NUMBER()），不应返回给前端
+        if name == "_rn" {
+            continue;
+        }
+        // 性能优化：直接按列类型分发，避免 try_get_value 内的 find 线性查找
+        // 之前 O(rows × cols × cols) = 1000×50×25 = 125 万次 find
+        let val = try_get_value_by_col(row, col);
+        map.insert(name.to_string(), val);
     }
     serde_json::Value::Object(map)
 }
 
-pub fn try_get_value(row: &Row, col_name: &str) -> serde_json::Value {
-    // 优先按列类型精确匹配，避免 decimal 被错误解析
-    if let Some(col) = row.columns().iter().find(|c| c.name() == col_name) {
-        match col.column_type() {
-            ColumnType::Decimaln | ColumnType::Numericn | ColumnType::Money | ColumnType::Money4 => {
-                if let Ok(Some(n)) = row.try_get::<tiberius::numeric::Numeric, _>(col_name) {
-                    let scale = n.scale() as i32;
-                    let v = n.value() as f64 / 10f64.powi(scale);
-                    return serde_json::Value::Number(
-                        serde_json::Number::from_f64(v).unwrap_or(serde_json::Number::from(0)),
-                    );
-                }
-                if let Ok(Some(v)) = row.try_get::<f64, _>(col_name) {
-                    return serde_json::Value::Number(
-                        serde_json::Number::from_f64(v).unwrap_or(serde_json::Number::from(0)),
-                    );
-                }
-                return serde_json::Value::Null;
+/// 按列类型精确取值（性能优化：直接接收 Column 引用，避免按名 find）
+pub fn try_get_value_by_col(row: &Row, col: &tiberius::Column) -> serde_json::Value {
+    let col_name = col.name();
+    match col.column_type() {
+        ColumnType::Decimaln | ColumnType::Numericn | ColumnType::Money | ColumnType::Money4 => {
+            if let Ok(Some(n)) = row.try_get::<tiberius::numeric::Numeric, _>(col_name) {
+                let scale = n.scale() as i32;
+                let v = n.value() as f64 / 10f64.powi(scale);
+                return serde_json::Value::Number(
+                    serde_json::Number::from_f64(v).unwrap_or(serde_json::Number::from(0)),
+                );
             }
-            ColumnType::Int4 => {
-                if let Ok(Some(v)) = row.try_get::<i32, _>(col_name) {
-                    return serde_json::Value::Number(serde_json::Number::from(v));
-                }
+            if let Ok(Some(v)) = row.try_get::<f64, _>(col_name) {
+                return serde_json::Value::Number(
+                    serde_json::Number::from_f64(v).unwrap_or(serde_json::Number::from(0)),
+                );
             }
-            ColumnType::Int8 => {
-                if let Ok(Some(v)) = row.try_get::<i64, _>(col_name) {
-                    return serde_json::Value::Number(serde_json::Number::from(v));
-                }
-            }
-            ColumnType::Int2 => {
-                if let Ok(Some(v)) = row.try_get::<i16, _>(col_name) {
-                    return serde_json::Value::Number(serde_json::Number::from(v as i64));
-                }
-            }
-            ColumnType::Int1 => {
-                if let Ok(Some(v)) = row.try_get::<u8, _>(col_name) {
-                    return serde_json::Value::Number(serde_json::Number::from(v as i64));
-                }
-            }
-            ColumnType::Float4 => {
-                if let Ok(Some(v)) = row.try_get::<f32, _>(col_name) {
-                    return serde_json::Value::Number(
-                        serde_json::Number::from_f64(v as f64).unwrap_or(serde_json::Number::from(0)),
-                    );
-                }
-            }
-            ColumnType::Float8 | ColumnType::Floatn => {
-                if let Ok(Some(v)) = row.try_get::<f64, _>(col_name) {
-                    return serde_json::Value::Number(
-                        serde_json::Number::from_f64(v).unwrap_or(serde_json::Number::from(0)),
-                    );
-                }
-            }
-            ColumnType::Bit | ColumnType::Bitn => {
-                if let Ok(Some(v)) = row.try_get::<bool, _>(col_name) {
-                    return serde_json::Value::Bool(v);
-                }
-            }
-            ColumnType::Datetime | ColumnType::Datetime2 | ColumnType::Datetime4 | ColumnType::Datetimen => {
-                if let Ok(Some(v)) = row.try_get::<chrono::NaiveDateTime, _>(col_name) {
-                    return serde_json::Value::String(v.format("%Y-%m-%d %H:%M:%S").to_string());
-                }
-            }
-            ColumnType::Daten => {
-                if let Ok(Some(v)) = row.try_get::<chrono::NaiveDate, _>(col_name) {
-                    return serde_json::Value::String(v.format("%Y-%m-%d").to_string());
-                }
-            }
-            ColumnType::Guid => {
-                if let Ok(Some(v)) = row.try_get::<uuid::Uuid, _>(col_name) {
-                    return serde_json::Value::String(v.to_string());
-                }
-            }
-            ColumnType::Image => {
-                if let Ok(Some(v)) = row.try_get::<&[u8], _>(col_name) {
-                    return serde_json::Value::String(String::from_utf8_lossy(v).to_string());
-                }
-            }
-            _ => {}
+            return serde_json::Value::Null;
         }
+        ColumnType::Int4 => {
+            if let Ok(Some(v)) = row.try_get::<i32, _>(col_name) {
+                return serde_json::Value::Number(serde_json::Number::from(v));
+            }
+        }
+        ColumnType::Int8 => {
+            if let Ok(Some(v)) = row.try_get::<i64, _>(col_name) {
+                return serde_json::Value::Number(serde_json::Number::from(v));
+            }
+        }
+        ColumnType::Int2 => {
+            if let Ok(Some(v)) = row.try_get::<i16, _>(col_name) {
+                return serde_json::Value::Number(serde_json::Number::from(v as i64));
+            }
+        }
+        ColumnType::Int1 => {
+            if let Ok(Some(v)) = row.try_get::<u8, _>(col_name) {
+                return serde_json::Value::Number(serde_json::Number::from(v as i64));
+            }
+        }
+        ColumnType::Float4 => {
+            if let Ok(Some(v)) = row.try_get::<f32, _>(col_name) {
+                return serde_json::Value::Number(
+                    serde_json::Number::from_f64(v as f64).unwrap_or(serde_json::Number::from(0)),
+                );
+            }
+        }
+        ColumnType::Float8 | ColumnType::Floatn => {
+            if let Ok(Some(v)) = row.try_get::<f64, _>(col_name) {
+                return serde_json::Value::Number(
+                    serde_json::Number::from_f64(v).unwrap_or(serde_json::Number::from(0)),
+                );
+            }
+        }
+        ColumnType::Bit | ColumnType::Bitn => {
+            if let Ok(Some(v)) = row.try_get::<bool, _>(col_name) {
+                return serde_json::Value::Bool(v);
+            }
+        }
+        ColumnType::Datetime | ColumnType::Datetime2 | ColumnType::Datetime4 | ColumnType::Datetimen => {
+            if let Ok(Some(v)) = row.try_get::<chrono::NaiveDateTime, _>(col_name) {
+                return serde_json::Value::String(v.format("%Y-%m-%d %H:%M:%S").to_string());
+            }
+        }
+        ColumnType::Daten => {
+            if let Ok(Some(v)) = row.try_get::<chrono::NaiveDate, _>(col_name) {
+                return serde_json::Value::String(v.format("%Y-%m-%d").to_string());
+            }
+        }
+        ColumnType::Guid => {
+            if let Ok(Some(v)) = row.try_get::<uuid::Uuid, _>(col_name) {
+                return serde_json::Value::String(v.to_string());
+            }
+        }
+        ColumnType::Image => {
+            if let Ok(Some(v)) = row.try_get::<&[u8], _>(col_name) {
+                return serde_json::Value::String(String::from_utf8_lossy(v).to_string());
+            }
+        }
+        _ => {}
     }
 
-    // 兜底：按常用类型依次尝试
+    // 兜底：按常用类型依次尝试（未识别列类型走这里）
     if let Ok(Some(v)) = row.try_get::<&str, _>(col_name) {
         return serde_json::Value::String(v.to_string());
     }
@@ -172,73 +164,12 @@ pub fn try_get_value(row: &Row, col_name: &str) -> serde_json::Value {
     serde_json::Value::Null
 }
 
-pub async fn get_tables(
-    State(_config): State<Config>,
-) -> Json<ApiResponse<Vec<TableInfo>>> {
-    let mut conn = match get_pool().get().await {
-        Ok(conn) => conn,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
-    };
-
-    let stream = match conn.query(
-        "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME",
-        &[],
-    ).await {
-        Ok(stream) => stream,
-        Err(e) => return Json(ApiResponse::err(&format!("查询表列表失败: {}", e))),
-    };
-
-    let rows: Vec<Row> = match stream.into_first_result().await {
-        Ok(rows) => rows,
-        Err(e) => return Json(ApiResponse::err(&format!("获取查询结果失败: {}", e))),
-    };
-    let tables: Vec<TableInfo> = rows
-        .iter()
-        .map(|row| TableInfo { table_name: row.get::<&str, _>("TABLE_NAME").unwrap_or("").to_string() })
-        .collect();
-
-    Json(ApiResponse::ok(tables))
-}
-
-pub async fn get_table_data(
-    State(_config): State<Config>,
-    Json(params): Json<TableDataParams>,
-) -> Json<ApiResponse<Vec<serde_json::Value>>> {
-    let mut conn = match get_pool().get().await {
-        Ok(conn) => conn,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
-    };
-
-    let page = params.page.unwrap_or(1);
-    let page_size = std::cmp::min(params.page_size.unwrap_or(20), 100);
-
-    let base_query = format!("SELECT * FROM [{}]", params.table_name);
-
-    let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
-    let paginated_sql = build_pagination_sql(&base_query, page, page_size);
-
-    let mut total: i32 = 0;
-    let count_stream = match conn.query(&count_sql, &[]).await {
-        Ok(stream) => stream,
-        Err(e) => return Json(ApiResponse::err(&format!("查询总数失败: {}", e))),
-    };
-    match count_stream.into_row().await {
-        Ok(Some(row)) => { total = row.get::<i32, _>("cnt").unwrap_or(0); }
-        Ok(None) => {}
-        Err(e) => return Json(ApiResponse::err(&format!("获取总数行失败: {}", e))),
+/// 兼容旧调用：按列名取值（内部仍是 find，仅供少量旧调用使用）
+pub fn try_get_value(row: &Row, col_name: &str) -> serde_json::Value {
+    if let Some(col) = row.columns().iter().find(|c| c.name() == col_name) {
+        return try_get_value_by_col(row, col);
     }
-
-    let data_stream = match conn.query(&paginated_sql, &[]).await {
-        Ok(stream) => stream,
-        Err(e) => return Json(ApiResponse::err(&format!("查询数据失败: {}", e))),
-    };
-    let rows: Vec<Row> = match data_stream.into_first_result().await {
-        Ok(rows) => rows,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据结果失败: {}", e))),
-    };
-    let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
-
-    Json(ApiResponse::ok_paginated(data, total as u64, page, page_size))
+    serde_json::Value::Null
 }
 
 pub async fn delete_supplier(
@@ -270,16 +201,21 @@ pub async fn delete_supplier(
 
         let mut ref_hits: Vec<String> = Vec::new();
         for (ref_table, ref_col, ref_label) in &references {
-            let in_list = body.ids.iter()
-                .map(|s| format!("'{}'", s.replace('\'', "''")))
-                .collect::<Vec<_>>()
-                .join(",");
+            // 修复 SQL 注入：参数化 IN 列表，避免字符串拼接
+            let placeholders: Vec<String> = (1..=body.ids.len())
+                .map(|i| format!("@p{}", i))
+                .collect();
             let total_sql = format!(
                 "SELECT COUNT(*) AS cnt FROM [{}] WHERE [{}] IN ({})",
-                ref_table, ref_col, in_list
+                ref_table, ref_col, placeholders.join(",")
             );
-            match conn.query(&total_sql, &[]).await {
-                Ok(mut stream) => {
+            let ref_params: Vec<Option<String>> = body.ids.iter().map(|s| Some(s.clone())).collect();
+            let ref_param_refs: Vec<&dyn tiberius::ToSql> = ref_params
+                .iter()
+                .map(|v| v as &dyn tiberius::ToSql)
+                .collect();
+            match conn.query(&total_sql, &ref_param_refs).await {
+                Ok(stream) => {
                     if let Ok(Some(row)) = stream.into_row().await {
                         let v = try_get_value(&row, "cnt");
                         let cnt = match v {
@@ -354,16 +290,21 @@ pub async fn delete_warehouse(
 
         let mut ref_hits: Vec<String> = Vec::new();
         for (ref_table, ref_col, ref_label) in &references {
-            let in_list = body.ids.iter()
-                .map(|s| format!("'{}'", s.replace('\'', "''")))
-                .collect::<Vec<_>>()
-                .join(",");
+            // 修复 SQL 注入：参数化 IN 列表，避免字符串拼接
+            let placeholders: Vec<String> = (1..=body.ids.len())
+                .map(|i| format!("@p{}", i))
+                .collect();
             let total_sql = format!(
                 "SELECT COUNT(*) AS cnt FROM [{}] WHERE [{}] IN ({})",
-                ref_table, ref_col, in_list
+                ref_table, ref_col, placeholders.join(",")
             );
-            match conn.query(&total_sql, &[]).await {
-                Ok(mut stream) => {
+            let ref_params: Vec<Option<String>> = body.ids.iter().map(|s| Some(s.clone())).collect();
+            let ref_param_refs: Vec<&dyn tiberius::ToSql> = ref_params
+                .iter()
+                .map(|v| v as &dyn tiberius::ToSql)
+                .collect();
+            match conn.query(&total_sql, &ref_param_refs).await {
+                Ok(stream) => {
                     if let Ok(Some(row)) = stream.into_row().await {
                         let v = try_get_value(&row, "cnt");
                         let cnt = match v {
@@ -415,10 +356,20 @@ pub struct CustomerCreateRequest {
     pub CustName: String,
     pub CustTypeID: Option<String>,
     pub AreaID: Option<String>,
+    pub EmpID: Option<String>,
     pub LinkMan: Option<String>,
     pub Tel: Option<String>,
     pub Addr: Option<String>,
+    pub Zip: Option<String>,
+    pub Email: Option<String>,
+    pub Fax: Option<String>,
+    pub Bank: Option<String>,
+    pub BankAccNo: Option<String>,
+    pub TaxCode: Option<String>,
+    pub PYCode: Option<String>,
     pub State: Option<String>,
+    pub PaySubCode: Option<String>,
+    pub PaySubName: Option<String>,
 }
 
 pub async fn create_customer(
@@ -431,19 +382,36 @@ pub async fn create_customer(
     };
 
     let custid = format!("{}", uuid::Uuid::new_v4());
-    let sql = r#"INSERT INTO tBas_Cust (CustID, CustNo, CustName, CustTypeID, AreaID, LinkMan, Tel, Addr, State)
-              VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9)"#;
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let zero_uuid = "00000000-0000-0000-0000-000000000000";
 
-    let state = body.State.as_deref().unwrap_or("S");
-    let custtypeid = body.CustTypeID.as_deref().unwrap_or("");
-    let areaid = body.AreaID.as_deref().unwrap_or("");
+    let sql = r#"INSERT INTO tBas_Cust (CustID, CustNo, CustName, AreaID, CustTypeID, EmpID,
+        Addr, LinkMan, Zip, Email, Tel, Fax, Bank, BankAccNo, TaxCode, PYCode, State, LUTime, EDate,
+        custSD, PaySubCode, PaySubName)
+        VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15,
+        @p16, @p17, @p18, @p19, @p20, @p21, @p22)"#;
+
+    let state = body.State.as_deref().unwrap_or("Y");
+    let cust_type_id = body.CustTypeID.as_deref().unwrap_or(zero_uuid);
+    let area_id = body.AreaID.as_deref().unwrap_or(zero_uuid);
+    let emp_id = body.EmpID.as_deref().unwrap_or(zero_uuid);
     let linkman = body.LinkMan.as_deref().unwrap_or("");
     let tel = body.Tel.as_deref().unwrap_or("");
     let addr = body.Addr.as_deref().unwrap_or("");
+    let zip = body.Zip.as_deref().unwrap_or("");
+    let email = body.Email.as_deref().unwrap_or("");
+    let fax = body.Fax.as_deref().unwrap_or("");
+    let bank = body.Bank.as_deref().unwrap_or("");
+    let bank_acc_no = body.BankAccNo.as_deref().unwrap_or("");
+    let tax_code = body.TaxCode.as_deref().unwrap_or("");
+    let py_code = body.PYCode.as_deref().unwrap_or("");
+    let pay_sub_code = body.PaySubCode.as_deref().unwrap_or("");
+    let pay_sub_name = body.PaySubName.as_deref().unwrap_or("");
 
     if let Err(e) = conn.execute(sql, &[
-        &custid, &body.CustNo, &body.CustName, &custtypeid, &areaid,
-        &linkman, &tel, &addr, &state,
+        &custid, &body.CustNo, &body.CustName, &area_id, &cust_type_id, &emp_id,
+        &addr, &linkman, &zip, &email, &tel, &fax, &bank, &bank_acc_no, &tax_code,
+        &py_code, &state, &now, &now, &0i32, &pay_sub_code, &pay_sub_name,
     ]).await {
         return Json(ApiResponse::err(&format!("新增客户失败: {}", e)));
     }
@@ -458,10 +426,20 @@ pub struct CustomerUpdateRequest {
     pub CustName: String,
     pub CustTypeID: Option<String>,
     pub AreaID: Option<String>,
+    pub EmpID: Option<String>,
     pub LinkMan: Option<String>,
     pub Tel: Option<String>,
     pub Addr: Option<String>,
+    pub Zip: Option<String>,
+    pub Email: Option<String>,
+    pub Fax: Option<String>,
+    pub Bank: Option<String>,
+    pub BankAccNo: Option<String>,
+    pub TaxCode: Option<String>,
+    pub PYCode: Option<String>,
     pub State: Option<String>,
+    pub PaySubCode: Option<String>,
+    pub PaySubName: Option<String>,
 }
 
 pub async fn update_customer(
@@ -472,20 +450,35 @@ pub async fn update_customer(
         Ok(conn) => conn,
         Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
     };
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let zero_uuid = "00000000-0000-0000-0000-000000000000";
 
     let sql = r#"UPDATE tBas_Cust SET CustNo=@p1, CustName=@p2, CustTypeID=@p3, AreaID=@p4,
-              LinkMan=@p5, Tel=@p6, Addr=@p7, State=@p8 WHERE CustID=@p9"#;
+        EmpID=@p5, LinkMan=@p6, Tel=@p7, Addr=@p8, Zip=@p9, Email=@p10, Fax=@p11, Bank=@p12,
+        BankAccNo=@p13, TaxCode=@p14, PYCode=@p15, State=@p16, PaySubCode=@p17, PaySubName=@p18,
+        LUTime=@p19 WHERE CustID=@p20"#;
 
-    let state = body.State.as_deref().unwrap_or("S");
-    let custtypeid = body.CustTypeID.as_deref().unwrap_or("");
-    let areaid = body.AreaID.as_deref().unwrap_or("");
+    let state = body.State.as_deref().unwrap_or("Y");
+    let cust_type_id = body.CustTypeID.as_deref().unwrap_or(zero_uuid);
+    let area_id = body.AreaID.as_deref().unwrap_or(zero_uuid);
+    let emp_id = body.EmpID.as_deref().unwrap_or(zero_uuid);
     let linkman = body.LinkMan.as_deref().unwrap_or("");
     let tel = body.Tel.as_deref().unwrap_or("");
     let addr = body.Addr.as_deref().unwrap_or("");
+    let zip = body.Zip.as_deref().unwrap_or("");
+    let email = body.Email.as_deref().unwrap_or("");
+    let fax = body.Fax.as_deref().unwrap_or("");
+    let bank = body.Bank.as_deref().unwrap_or("");
+    let bank_acc_no = body.BankAccNo.as_deref().unwrap_or("");
+    let tax_code = body.TaxCode.as_deref().unwrap_or("");
+    let py_code = body.PYCode.as_deref().unwrap_or("");
+    let pay_sub_code = body.PaySubCode.as_deref().unwrap_or("");
+    let pay_sub_name = body.PaySubName.as_deref().unwrap_or("");
 
     if let Err(e) = conn.execute(sql, &[
-        &body.CustNo, &body.CustName, &custtypeid, &areaid,
-        &linkman, &tel, &addr, &state, &body.CustID,
+        &body.CustNo, &body.CustName, &cust_type_id, &area_id, &emp_id,
+        &linkman, &tel, &addr, &zip, &email, &fax, &bank, &bank_acc_no, &tax_code,
+        &py_code, &state, &pay_sub_code, &pay_sub_name, &now, &body.CustID,
     ]).await {
         return Json(ApiResponse::err(&format!("更新客户失败: {}", e)));
     }
@@ -523,16 +516,21 @@ pub async fn delete_customer(
 
         let mut ref_hits: Vec<String> = Vec::new();
         for (ref_table, ref_col, ref_label) in &references {
-            let in_list = body.ids.iter()
-                .map(|s| format!("'{}'", s.replace('\'', "''")))
-                .collect::<Vec<_>>()
-                .join(",");
+            // 修复 SQL 注入：参数化 IN 列表，避免字符串拼接
+            let placeholders: Vec<String> = (1..=body.ids.len())
+                .map(|i| format!("@p{}", i))
+                .collect();
             let total_sql = format!(
                 "SELECT COUNT(*) AS cnt FROM [{}] WHERE [{}] IN ({})",
-                ref_table, ref_col, in_list
+                ref_table, ref_col, placeholders.join(",")
             );
-            match conn.query(&total_sql, &[]).await {
-                Ok(mut stream) => {
+            let ref_params: Vec<Option<String>> = body.ids.iter().map(|s| Some(s.clone())).collect();
+            let ref_param_refs: Vec<&dyn tiberius::ToSql> = ref_params
+                .iter()
+                .map(|v| v as &dyn tiberius::ToSql)
+                .collect();
+            match conn.query(&total_sql, &ref_param_refs).await {
+                Ok(stream) => {
                     if let Ok(Some(row)) = stream.into_row().await {
                         let v = try_get_value(&row, "cnt");
                         let cnt = match v {
@@ -619,10 +617,24 @@ pub async fn get_base_versions(
         Err(_) => {}
     }
 
+    // 提成模板版本：tSys_Parameters 中 PKind='commission' 的最新更新时间
+    // 仓库的 CommissionTemplateID 引用此表，前端 selectorCache 据此刷新
+    let mut commission_template_version: String = String::new();
+    let sql = "SELECT MAX(CONVERT(varchar(19), EDate, 120)) as ver FROM tSys_Parameters WHERE PKind = 'commission'";
+    match conn.query(sql, &[]).await {
+        Ok(stream) => {
+            if let Ok(Some(row)) = stream.into_row().await {
+                commission_template_version = row.get::<&str, _>("ver").unwrap_or("").to_string();
+            }
+        }
+        Err(_) => {}
+    }
+
     let data = serde_json::json!({
         "goodsVersion": goods_version,
         "custVersion": cust_version,
-        "suppVersion": supp_version
+        "suppVersion": supp_version,
+        "commissionTemplate": commission_template_version
     });
 
     Json(ApiResponse::ok(data))
@@ -637,16 +649,15 @@ pub async fn get_suppliers(
         Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
     };
     let page = params.page.unwrap_or(1);
-    let page_size = std::cmp::min(params.page_size.unwrap_or(20), 100);
+    let page_size = std::cmp::min(params.page_size.unwrap_or(20), 1000);
 
     let mut base_query = "SELECT * FROM tBas_Supp WHERE State <> 'D'".to_string();
     let mut query_params: Vec<Option<String>> = Vec::new();
-    let mut pidx = 1;
+    let pidx = 1;
 
     if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
             base_query.push_str(&format!(" AND (SuppNo LIKE @p{} OR SuppName LIKE @p{})", pidx, pidx + 1));
-            pidx += 2;
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
         }
@@ -695,7 +706,7 @@ pub async fn retail_goods_search(
     };
 
     let kw_pattern = format!("%{}%", params.keyword);
-    let sql = "SELECT TOP 50 GDSID, GDSNO, GDSDesc, BarCode, UnitNO, SPrice as Price, 999 as StockQty FROM tBas_Goods WHERE (GDSNO LIKE @p1 OR GDSDesc LIKE @p2 OR BarCode LIKE @p3) AND State IN ('S', '1')";
+    let sql = "SELECT TOP 50 GDSID, GDSNO, GDSDesc, BarCode, UnitNO, SPrice as Price, 999 as StockQty FROM tBas_Goods WHERE (GDSNO LIKE @p1 OR GDSDesc LIKE @p2 OR BarCode LIKE @p3) AND State = 'Y'";
 
     let stream = match conn.query(sql, &[&kw_pattern.as_str(), &kw_pattern.as_str(), &kw_pattern.as_str()]).await {
         Ok(stream) => stream,
@@ -740,17 +751,21 @@ pub async fn retail_sales_settle(
 
     let inv_no = format!("RT{}", chrono::Local::now().format("%Y%m%d%H%M%S"));
     let total_amt = params.total_amt.unwrap_or(0.0);
+    let zero_uuid = "00000000-0000-0000-0000-000000000000";
+    let si_id = format!("{}", uuid::Uuid::new_v4());
 
-    let inv_sql = "INSERT INTO tSal_Inv (InvNo, InvDate, CustID, TotalAmt, State, EDate, EUser) VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7)";
-    let now = chrono::Local::now().naive_local();
+    let inv_sql = r#"INSERT INTO tSal_Inv (SIID, SINo, SIDate, CustID, SumAmt, State, EDate, EUser, LUTime)
+                     VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p7)"#;
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     if let Err(e) = conn.execute(inv_sql, &[
+        &si_id.as_str(),
         &inv_no.as_str(),
         &now,
-        &"RETAIL",
+        &zero_uuid,
         &total_amt,
-        &"A",
+        &"S",
         &now,
-        &"system",
+        &zero_uuid,
     ]).await {
         return Json(ApiResponse::err(&format!("插入销售单失败: {}", e)));
     }
@@ -760,15 +775,33 @@ pub async fn retail_sales_settle(
         let qty = item.qty.unwrap_or(0.0);
         let price = item.price.unwrap_or(0.0);
         let amt = qty * price;
-        let line_no = format!("{}", i + 1);
+        let row_no = format!("{:03}", i + 1);
 
-        let detail_sql = "INSERT INTO tSal_InvDetail (InvNo, LineNo, GDSNO, Qty, Price, Amt) VALUES (@p1, @p2, @p3, @p4, @p5, @p6)";
+        // 从 GDSNO 查 GDSID
+        let gds_id = if !gdsno.is_empty() {
+            let gsql = "SELECT CAST(GDSID AS NVARCHAR(40)) AS G FROM tBas_Goods WHERE GDSNO = @p1";
+            match conn.query(gsql, &[&gdsno]).await {
+                Ok(s) => match s.into_row().await {
+                    Ok(Some(r)) => r.get::<&str, _>("G").unwrap_or(zero_uuid).to_string(),
+                    _ => zero_uuid.to_string(),
+                },
+                _ => zero_uuid.to_string(),
+            }
+        } else {
+            zero_uuid.to_string()
+        };
+
+        let detail_sql = r#"INSERT INTO tSal_InvDetail (SIID, SIDetailID, RowNO, GDSID, StkID, Qty, Price, DisRate, Amt)
+                            VALUES (@p1, NEWID(), @p2, @p3, @p4, @p5, @p6, @p7, @p8)"#;
+        let dis_rate: f64 = 100.0;
         if let Err(e) = conn.execute(detail_sql, &[
-            &inv_no.as_str(),
-            &line_no.as_str(),
-            &gdsno,
+            &si_id.as_str(),
+            &row_no.as_str(),
+            &gds_id.as_str(),
+            &zero_uuid,
             &qty,
             &price,
+            &dis_rate,
             &amt,
         ]).await {
             return Json(ApiResponse::err(&format!("插入销售明细失败: {}", e)));
@@ -788,6 +821,39 @@ pub struct GoodsCreateRequest {
     pub AInPrice: Option<f64>,
     pub SPrice: Option<f64>,
     pub State: Option<String>,
+    pub GDSTypeID: Option<String>,
+    pub GDSPropertyID: Option<String>,
+    pub BrandID: Option<String>,
+    pub DeaTypeID: Option<String>,
+    pub GDSKindID: Option<String>,
+    pub SuppID: Option<String>,
+    pub ProdArea: Option<String>,
+    pub BPrice: Option<f64>,
+    pub VPrice: Option<f64>,
+    pub CPrice: Option<f64>,
+    pub TopStkQty: Option<f64>,
+    pub BttomStkQty: Option<f64>,
+    pub AllowChangePrice: Option<String>,
+    pub AllowDiscount: Option<String>,
+    pub ComboFlg: Option<String>,
+    pub StkRun: Option<String>,
+    pub IntRate: Option<f64>,
+    pub QADay: Option<i32>,
+    pub PurBefDay: Option<i32>,
+    pub PYCode: Option<String>,
+    pub GDSStateNO: Option<i32>,
+    pub ItemNo: Option<String>,
+    pub BPrice2: Option<f64>,
+    pub BPrice3: Option<f64>,
+    pub StkID: Option<String>,
+    pub gdsSD: Option<i32>,
+    pub ServerCIIPrice: Option<f64>,
+    pub PackCnvQty: Option<f64>,
+    pub DPrice1: Option<f64>,
+    pub DPrice2: Option<f64>,
+    pub DPrice3: Option<f64>,
+    pub GDSAbc: Option<String>,
+    pub GDSPropertyName: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -801,6 +867,39 @@ pub struct GoodsUpdateRequest {
     pub AInPrice: Option<f64>,
     pub SPrice: Option<f64>,
     pub State: Option<String>,
+    pub GDSTypeID: Option<String>,
+    pub GDSPropertyID: Option<String>,
+    pub BrandID: Option<String>,
+    pub DeaTypeID: Option<String>,
+    pub GDSKindID: Option<String>,
+    pub SuppID: Option<String>,
+    pub ProdArea: Option<String>,
+    pub BPrice: Option<f64>,
+    pub VPrice: Option<f64>,
+    pub CPrice: Option<f64>,
+    pub TopStkQty: Option<f64>,
+    pub BttomStkQty: Option<f64>,
+    pub AllowChangePrice: Option<String>,
+    pub AllowDiscount: Option<String>,
+    pub ComboFlg: Option<String>,
+    pub StkRun: Option<String>,
+    pub IntRate: Option<f64>,
+    pub QADay: Option<i32>,
+    pub PurBefDay: Option<i32>,
+    pub PYCode: Option<String>,
+    pub GDSStateNO: Option<i32>,
+    pub ItemNo: Option<String>,
+    pub BPrice2: Option<f64>,
+    pub BPrice3: Option<f64>,
+    pub StkID: Option<String>,
+    pub gdsSD: Option<i32>,
+    pub ServerCIIPrice: Option<f64>,
+    pub PackCnvQty: Option<f64>,
+    pub DPrice1: Option<f64>,
+    pub DPrice2: Option<f64>,
+    pub DPrice3: Option<f64>,
+    pub GDSAbc: Option<String>,
+    pub GDSPropertyName: Option<String>,
 }
 
 pub async fn create_goods(
@@ -813,8 +912,17 @@ pub async fn create_goods(
     };
 
     let gdsid = format!("{}", uuid::Uuid::new_v4());
-    let sql = r#"INSERT INTO tBas_Goods (GDSID, GDSNO, GDSDesc, GDSSpec, BarCode, UnitNO, AInPrice, SPrice, State)
-              VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9)"#;
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let zero_uuid = "00000000-0000-0000-0000-000000000000";
+
+    let sql = r#"INSERT INTO tBas_Goods (GDSID, GDSTypeID, GDSPropertyID, BrandID, DeaTypeID, GDSKindID,
+        SuppID, UnitNO, GDSNO, GDSDesc, GDSSpec, BarCode, ProdArea, AInPrice, BPrice, SPrice, VPrice,
+        CPrice, TopStkQty, BttomStkQty, AllowChangePrice, AllowDiscount, ComboFlg, StkRun, IntRate,
+        QADay, PurBefDay, PYCode, State, LUTime, EDate, GDSStateNO, ItemNo, BPrice2, BPrice3, StkID,
+        gdsSD, ServerCIIPrice, PackCnvQty, DPrice1, DPrice2, DPrice3, GDSAbc, GDSPropertyName)
+        VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15,
+        @p16, @p17, @p18, @p19, @p20, @p21, @p22, @p23, @p24, @p25, @p26, @p27, @p28, @p29, @p30,
+        @p31, @p32, @p33, @p34, @p35, @p36, @p37, @p38, @p39, @p40, @p41, @p42, @p43, @p44)"#;
 
     let gdsno = body.GDSNO.as_str();
     let gdsdesc = body.GDSDesc.as_str();
@@ -823,18 +931,86 @@ pub async fn create_goods(
     let unitno = body.UnitNO.as_deref().unwrap_or("");
     let ainprice = body.AInPrice.unwrap_or(0.0);
     let sprice = body.SPrice.unwrap_or(0.0);
-    let state = body.State.as_deref().unwrap_or("S");
+    let state = body.State.as_deref().unwrap_or("Y");
+    let gds_type_id = body.GDSTypeID.as_deref().unwrap_or(zero_uuid);
+    let gds_property_id = body.GDSPropertyID.as_deref().unwrap_or(zero_uuid);
+    let brand_id = body.BrandID.as_deref().unwrap_or(zero_uuid);
+    let dea_type_id = body.DeaTypeID.as_deref().unwrap_or(zero_uuid);
+    let gds_kind_id = body.GDSKindID.as_deref().unwrap_or(zero_uuid);
+    let supp_id = body.SuppID.as_deref().unwrap_or(zero_uuid);
+    let prod_area = body.ProdArea.as_deref().unwrap_or("");
+    let bprice = body.BPrice.unwrap_or(0.0);
+    let vprice = body.VPrice.unwrap_or(0.0);
+    let cprice = body.CPrice.unwrap_or(0.0);
+    let top_stk_qty = body.TopStkQty.unwrap_or(0.0);
+    let bttom_stk_qty = body.BttomStkQty.unwrap_or(0.0);
+    let allow_change_price = body.AllowChangePrice.as_deref().unwrap_or("");
+    let allow_discount = body.AllowDiscount.as_deref().unwrap_or("");
+    let combo_flg = body.ComboFlg.as_deref().unwrap_or("");
+    let stk_run = body.StkRun.as_deref().unwrap_or("");
+    let int_rate = body.IntRate.unwrap_or(0.0);
+    let qa_day = body.QADay.unwrap_or(0);
+    let pur_bef_day = body.PurBefDay.unwrap_or(0);
+    let py_code = body.PYCode.as_deref().unwrap_or("");
+    let gds_state_no = body.GDSStateNO.unwrap_or(1);
+    let item_no = body.ItemNo.as_deref().unwrap_or("");
+    let bprice2 = body.BPrice2.unwrap_or(0.0);
+    let bprice3 = body.BPrice3.unwrap_or(0.0);
+    let stk_id = body.StkID.as_deref().unwrap_or(zero_uuid);
+    let gds_sd = body.gdsSD.unwrap_or(0);
+    let server_ciiprice = body.ServerCIIPrice.unwrap_or(0.0);
+    let pack_cnv_qty = body.PackCnvQty.unwrap_or(0.0);
+    let dprice1 = body.DPrice1.unwrap_or(0.0);
+    let dprice2 = body.DPrice2.unwrap_or(0.0);
+    let dprice3 = body.DPrice3.unwrap_or(0.0);
+    let gds_abc = body.GDSAbc.as_deref().unwrap_or("");
+    let gds_property_name = body.GDSPropertyName.as_deref().unwrap_or("");
 
     if let Err(e) = conn.execute(sql, &[
         &gdsid,
+        &gds_type_id,
+        &gds_property_id,
+        &brand_id,
+        &dea_type_id,
+        &gds_kind_id,
+        &supp_id,
+        &unitno,
         &gdsno,
         &gdsdesc,
         &gdsspec,
         &barcode,
-        &unitno,
+        &prod_area,
         &ainprice,
+        &bprice,
         &sprice,
+        &vprice,
+        &cprice,
+        &top_stk_qty,
+        &bttom_stk_qty,
+        &allow_change_price,
+        &allow_discount,
+        &combo_flg,
+        &stk_run,
+        &int_rate,
+        &qa_day,
+        &pur_bef_day,
+        &py_code,
         &state,
+        &now,
+        &now,
+        &gds_state_no,
+        &item_no,
+        &bprice2,
+        &bprice3,
+        &stk_id,
+        &gds_sd,
+        &server_ciiprice,
+        &pack_cnv_qty,
+        &dprice1,
+        &dprice2,
+        &dprice3,
+        &gds_abc,
+        &gds_property_name,
     ]).await {
         return Json(ApiResponse::err(&format!("新增商品失败: {}", e)));
     }
@@ -851,8 +1027,19 @@ pub async fn update_goods(
         Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
     };
 
-    let sql = r#"UPDATE tBas_Goods SET GDSNO=@p1, GDSDesc=@p2, GDSSpec=@p3, BarCode=@p4,
-              UnitNO=@p5, AInPrice=@p6, SPrice=@p7, State=@p8 WHERE GDSID=@p9"#;
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let zero_uuid = "00000000-0000-0000-0000-000000000000";
+
+    let sql = r#"UPDATE tBas_Goods SET
+        GDSTypeID=@p1, GDSPropertyID=@p2, BrandID=@p3, DeaTypeID=@p4, GDSKindID=@p5, SuppID=@p6,
+        UnitNO=@p7, GDSNO=@p8, GDSDesc=@p9, GDSSpec=@p10, BarCode=@p11, ProdArea=@p12,
+        AInPrice=@p13, BPrice=@p14, SPrice=@p15, VPrice=@p16, CPrice=@p17, TopStkQty=@p18,
+        BttomStkQty=@p19, AllowChangePrice=@p20, AllowDiscount=@p21, ComboFlg=@p22, StkRun=@p23,
+        IntRate=@p24, QADay=@p25, PurBefDay=@p26, PYCode=@p27, State=@p28, LUTime=@p29,
+        GDSStateNO=@p30, ItemNo=@p31, BPrice2=@p32, BPrice3=@p33, StkID=@p34, gdsSD=@p35,
+        ServerCIIPrice=@p36, PackCnvQty=@p37, DPrice1=@p38, DPrice2=@p39, DPrice3=@p40,
+        GDSAbc=@p41, GDSPropertyName=@p42
+        WHERE GDSID=@p43"#;
 
     let gdsno = body.GDSNO.as_str();
     let gdsdesc = body.GDSDesc.as_str();
@@ -861,18 +1048,85 @@ pub async fn update_goods(
     let unitno = body.UnitNO.as_deref().unwrap_or("");
     let ainprice = body.AInPrice.unwrap_or(0.0);
     let sprice = body.SPrice.unwrap_or(0.0);
-    let state = body.State.as_deref().unwrap_or("1");
+    let state = body.State.as_deref().unwrap_or("Y");
+    let gds_type_id = body.GDSTypeID.as_deref().unwrap_or(zero_uuid);
+    let gds_property_id = body.GDSPropertyID.as_deref().unwrap_or(zero_uuid);
+    let brand_id = body.BrandID.as_deref().unwrap_or(zero_uuid);
+    let dea_type_id = body.DeaTypeID.as_deref().unwrap_or(zero_uuid);
+    let gds_kind_id = body.GDSKindID.as_deref().unwrap_or(zero_uuid);
+    let supp_id = body.SuppID.as_deref().unwrap_or(zero_uuid);
+    let prod_area = body.ProdArea.as_deref().unwrap_or("");
+    let bprice = body.BPrice.unwrap_or(0.0);
+    let vprice = body.VPrice.unwrap_or(0.0);
+    let cprice = body.CPrice.unwrap_or(0.0);
+    let top_stk_qty = body.TopStkQty.unwrap_or(0.0);
+    let bttom_stk_qty = body.BttomStkQty.unwrap_or(0.0);
+    let allow_change_price = body.AllowChangePrice.as_deref().unwrap_or("");
+    let allow_discount = body.AllowDiscount.as_deref().unwrap_or("");
+    let combo_flg = body.ComboFlg.as_deref().unwrap_or("");
+    let stk_run = body.StkRun.as_deref().unwrap_or("");
+    let int_rate = body.IntRate.unwrap_or(0.0);
+    let qa_day = body.QADay.unwrap_or(0);
+    let pur_bef_day = body.PurBefDay.unwrap_or(0);
+    let py_code = body.PYCode.as_deref().unwrap_or("");
+    let gds_state_no = body.GDSStateNO.unwrap_or(1);
+    let item_no = body.ItemNo.as_deref().unwrap_or("");
+    let bprice2 = body.BPrice2.unwrap_or(0.0);
+    let bprice3 = body.BPrice3.unwrap_or(0.0);
+    let stk_id = body.StkID.as_deref().unwrap_or(zero_uuid);
+    let gds_sd = body.gdsSD.unwrap_or(0);
+    let server_ciiprice = body.ServerCIIPrice.unwrap_or(0.0);
+    let pack_cnv_qty = body.PackCnvQty.unwrap_or(0.0);
+    let dprice1 = body.DPrice1.unwrap_or(0.0);
+    let dprice2 = body.DPrice2.unwrap_or(0.0);
+    let dprice3 = body.DPrice3.unwrap_or(0.0);
+    let gds_abc = body.GDSAbc.as_deref().unwrap_or("");
+    let gds_property_name = body.GDSPropertyName.as_deref().unwrap_or("");
     let gdsid = body.GDSID.as_str();
 
     if let Err(e) = conn.execute(sql, &[
+        &gds_type_id,
+        &gds_property_id,
+        &brand_id,
+        &dea_type_id,
+        &gds_kind_id,
+        &supp_id,
+        &unitno,
         &gdsno,
         &gdsdesc,
         &gdsspec,
         &barcode,
-        &unitno,
+        &prod_area,
         &ainprice,
+        &bprice,
         &sprice,
+        &vprice,
+        &cprice,
+        &top_stk_qty,
+        &bttom_stk_qty,
+        &allow_change_price,
+        &allow_discount,
+        &combo_flg,
+        &stk_run,
+        &int_rate,
+        &qa_day,
+        &pur_bef_day,
+        &py_code,
         &state,
+        &now,
+        &gds_state_no,
+        &item_no,
+        &bprice2,
+        &bprice3,
+        &stk_id,
+        &gds_sd,
+        &server_ciiprice,
+        &pack_cnv_qty,
+        &dprice1,
+        &dprice2,
+        &dprice3,
+        &gds_abc,
+        &gds_property_name,
         &gdsid,
     ]).await {
         return Json(ApiResponse::err(&format!("更新商品失败: {}", e)));
@@ -918,16 +1172,21 @@ pub async fn delete_goods(
 
         let mut ref_hits: Vec<String> = Vec::new();
         for (ref_table, ref_col, ref_label) in &references {
-            let in_list = body.ids.iter()
-                .map(|s| format!("'{}'", s.replace('\'', "''")))
-                .collect::<Vec<_>>()
-                .join(",");
+            // 修复 SQL 注入：参数化 IN 列表，避免字符串拼接
+            let placeholders: Vec<String> = (1..=body.ids.len())
+                .map(|i| format!("@p{}", i))
+                .collect();
             let total_sql = format!(
                 "SELECT COUNT(*) AS cnt FROM [{}] WHERE [{}] IN ({})",
-                ref_table, ref_col, in_list
+                ref_table, ref_col, placeholders.join(",")
             );
-            match conn.query(&total_sql, &[]).await {
-                Ok(mut stream) => {
+            let ref_params: Vec<Option<String>> = body.ids.iter().map(|s| Some(s.clone())).collect();
+            let ref_param_refs: Vec<&dyn tiberius::ToSql> = ref_params
+                .iter()
+                .map(|v| v as &dyn tiberius::ToSql)
+                .collect();
+            match conn.query(&total_sql, &ref_param_refs).await {
+                Ok(stream) => {
                     if let Ok(Some(row)) = stream.into_row().await {
                         let v = try_get_value(&row, "cnt");
                         let cnt = match v {
@@ -944,10 +1203,13 @@ pub async fn delete_goods(
             }
         }
         if !ref_hits.is_empty() {
-            return Json(ApiResponse::err(&format!(
-                "该商品已被以下数据引用，无法彻底删除：\n{}\n请先清理引用数据后再试。",
-                ref_hits.join("\n")
-            )));
+            return Json(ApiResponse::err_with_code(
+                &format!(
+                    "该商品已被以下数据引用，无法彻底删除：\n{}\n请先清理引用数据后再试。",
+                    ref_hits.join("\n")
+                ),
+                "HARD_DELETE_REFERENCED",
+            ));
         }
 
         // 引用检查通过，执行物理删除
@@ -982,16 +1244,15 @@ pub async fn get_customers(
         Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
     };
     let page = params.page.unwrap_or(1);
-    let page_size = std::cmp::min(params.page_size.unwrap_or(20), 100);
+    let page_size = std::cmp::min(params.page_size.unwrap_or(20), 1000);
 
     let mut base_query = "SELECT * FROM tBas_Cust WHERE State <> 'D'".to_string();
     let mut query_params: Vec<Option<String>> = Vec::new();
-    let mut pidx = 1;
+    let pidx = 1;
 
     if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
             base_query.push_str(&format!(" AND (CustNo LIKE @p{} OR CustName LIKE @p{})", pidx, pidx + 1));
-            pidx += 2;
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
         }
@@ -1034,16 +1295,15 @@ pub async fn get_goods(
         Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
     };
     let page = params.page.unwrap_or(1);
-    let page_size = std::cmp::min(params.page_size.unwrap_or(20), 100);
+    let page_size = std::cmp::min(params.page_size.unwrap_or(20), 1000);
 
     let mut base_query = "SELECT * FROM tBas_Goods WHERE State <> 'D'".to_string();
     let mut query_params: Vec<Option<String>> = Vec::new();
-    let mut pidx = 1;
+    let pidx = 1;
 
     if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
             base_query.push_str(&format!(" AND (GDSNO LIKE @p{} OR GDSDesc LIKE @p{} OR BarCode LIKE @p{})", pidx, pidx + 1, pidx + 2));
-            pidx += 3;
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
@@ -1132,7 +1392,7 @@ pub async fn get_dashboard_stats(
     }
 
     let mut active_goods_count: i32 = 0;
-    let stream = match conn.query("SELECT COUNT(*) as cnt FROM tBas_Goods WHERE State='S'", &[]).await {
+    let stream = match conn.query("SELECT COUNT(*) as cnt FROM tBas_Goods WHERE State='Y'", &[]).await {
         Ok(stream) => stream,
         Err(e) => return Json(ApiResponse::err(&format!("查询活跃商品数量失败: {}", e))),
     };
@@ -1143,9 +1403,9 @@ pub async fn get_dashboard_stats(
     }
 
     let mut sales_trend = serde_json::json!([]);
-    let sales_sql = r#"SELECT TOP 5 CONVERT(varchar(7), InvDate, 120) as month, SUM(TotalAmt) as amount
-        FROM tSal_Inv WHERE State <> 'D' AND InvDate >= DATEADD(month, -5, GETDATE())
-        GROUP BY CONVERT(varchar(7), InvDate, 120) ORDER BY month"#;
+    let sales_sql = r#"SELECT TOP 5 CONVERT(varchar(7), SIDate, 120) as month, SUM(SumAmt) as amount
+        FROM tSal_Inv WHERE State <> 'D' AND SIDate >= DATEADD(month, -5, GETDATE())
+        GROUP BY CONVERT(varchar(7), SIDate, 120) ORDER BY month"#;
     match conn.query(sales_sql, &[]).await {
         Ok(stream) => {
             match stream.into_first_result().await {
@@ -1167,9 +1427,11 @@ pub async fn get_dashboard_stats(
     }
 
     let mut category_stats = serde_json::json!([]);
-    let cat_sql = r#"SELECT TOP 6 b.GDSType as name, COUNT(*) as value
-        FROM tBas_Goods b WHERE b.State = 'S'
-        GROUP BY b.GDSType ORDER BY COUNT(*) DESC"#;
+    let cat_sql = r#"SELECT TOP 6 gt.GDSTypeName as name, COUNT(*) as value
+        FROM tBas_Goods b
+        LEFT JOIN tBas_GDSType gt ON b.GDSTypeID = gt.GDSTypeID
+        WHERE b.State = 'Y'
+        GROUP BY gt.GDSTypeName ORDER BY COUNT(*) DESC"#;
     match conn.query(cat_sql, &[]).await {
         Ok(stream) => {
             match stream.into_first_result().await {
@@ -1285,7 +1547,6 @@ pub async fn get_inventory_stock(
     if let Some(sid) = &params.supplier_id {
         if !sid.is_empty() {
             base_query.push_str(&format!(" AND g.[SuppID] = @p{}", pidx));
-            pidx += 1;
             query_params.push(Some(sid.clone()));
         }
     }
@@ -1374,7 +1635,6 @@ pub async fn get_stock_summary(
     if let Some(sid) = &params.supplier_id {
         if !sid.is_empty() {
             base_query.push_str(&format!(" AND g.[SuppID] = @p{}", pidx));
-            pidx += 1;
             query_params.push(Some(sid.clone()));
         }
     }
@@ -1407,10 +1667,10 @@ pub async fn get_sales_analysis(
     };
 
     let mut monthly_sales = serde_json::json!([]);
-    let sql = r#"SELECT TOP 6 CONVERT(varchar(7), InvDate, 120) as month,
-        SUM(TotalAmt) as sales, SUM(CostAmt) as cost
-        FROM tSal_Inv WHERE State <> 'D' AND InvDate >= DATEADD(month, -6, GETDATE())
-        GROUP BY CONVERT(varchar(7), InvDate, 120) ORDER BY month"#;
+    let sql = r#"SELECT TOP 6 CONVERT(varchar(7), SIDate, 120) as month,
+        SUM(SumAmt) as sales, SUM(CostAmt) as cost
+        FROM tSal_Inv WHERE State <> 'D' AND SIDate >= DATEADD(month, -6, GETDATE())
+        GROUP BY CONVERT(varchar(7), SIDate, 120) ORDER BY month"#;
     match conn.query(sql, &[]).await {
         Ok(stream) => {
             match stream.into_first_result().await {
@@ -1437,8 +1697,8 @@ pub async fn get_sales_analysis(
 
     let mut top_products = serde_json::json!([]);
     let tp_sql = r#"SELECT TOP 8 d.GDSNO, d.GDSDesc as name, SUM(d.Qty) as quantity, SUM(d.Amt) as sales
-        FROM tSal_InvDetail d INNER JOIN tSal_Inv h ON d.InvNo = h.InvNo
-        WHERE h.State <> 'D' AND h.InvDate >= DATEADD(month, -6, GETDATE())
+        FROM tSal_InvDetail d INNER JOIN tSal_Inv h ON d.SIID = h.SIID
+        WHERE h.State <> 'D' AND h.SIDate >= DATEADD(month, -6, GETDATE())
         GROUP BY d.GDSNO, d.GDSDesc ORDER BY SUM(d.Amt) DESC"#;
     match conn.query(tp_sql, &[]).await {
         Ok(stream) => {
@@ -1460,9 +1720,9 @@ pub async fn get_sales_analysis(
     }
 
     let mut customer_ranking = serde_json::json!([]);
-    let cr_sql = r#"SELECT TOP 10 CustID as name, CustName, SUM(TotalAmt) as amount
-        FROM tSal_Inv WHERE State <> 'D' AND InvDate >= DATEADD(month, -6, GETDATE())
-        GROUP BY CustID, CustName ORDER BY SUM(TotalAmt) DESC"#;
+    let cr_sql = r#"SELECT TOP 10 CustID as name, CustName, SUM(SumAmt) as amount
+        FROM tSal_Inv WHERE State <> 'D' AND SIDate >= DATEADD(month, -6, GETDATE())
+        GROUP BY CustID, CustName ORDER BY SUM(SumAmt) DESC"#;
     match conn.query(cr_sql, &[]).await {
         Ok(stream) => {
             match stream.into_first_result().await {
@@ -1500,7 +1760,7 @@ pub async fn get_purchase_analysis(
 
     let mut monthly_purchase = serde_json::json!([]);
     let sql = r#"SELECT TOP 6 CONVERT(varchar(7), PoDate, 120) as month,
-        SUM(TotalAmt) as amount, COUNT(*) as orders
+        SUM(SumAmt) as amount, COUNT(*) as orders
         FROM tPur_Order WHERE State <> 'D' AND PoDate >= DATEADD(month, -6, GETDATE())
         GROUP BY CONVERT(varchar(7), PoDate, 120) ORDER BY month"#;
     match conn.query(sql, &[]).await {
@@ -1539,11 +1799,23 @@ pub struct SupplierCreateRequest {
     pub SuppNo: String,
     pub SuppName: String,
     pub SuppTypeID: Option<String>,
+    pub DeaTypeID: Option<String>,
     pub AreaID: Option<String>,
+    pub EmpID: Option<String>,
     pub LinkMan: Option<String>,
     pub Tel: Option<String>,
     pub Addr: Option<String>,
+    pub Zip: Option<String>,
+    pub Email: Option<String>,
+    pub Fax: Option<String>,
+    pub Bank: Option<String>,
+    pub BankAccNo: Option<String>,
+    pub TaxCode: Option<String>,
+    pub PYCode: Option<String>,
     pub State: Option<String>,
+    pub Note: Option<String>,
+    pub PaySubCode: Option<String>,
+    pub PaySubName: Option<String>,
 }
 
 pub async fn create_supplier(
@@ -1558,17 +1830,37 @@ pub async fn create_supplier(
         return Json(ApiResponse::err("供应商编码和名称不能为空"));
     }
     let suppid = format!("{}", uuid::Uuid::new_v4());
-    let sql = r#"INSERT INTO tBas_Supp (SuppID, SuppNo, SuppName, SuppTypeID, AreaID, LinkMan, Tel, Addr, State)
-              VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9)"#;
-    let state = body.State.as_deref().unwrap_or("S");
-    let supptypeid = body.SuppTypeID.as_deref().unwrap_or("");
-    let areaid = body.AreaID.as_deref().unwrap_or("");
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let zero_uuid = "00000000-0000-0000-0000-000000000000";
+
+    let sql = r#"INSERT INTO tBas_Supp (SuppID, SuppTypeID, DeaTypeID, EmpID, SuppNo, SuppName,
+        Addr, LinkMan, Zip, Email, Tel, Fax, Bank, BankAccNo, TaxCode, PYCode, State, LUTime, EDate,
+        suppSD, Note, PaySubCode, PaySubName)
+        VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15,
+        @p16, @p17, @p18, @p19, @p20, @p21, @p22, @p23)"#;
+
+    let state = body.State.as_deref().unwrap_or("Y");
+    let supp_type_id = body.SuppTypeID.as_deref().unwrap_or(zero_uuid);
+    let dea_type_id = body.DeaTypeID.as_deref().unwrap_or(zero_uuid);
+    let emp_id = body.EmpID.as_deref().unwrap_or(zero_uuid);
     let linkman = body.LinkMan.as_deref().unwrap_or("");
     let tel = body.Tel.as_deref().unwrap_or("");
     let addr = body.Addr.as_deref().unwrap_or("");
+    let zip = body.Zip.as_deref().unwrap_or("");
+    let email = body.Email.as_deref().unwrap_or("");
+    let fax = body.Fax.as_deref().unwrap_or("");
+    let bank = body.Bank.as_deref().unwrap_or("");
+    let bank_acc_no = body.BankAccNo.as_deref().unwrap_or("");
+    let tax_code = body.TaxCode.as_deref().unwrap_or("");
+    let py_code = body.PYCode.as_deref().unwrap_or("");
+    let note = body.Note.as_deref().unwrap_or("");
+    let pay_sub_code = body.PaySubCode.as_deref().unwrap_or("");
+    let pay_sub_name = body.PaySubName.as_deref().unwrap_or("");
+
     if let Err(e) = conn.execute(sql, &[
-        &suppid, &body.SuppNo, &body.SuppName, &supptypeid, &areaid,
-        &linkman, &tel, &addr, &state,
+        &suppid, &supp_type_id, &dea_type_id, &emp_id, &body.SuppNo, &body.SuppName,
+        &addr, &linkman, &zip, &email, &tel, &fax, &bank, &bank_acc_no, &tax_code,
+        &py_code, &state, &now, &now, &0i32, &note, &pay_sub_code, &pay_sub_name,
     ]).await {
         return Json(ApiResponse::err(&format!("新增供应商失败: {}", e)));
     }
@@ -1581,11 +1873,23 @@ pub struct SupplierUpdateRequest {
     pub SuppNo: String,
     pub SuppName: String,
     pub SuppTypeID: Option<String>,
+    pub DeaTypeID: Option<String>,
     pub AreaID: Option<String>,
+    pub EmpID: Option<String>,
     pub LinkMan: Option<String>,
     pub Tel: Option<String>,
     pub Addr: Option<String>,
+    pub Zip: Option<String>,
+    pub Email: Option<String>,
+    pub Fax: Option<String>,
+    pub Bank: Option<String>,
+    pub BankAccNo: Option<String>,
+    pub TaxCode: Option<String>,
+    pub PYCode: Option<String>,
     pub State: Option<String>,
+    pub Note: Option<String>,
+    pub PaySubCode: Option<String>,
+    pub PaySubName: Option<String>,
 }
 
 pub async fn update_supplier(
@@ -1596,17 +1900,36 @@ pub async fn update_supplier(
         Ok(c) => c,
         Err(e) => return Json(ApiResponse::err(&format!("DB: {}", e))),
     };
-    let sql = r#"UPDATE tBas_Supp SET SuppNo=@p1, SuppName=@p2, SuppTypeID=@p3, AreaID=@p4,
-              LinkMan=@p5, Tel=@p6, Addr=@p7, State=@p8 WHERE SuppID=@p9"#;
-    let state = body.State.as_deref().unwrap_or("S");
-    let supptypeid = body.SuppTypeID.as_deref().unwrap_or("");
-    let areaid = body.AreaID.as_deref().unwrap_or("");
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let zero_uuid = "00000000-0000-0000-0000-000000000000";
+
+    let sql = r#"UPDATE tBas_Supp SET SuppNo=@p1, SuppName=@p2, SuppTypeID=@p3, DeaTypeID=@p4,
+        EmpID=@p5, LinkMan=@p6, Tel=@p7, Addr=@p8, Zip=@p9, Email=@p10, Fax=@p11, Bank=@p12,
+        BankAccNo=@p13, TaxCode=@p14, PYCode=@p15, State=@p16, Note=@p17, PaySubCode=@p18,
+        PaySubName=@p19, LUTime=@p20 WHERE SuppID=@p21"#;
+
+    let state = body.State.as_deref().unwrap_or("Y");
+    let supp_type_id = body.SuppTypeID.as_deref().unwrap_or(zero_uuid);
+    let dea_type_id = body.DeaTypeID.as_deref().unwrap_or(zero_uuid);
+    let emp_id = body.EmpID.as_deref().unwrap_or(zero_uuid);
     let linkman = body.LinkMan.as_deref().unwrap_or("");
     let tel = body.Tel.as_deref().unwrap_or("");
     let addr = body.Addr.as_deref().unwrap_or("");
+    let zip = body.Zip.as_deref().unwrap_or("");
+    let email = body.Email.as_deref().unwrap_or("");
+    let fax = body.Fax.as_deref().unwrap_or("");
+    let bank = body.Bank.as_deref().unwrap_or("");
+    let bank_acc_no = body.BankAccNo.as_deref().unwrap_or("");
+    let tax_code = body.TaxCode.as_deref().unwrap_or("");
+    let py_code = body.PYCode.as_deref().unwrap_or("");
+    let note = body.Note.as_deref().unwrap_or("");
+    let pay_sub_code = body.PaySubCode.as_deref().unwrap_or("");
+    let pay_sub_name = body.PaySubName.as_deref().unwrap_or("");
+
     if let Err(e) = conn.execute(sql, &[
-        &body.SuppNo, &body.SuppName, &supptypeid, &areaid,
-        &linkman, &tel, &addr, &state, &body.SuppID,
+        &body.SuppNo, &body.SuppName, &supp_type_id, &dea_type_id, &emp_id,
+        &linkman, &tel, &addr, &zip, &email, &fax, &bank, &bank_acc_no, &tax_code,
+        &py_code, &state, &note, &pay_sub_code, &pay_sub_name, &now, &body.SuppID,
     ]).await {
         return Json(ApiResponse::err(&format!("更新供应商失败: {}", e)));
     }
@@ -1617,11 +1940,27 @@ pub async fn update_supplier(
 pub struct WarehouseCreateRequest {
     pub StkCode: String,
     pub StkName: String,
-    pub StkType: Option<String>,
     pub StkPID: Option<String>,
-    pub NodeKind: Option<String>,
-    pub CostCalc: Option<String>,
+    pub StkMan: Option<String>,
+    pub StkAddr: Option<String>,
+    pub StkZip: Option<String>,
     pub Used: Option<String>,
+    pub CostCalc: Option<String>,
+    pub StkLevel: Option<i32>,
+    pub PYCode: Option<String>,
+    pub NodeKind: Option<String>,
+    pub ConnStr: Option<String>,
+    pub IsJoin: Option<String>,
+    pub StkType1: Option<String>,
+    pub StkType2: Option<String>,
+    pub StkType3: Option<String>,
+    pub StkType4: Option<String>,
+    pub StkType5: Option<String>,
+    pub DPriceLevle: Option<i32>,
+    pub SalEmpID: Option<String>,
+    pub BaseWage: Option<f64>,
+    pub AttDays: Option<f64>,
+    pub QKind: Option<String>,
 }
 
 pub async fn create_warehouse(
@@ -1636,15 +1975,40 @@ pub async fn create_warehouse(
         return Json(ApiResponse::err("仓库编码和名称不能为空"));
     }
     let stkid = format!("{}", uuid::Uuid::new_v4());
-    let sql = r#"INSERT INTO tBas_Stock (StkID, StkCode, StkName, StkType, StkPID, NodeKind, CostCalc, Used)
-              VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)"#;
-    let stktype = body.StkType.as_deref().unwrap_or("");
-    let stkpid = body.StkPID.as_deref().unwrap_or("00000000-0000-0000-0000-000000000000");
-    let nodekind = body.NodeKind.as_deref().unwrap_or("C");
-    let costcalc = body.CostCalc.as_deref().unwrap_or("Y");
-    let used = body.Used.as_deref().unwrap_or("Y");
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let zero_uuid = "00000000-0000-0000-0000-000000000000".to_string();
+    let stkpid = body.StkPID.as_deref().unwrap_or("00000000-0000-0000-0000-000000000000").to_string();
+    let stkman = body.StkMan.clone().unwrap_or_default();
+    let stkaddr = body.StkAddr.clone().unwrap_or_default();
+    let stkzip = body.StkZip.clone().unwrap_or_default();
+    let used = body.Used.clone().unwrap_or_else(|| "Y".to_string());
+    let costcalc = body.CostCalc.clone().unwrap_or_else(|| "Y".to_string());
+    let stklevel = body.StkLevel.unwrap_or(1);
+    let pycode = body.PYCode.clone().unwrap_or_default();
+    let nodekind = body.NodeKind.clone().unwrap_or_else(|| "C".to_string());
+    let connstr = body.ConnStr.clone().unwrap_or_default();
+    let isjoin = body.IsJoin.clone().unwrap_or_else(|| "N".to_string());
+    let stktype1 = body.StkType1.clone().unwrap_or_default();
+    let stktype2 = body.StkType2.clone().unwrap_or_default();
+    let stktype3 = body.StkType3.clone().unwrap_or_default();
+    let stktype4 = body.StkType4.clone().unwrap_or_default();
+    let stktype5 = body.StkType5.clone().unwrap_or_default();
+    let dpricelevle = body.DPriceLevle.unwrap_or(0);
+    let salempid = body.SalEmpID.clone().unwrap_or(zero_uuid.clone());
+    let basewage = body.BaseWage.unwrap_or(0.0);
+    let attdays = body.AttDays.unwrap_or(0.0);
+    let qkind = body.QKind.clone().unwrap_or_else(|| "A".to_string());
+    let stksd: i32 = 0;
+    let sql = r#"INSERT INTO tBas_Stock (StkID, StkPID, StkName, StkMan, StkAddr, StkZip, Used, LUTime,
+              CostCalc, StkLevel, StkCode, PYCode, NodeKind, stkSD, ConnStr, IsJoin, StkType1, StkType2,
+              StkType3, StkType4, StkType5, DPriceLevle, SalEmpID, BaseWage, AttDays, QKind)
+              VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15,
+              @p16, @p17, @p18, @p19, @p20, @p21, @p22, @p23, @p24, @p25, @p26)"#;
     if let Err(e) = conn.execute(sql, &[
-        &stkid, &body.StkCode, &body.StkName, &stktype, &stkpid, &nodekind, &costcalc, &used,
+        &stkid, &stkpid, &body.StkName, &stkman, &stkaddr, &stkzip, &used, &now,
+        &costcalc, &stklevel, &body.StkCode, &pycode, &nodekind, &stksd, &connstr, &isjoin,
+        &stktype1, &stktype2, &stktype3, &stktype4, &stktype5, &dpricelevle, &salempid,
+        &basewage, &attdays, &qkind,
     ]).await {
         return Json(ApiResponse::err(&format!("新增仓库失败: {}", e)));
     }
@@ -1656,11 +2020,27 @@ pub struct WarehouseUpdateRequest {
     pub StkID: String,
     pub StkCode: String,
     pub StkName: String,
-    pub StkType: Option<String>,
     pub StkPID: Option<String>,
-    pub NodeKind: Option<String>,
-    pub CostCalc: Option<String>,
+    pub StkMan: Option<String>,
+    pub StkAddr: Option<String>,
+    pub StkZip: Option<String>,
     pub Used: Option<String>,
+    pub CostCalc: Option<String>,
+    pub StkLevel: Option<i32>,
+    pub PYCode: Option<String>,
+    pub NodeKind: Option<String>,
+    pub ConnStr: Option<String>,
+    pub IsJoin: Option<String>,
+    pub StkType1: Option<String>,
+    pub StkType2: Option<String>,
+    pub StkType3: Option<String>,
+    pub StkType4: Option<String>,
+    pub StkType5: Option<String>,
+    pub DPriceLevle: Option<i32>,
+    pub SalEmpID: Option<String>,
+    pub BaseWage: Option<f64>,
+    pub AttDays: Option<f64>,
+    pub QKind: Option<String>,
 }
 
 pub async fn update_warehouse(
@@ -1671,15 +2051,39 @@ pub async fn update_warehouse(
         Ok(c) => c,
         Err(e) => return Json(ApiResponse::err(&format!("DB: {}", e))),
     };
-    let sql = r#"UPDATE tBas_Stock SET StkCode=@p1, StkName=@p2, StkType=@p3, StkPID=@p4,
-              NodeKind=@p5, CostCalc=@p6, Used=@p7 WHERE StkID=@p8"#;
-    let stktype = body.StkType.as_deref().unwrap_or("");
-    let stkpid = body.StkPID.as_deref().unwrap_or("00000000-0000-0000-0000-000000000000");
-    let nodekind = body.NodeKind.as_deref().unwrap_or("C");
-    let costcalc = body.CostCalc.as_deref().unwrap_or("Y");
-    let used = body.Used.as_deref().unwrap_or("Y");
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let zero_uuid = "00000000-0000-0000-0000-000000000000".to_string();
+    let stkpid = body.StkPID.as_deref().unwrap_or("00000000-0000-0000-0000-000000000000").to_string();
+    let stkman = body.StkMan.clone().unwrap_or_default();
+    let stkaddr = body.StkAddr.clone().unwrap_or_default();
+    let stkzip = body.StkZip.clone().unwrap_or_default();
+    let used = body.Used.clone().unwrap_or_else(|| "Y".to_string());
+    let costcalc = body.CostCalc.clone().unwrap_or_else(|| "Y".to_string());
+    let stklevel = body.StkLevel.unwrap_or(1);
+    let pycode = body.PYCode.clone().unwrap_or_default();
+    let nodekind = body.NodeKind.clone().unwrap_or_else(|| "C".to_string());
+    let connstr = body.ConnStr.clone().unwrap_or_default();
+    let isjoin = body.IsJoin.clone().unwrap_or_else(|| "N".to_string());
+    let stktype1 = body.StkType1.clone().unwrap_or_default();
+    let stktype2 = body.StkType2.clone().unwrap_or_default();
+    let stktype3 = body.StkType3.clone().unwrap_or_default();
+    let stktype4 = body.StkType4.clone().unwrap_or_default();
+    let stktype5 = body.StkType5.clone().unwrap_or_default();
+    let dpricelevle = body.DPriceLevle.unwrap_or(0);
+    let salempid = body.SalEmpID.clone().unwrap_or(zero_uuid.clone());
+    let basewage = body.BaseWage.unwrap_or(0.0);
+    let attdays = body.AttDays.unwrap_or(0.0);
+    let qkind = body.QKind.clone().unwrap_or_else(|| "A".to_string());
+    let sql = r#"UPDATE tBas_Stock SET StkPID=@p1, StkName=@p2, StkMan=@p3, StkAddr=@p4, StkZip=@p5,
+              Used=@p6, LUTime=@p7, CostCalc=@p8, StkLevel=@p9, StkCode=@p10, PYCode=@p11, NodeKind=@p12,
+              ConnStr=@p13, IsJoin=@p14, StkType1=@p15, StkType2=@p16, StkType3=@p17, StkType4=@p18,
+              StkType5=@p19, DPriceLevle=@p20, SalEmpID=@p21, BaseWage=@p22, AttDays=@p23, QKind=@p24
+              WHERE StkID=@p25"#;
     if let Err(e) = conn.execute(sql, &[
-        &body.StkCode, &body.StkName, &stktype, &stkpid, &nodekind, &costcalc, &used, &body.StkID,
+        &stkpid, &body.StkName, &stkman, &stkaddr, &stkzip, &used, &now,
+        &costcalc, &stklevel, &body.StkCode, &pycode, &nodekind, &connstr, &isjoin,
+        &stktype1, &stktype2, &stktype3, &stktype4, &stktype5, &dpricelevle, &salempid,
+        &basewage, &attdays, &qkind, &body.StkID,
     ]).await {
         return Json(ApiResponse::err(&format!("更新仓库失败: {}", e)));
     }
@@ -1754,7 +2158,22 @@ pub struct EmployeeCreateRequest {
     pub DeptID: Option<String>,
     pub DutyID: Option<String>,
     pub Tel: Option<String>,
-    pub Used: Option<String>,
+    pub State: Option<String>,
+    pub WorkState: Option<String>,
+    pub AllowLogin: Option<String>,
+    pub PassWordStr: Option<String>,
+    pub InDate: Option<String>,
+    pub StkID: Option<String>,
+    pub IDCode: Option<String>,
+    pub Email: Option<String>,
+    pub Addr: Option<String>,
+    pub Birthday: Option<String>,
+    pub Note: Option<String>,
+    pub BaseWagePrice: Option<f64>,
+    pub BaseWageKind: Option<String>,
+    pub HomeTel: Option<String>,
+    pub PYCode: Option<String>,
+    pub OutDate: Option<String>,
 }
 
 pub async fn create_employee(
@@ -1769,15 +2188,51 @@ pub async fn create_employee(
         return Json(ApiResponse::err("员工编码和姓名不能为空"));
     }
     let empid = format!("{}", uuid::Uuid::new_v4());
-    let sql = r#"INSERT INTO tBas_Emp (EmpID, EmpNo, EmpName, Sex, DeptID, DutyID, Tel, Used)
-              VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)"#;
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let zero_uuid = "00000000-0000-0000-0000-000000000000";
+
+    let sql = r#"INSERT INTO tBas_Emp (EmpID, EmpNo, EmpName, Sex, DeptID, DutyID, Tel, State,
+        WorkState, AllowLogin, PassWordStr, InDate, StkID, IDCode, Email, Addr, Birthday, Note,
+        BaseWagePrice, BaseWageKind, HomeTel, PYCode, OutDate, empSD, OnlyLogin, AndroidPassWord,
+        AndroidPower, LUTime, EDate)
+        VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15,
+        @p16, @p17, @p18, @p19, @p20, @p21, @p22, @p23, @p24, 'N', '3', 'A', @p25, @p26)"#;
+
     let sex = body.Sex.as_deref().unwrap_or("M");
-    let deptid = body.DeptID.as_deref().unwrap_or("00000000-0000-0000-0000-000000000000");
-    let dutyid = body.DutyID.as_deref().unwrap_or("00000000-0000-0000-0000-000000000000");
+    let deptid = body.DeptID.as_deref().unwrap_or(zero_uuid);
+    let dutyid = body.DutyID.as_deref().unwrap_or(zero_uuid);
     let tel = body.Tel.as_deref().unwrap_or("");
-    let used = body.Used.as_deref().unwrap_or("Y");
+    let state = body.State.as_deref().unwrap_or("Y");
+    let work_state = body.WorkState.as_deref().unwrap_or("1");
+    let allow_login = body.AllowLogin.as_deref().unwrap_or("N");
+    let password_raw = body.PassWordStr.as_deref().unwrap_or("");
+    // 密码 bcrypt 加密（空密码存空，已加密的不重复）
+    let password_str = if !password_raw.is_empty() && !password_raw.starts_with("BCRYPT:") {
+        match hash_password(password_raw) {
+            Some(h) => h,
+            None => return Json(ApiResponse::err("密码哈希失败，可能密码过长（>72字节）")),
+        }
+    } else {
+        password_raw.to_string()
+    };
+    let in_date = body.InDate.as_deref().unwrap_or("");
+    let stk_id = body.StkID.as_deref().unwrap_or(zero_uuid);
+    let id_code = body.IDCode.as_deref().unwrap_or("");
+    let email = body.Email.as_deref().unwrap_or("");
+    let addr = body.Addr.as_deref().unwrap_or("");
+    let birthday = body.Birthday.as_deref().unwrap_or("");
+    let note = body.Note.as_deref().unwrap_or("");
+    let base_wage_price = body.BaseWagePrice.unwrap_or(0.0);
+    let base_wage_kind = body.BaseWageKind.as_deref().unwrap_or("Y");
+    let home_tel = body.HomeTel.as_deref().unwrap_or("");
+    let py_code = body.PYCode.as_deref().unwrap_or("");
+    let out_date = body.OutDate.as_deref().unwrap_or("");
+
     if let Err(e) = conn.execute(sql, &[
-        &empid, &body.EmpNo, &body.EmpName, &sex, &deptid, &dutyid, &tel, &used,
+        &empid, &body.EmpNo, &body.EmpName, &sex, &deptid, &dutyid, &tel, &state,
+        &work_state, &allow_login, &password_str, &in_date, &stk_id, &id_code, &email,
+        &addr, &birthday, &note, &base_wage_price, &base_wage_kind, &home_tel, &py_code,
+        &out_date, &0i32, &now, &now,
     ]).await {
         return Json(ApiResponse::err(&format!("新增员工失败: {}", e)));
     }
@@ -1793,7 +2248,22 @@ pub struct EmployeeUpdateRequest {
     pub DeptID: Option<String>,
     pub DutyID: Option<String>,
     pub Tel: Option<String>,
-    pub Used: Option<String>,
+    pub State: Option<String>,
+    pub WorkState: Option<String>,
+    pub AllowLogin: Option<String>,
+    pub PassWordStr: Option<String>,
+    pub InDate: Option<String>,
+    pub StkID: Option<String>,
+    pub IDCode: Option<String>,
+    pub Email: Option<String>,
+    pub Addr: Option<String>,
+    pub Birthday: Option<String>,
+    pub Note: Option<String>,
+    pub BaseWagePrice: Option<f64>,
+    pub BaseWageKind: Option<String>,
+    pub HomeTel: Option<String>,
+    pub PYCode: Option<String>,
+    pub OutDate: Option<String>,
 }
 
 pub async fn update_employee(
@@ -1804,16 +2274,99 @@ pub async fn update_employee(
         Ok(c) => c,
         Err(e) => return Json(ApiResponse::err(&format!("DB: {}", e))),
     };
-    let sql = r#"UPDATE tBas_Emp SET EmpNo=@p1, EmpName=@p2, Sex=@p3, DeptID=@p4,
-              DutyID=@p5, Tel=@p6, Used=@p7 WHERE EmpID=@p8"#;
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let zero_uuid = "00000000-0000-0000-0000-000000000000";
+
+    // admin 账号保护：禁止修改 admin 的工号、停用登录权限、设为离职/删除状态
+    {
+        let check_sql = "SELECT TOP 1 EmpNo FROM tBas_Emp WHERE EmpID = @p1";
+        let v: &dyn tiberius::ToSql = &body.EmpID;
+        if let Ok(stream) = conn.query(check_sql, &[v]).await {
+            if let Ok(Some(row)) = stream.into_row().await {
+                if let Some(emp_no) = row.get::<&str, _>("EmpNo") {
+                    if emp_no.eq_ignore_ascii_case("admin") {
+                        // 禁止修改工号
+                        if !body.EmpNo.eq_ignore_ascii_case("admin") {
+                            return Json(ApiResponse::err("禁止修改 admin 账号的工号（系统管理员标识），避免系统无法登录"));
+                        }
+                        // 禁止停用登录
+                        if body.AllowLogin.as_deref() == Some("N") {
+                            return Json(ApiResponse::err("禁止停用 admin 账号的登录权限，避免系统无法登录"));
+                        }
+                        // 禁止删除
+                        if body.State.as_deref() == Some("D") {
+                            return Json(ApiResponse::err("禁止删除 admin 账号，避免系统无法登录"));
+                        }
+                        // 禁止设为离职
+                        if body.WorkState.as_deref() == Some("3") {
+                            return Json(ApiResponse::err("禁止将 admin 账号设为离职状态，避免系统无法登录"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let sex = body.Sex.as_deref().unwrap_or("M");
-    let deptid = body.DeptID.as_deref().unwrap_or("00000000-0000-0000-0000-000000000000");
-    let dutyid = body.DutyID.as_deref().unwrap_or("00000000-0000-0000-0000-000000000000");
+    let deptid = body.DeptID.as_deref().unwrap_or(zero_uuid);
+    let dutyid = body.DutyID.as_deref().unwrap_or(zero_uuid);
     let tel = body.Tel.as_deref().unwrap_or("");
-    let used = body.Used.as_deref().unwrap_or("Y");
-    if let Err(e) = conn.execute(sql, &[
-        &body.EmpNo, &body.EmpName, &sex, &deptid, &dutyid, &tel, &used, &body.EmpID,
-    ]).await {
+    let state = body.State.as_deref().unwrap_or("Y");
+    let work_state = body.WorkState.as_deref().unwrap_or("1");
+    let allow_login = body.AllowLogin.as_deref().unwrap_or("N");
+    let password_raw = body.PassWordStr.as_deref().unwrap_or("");
+    let in_date = body.InDate.as_deref().unwrap_or("");
+    let stk_id = body.StkID.as_deref().unwrap_or(zero_uuid);
+    let id_code = body.IDCode.as_deref().unwrap_or("");
+    let email = body.Email.as_deref().unwrap_or("");
+    let addr = body.Addr.as_deref().unwrap_or("");
+    let birthday = body.Birthday.as_deref().unwrap_or("");
+    let note = body.Note.as_deref().unwrap_or("");
+    let base_wage_price = body.BaseWagePrice.unwrap_or(0.0);
+    let base_wage_kind = body.BaseWageKind.as_deref().unwrap_or("Y");
+    let home_tel = body.HomeTel.as_deref().unwrap_or("");
+    let py_code = body.PYCode.as_deref().unwrap_or("");
+    let out_date = body.OutDate.as_deref().unwrap_or("");
+
+    // 动态构建 UPDATE：密码为空时跳过 PassWordStr 字段（保留原密码）
+    // 密码非空时 bcrypt 加密（已加密的不重复）
+    let mut set_clauses: Vec<String> = vec![
+        "EmpNo=@p1", "EmpName=@p2", "Sex=@p3", "DeptID=@p4", "DutyID=@p5",
+        "Tel=@p6", "State=@p7", "WorkState=@p8", "AllowLogin=@p9",
+        "InDate=@p10", "StkID=@p11", "IDCode=@p12", "Email=@p13", "Addr=@p14",
+        "Birthday=@p15", "Note=@p16", "BaseWagePrice=@p17", "BaseWageKind=@p18",
+        "HomeTel=@p19", "PYCode=@p20", "OutDate=@p21", "LUTime=@p22",
+    ].iter().map(|s| s.to_string()).collect();
+    let mut values: Vec<&dyn tiberius::ToSql> = vec![
+        &body.EmpNo, &body.EmpName, &sex, &deptid, &dutyid, &tel, &state,
+        &work_state, &allow_login, &in_date, &stk_id, &id_code, &email,
+        &addr, &birthday, &note, &base_wage_price, &base_wage_kind, &home_tel,
+        &py_code, &out_date, &now,
+    ];
+    // 密码处理：空则跳过（保留原密码），非空则加密
+    let password_hashed: String = if !password_raw.is_empty() {
+        if password_raw.starts_with("BCRYPT:") {
+            password_raw.to_string()
+        } else {
+            match hash_password(password_raw) {
+                Some(h) => h,
+                None => return Json(ApiResponse::err("密码哈希失败，可能密码过长（>72字节）")),
+            }
+        }
+    } else {
+        String::new()
+    };
+    if !password_raw.is_empty() {
+        let pidx = values.len() + 1;
+        set_clauses.push(format!("PassWordStr=@p{}", pidx));
+        values.push(&password_hashed);
+    }
+    let where_idx = values.len() + 1;
+    set_clauses.push(format!("WHERE EmpID=@p{}", where_idx));
+    let sql = format!("UPDATE tBas_Emp SET {}", set_clauses.join(", "));
+    values.push(&body.EmpID);
+
+    if let Err(e) = conn.execute(&sql, &values).await {
         return Json(ApiResponse::err(&format!("更新员工失败: {}", e)));
     }
     Json(ApiResponse::msg("员工更新成功"))
@@ -1828,10 +2381,10 @@ pub async fn get_profit_analysis(
     };
 
     let mut monthly_profit = serde_json::json!([]);
-    let sql = r#"SELECT TOP 6 CONVERT(varchar(7), InvDate, 120) as month,
-        SUM(TotalAmt) as sales, SUM(CostAmt) as cost
-        FROM tSal_Inv WHERE State <> 'D' AND InvDate >= DATEADD(month, -6, GETDATE())
-        GROUP BY CONVERT(varchar(7), InvDate, 120) ORDER BY month"#;
+    let sql = r#"SELECT TOP 6 CONVERT(varchar(7), SIDate, 120) as month,
+        SUM(SumAmt) as sales, SUM(CostAmt) as cost
+        FROM tSal_Inv WHERE State <> 'D' AND SIDate >= DATEADD(month, -6, GETDATE())
+        GROUP BY CONVERT(varchar(7), SIDate, 120) ORDER BY month"#;
     match conn.query(sql, &[]).await {
         Ok(stream) => {
             match stream.into_first_result().await {
@@ -1875,7 +2428,7 @@ pub async fn get_warehouses(
         Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
     };
     let page = params.page.unwrap_or(1);
-    let page_size = std::cmp::min(params.page_size.unwrap_or(20), 100);
+    let page_size = std::cmp::min(params.page_size.unwrap_or(20), 1000);
 
     let base_query = "SELECT * FROM tBas_Stock WHERE Used <> 'N'".to_string();
 
@@ -1915,16 +2468,15 @@ pub async fn get_employees(
         Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
     };
     let page = params.page.unwrap_or(1);
-    let page_size = std::cmp::min(params.page_size.unwrap_or(20), 100);
+    let page_size = std::cmp::min(params.page_size.unwrap_or(20), 1000);
 
     let mut base_query = "SELECT * FROM tBas_Emp WHERE State <> 'D'".to_string();
     let mut query_params: Vec<Option<String>> = Vec::new();
-    let mut pidx = 1;
+    let pidx = 1;
 
     if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
             base_query.push_str(&format!(" AND (EmpNo LIKE @p{} OR EmpName LIKE @p{})", pidx, pidx + 1));
-            pidx += 2;
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
         }
@@ -1967,7 +2519,7 @@ pub async fn get_brands(
         Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
     };
     let page = params.page.unwrap_or(1);
-    let page_size = std::cmp::min(params.page_size.unwrap_or(20), 100);
+    let page_size = std::cmp::min(params.page_size.unwrap_or(20), 1000);
 
     let base_query = "SELECT * FROM tBas_Brand WHERE Used <> 'N'".to_string();
 

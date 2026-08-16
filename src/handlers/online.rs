@@ -9,28 +9,15 @@ use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
 use crate::utils::{ApiResponse, build_pagination_sql_with_sort, row_get_f64};
-use crate::handlers::base_data::try_get_value;
+use crate::handlers::base_data::row_to_json;
 use crate::middleware::auth::Claims;
-
-fn row_to_json(row: &Row) -> serde_json::Value {
-    let columns = row.columns();
-    let mut map = serde_json::Map::new();
-    for col in columns {
-        let name = col.name().to_string();
-        if name == "_rn" {
-            continue;
-        }
-        let val = try_get_value(row, &name);
-        map.insert(name, val);
-    }
-    serde_json::Value::Object(map)
-}
 
 // ============================================================
 // Online Products (商品池管理)
 // ============================================================
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct GetOnlineProductsParams {
     pub page: Option<u32>,
     pub page_size: Option<u32>,
@@ -47,7 +34,7 @@ pub async fn get_online_products(
 ) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>> {
     let mut conn = get_pool().get().await?;
     let page = params.page.unwrap_or(1);
-    let page_size = std::cmp::min(params.page_size.unwrap_or(50), 200);
+    let page_size = std::cmp::min(params.page_size.unwrap_or(50), 1000);
 
     let mut base_query = r#"SELECT og.*, g.[GDSDesc], g.[GDSNO], g.[GDSSpec], s.[StkName]
         FROM [tOnline_Goods] og
@@ -77,7 +64,6 @@ pub async fn get_online_products(
 
     if let Some(status) = params.status {
         base_query.push_str(&format!(" AND og.[Status] = @p{}", pidx));
-        pidx += 1;
         query_params.push(Some(status.to_string()));
     }
 
@@ -99,6 +85,7 @@ pub async fn get_online_products(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct GetOnlineProductParams {
     pub id: String,
 }
@@ -124,14 +111,15 @@ pub async fn get_online_product(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct CreateOnlineProductParams {
-    pub GDSID: Option<String>,
-    pub SaleType: Option<String>,
-    pub ClearancePrice: Option<f64>,
-    pub MaxOrderQty: Option<i32>,
-    pub Sort: Option<i32>,
-    pub Status: Option<i32>,
-    pub StkID: Option<String>,
+    pub gds_id: Option<String>,
+    pub sale_type: Option<String>,
+    pub clearance_price: Option<f64>,
+    pub max_order_qty: Option<i32>,
+    pub sort: Option<i32>,
+    pub status: Option<i32>,
+    pub stk_id: Option<String>,
 }
 
 pub async fn create_online_product(
@@ -140,15 +128,15 @@ pub async fn create_online_product(
     Json(body): Json<CreateOnlineProductParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
-    let gds_id = body.GDSID.as_deref().unwrap_or("");
-    let sale_type = body.SaleType.as_deref().unwrap_or("normal");
-    let clearance_price = body.ClearancePrice.unwrap_or(0.0);
-    let max_order_qty = body.MaxOrderQty.unwrap_or(0);
-    let sort = body.Sort.unwrap_or(0);
-    let status = body.Status.unwrap_or(1);
-    let stk_id = body.StkID.as_deref().unwrap_or("");
+    let gds_id = body.gds_id.as_deref().unwrap_or("");
+    let sale_type = body.sale_type.as_deref().unwrap_or("normal");
+    let clearance_price = body.clearance_price.unwrap_or(0.0);
+    let max_order_qty = body.max_order_qty.unwrap_or(0);
+    let sort = body.sort.unwrap_or(0);
+    let status = body.status.unwrap_or(1);
+    let stk_id = body.stk_id.as_deref().unwrap_or("");
 
     let sql = r#"INSERT INTO [tOnline_Goods] ([OnlineGDSID], [GDSID], [SaleType], [ClearancePrice], [MaxOrderQty], [Sort], [Status], [StkID], [State], [EDate], [EUser])
         VALUES (NEWID(), @p1, @p2, @p3, @p4, @p5, @p6, @p7, 'A', @p8, @p9)"#;
@@ -169,15 +157,16 @@ pub async fn create_online_product(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct UpdateOnlineProductParams {
-    pub OnlineGDSID: String,
-    pub GDSID: Option<String>,
-    pub SaleType: Option<String>,
-    pub ClearancePrice: Option<f64>,
-    pub MaxOrderQty: Option<i32>,
-    pub Sort: Option<i32>,
-    pub Status: Option<i32>,
-    pub StkID: Option<String>,
+    pub online_gds_id: String,
+    pub gds_id: Option<String>,
+    pub sale_type: Option<String>,
+    pub clearance_price: Option<f64>,
+    pub max_order_qty: Option<i32>,
+    pub sort: Option<i32>,
+    pub status: Option<i32>,
+    pub stk_id: Option<String>,
 }
 
 pub async fn update_online_product(
@@ -186,15 +175,15 @@ pub async fn update_online_product(
     Json(body): Json<UpdateOnlineProductParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
-    let gds_id = body.GDSID.as_deref().unwrap_or("");
-    let sale_type = body.SaleType.as_deref().unwrap_or("normal");
-    let clearance_price = body.ClearancePrice.unwrap_or(0.0);
-    let max_order_qty = body.MaxOrderQty.unwrap_or(0);
-    let sort = body.Sort.unwrap_or(0);
-    let status = body.Status.unwrap_or(1);
-    let stk_id = body.StkID.as_deref().unwrap_or("");
+    let gds_id = body.gds_id.as_deref().unwrap_or("");
+    let sale_type = body.sale_type.as_deref().unwrap_or("normal");
+    let clearance_price = body.clearance_price.unwrap_or(0.0);
+    let max_order_qty = body.max_order_qty.unwrap_or(0);
+    let sort = body.sort.unwrap_or(0);
+    let status = body.status.unwrap_or(1);
+    let stk_id = body.stk_id.as_deref().unwrap_or("");
 
     let sql = r#"UPDATE [tOnline_Goods] SET
         [GDSID] = @p1, [SaleType] = @p2, [ClearancePrice] = @p3,
@@ -212,13 +201,14 @@ pub async fn update_online_product(
         &stk_id,
         &now,
         &claims.user_code.as_str(),
-        &body.OnlineGDSID.as_str(),
+        &body.online_gds_id.as_str(),
     ]).await?;
 
     Ok(Json(ApiResponse::msg("线上商品更新成功")))
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct DeleteOnlineProductParams {
     pub ids: Vec<String>,
 }
@@ -242,6 +232,7 @@ pub async fn delete_online_product(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct BrowseOnlineProductsParams {
     pub page: Option<u32>,
     pub page_size: Option<u32>,
@@ -258,9 +249,9 @@ pub async fn browse_online_products(
 ) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>> {
     let mut conn = get_pool().get().await?;
     let page = params.page.unwrap_or(1);
-    let page_size = std::cmp::min(params.page_size.unwrap_or(50), 200);
+    let page_size = std::cmp::min(params.page_size.unwrap_or(50), 1000);
 
-    let mut base_query = r#"SELECT og.*, g.[GDSDesc], g.[GDSNO], g.[GDSSpec], g.[GDSBarCode], s.[StkName],
+    let mut base_query = r#"SELECT og.*, g.[GDSDesc], g.[GDSNO], g.[GDSSpec], g.[BarCode], g.[SPrice], s.[StkName],
         ISNULL(sq.[Qty],0) AS [StockQty]
         FROM [tOnline_Goods] og
         LEFT JOIN [tBas_Goods] g ON og.[GDSID] = g.[GDSID]
@@ -272,7 +263,7 @@ pub async fn browse_online_products(
 
     if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
-            base_query.push_str(&format!(" AND (g.[GDSDesc] LIKE @p{} OR g.[GDSNO] LIKE @p{} OR g.[GDSBarCode] LIKE @p{})", pidx, pidx + 1, pidx + 2));
+            base_query.push_str(&format!(" AND (g.[GDSDesc] LIKE @p{} OR g.[GDSNO] LIKE @p{} OR g.[BarCode] LIKE @p{})", pidx, pidx + 1, pidx + 2));
             pidx += 3;
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
@@ -291,7 +282,6 @@ pub async fn browse_online_products(
     if let Some(sid) = &params.stk_id {
         if !sid.is_empty() {
             base_query.push_str(&format!(" AND og.[StkID] = @p{}", pidx));
-            pidx += 1;
             query_params.push(Some(sid.clone()));
         }
     }
@@ -314,6 +304,7 @@ pub async fn browse_online_products(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct BrowseOnlineProductParams {
     pub id: String,
 }
@@ -324,7 +315,7 @@ pub async fn browse_online_product(
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
 
-    let sql = r#"SELECT og.*, g.[GDSDesc], g.[GDSNO], g.[GDSSpec], g.[GDSBarCode], s.[StkName],
+    let sql = r#"SELECT og.*, g.[GDSDesc], g.[GDSNO], g.[GDSSpec], g.[BarCode], g.[SPrice], s.[StkName],
         ISNULL(sq.[Qty],0) AS [StockQty]
         FROM [tOnline_Goods] og
         LEFT JOIN [tBas_Goods] g ON og.[GDSID] = g.[GDSID]
@@ -345,18 +336,21 @@ pub async fn browse_online_product(
 // ============================================================
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct OrderItemInput {
-    pub GDSID: String,
-    pub Qty: i32,
-    pub Price: f64,
+    pub online_product_id: String,
+    pub quantity: i32,
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct PlaceOnlineOrderParams {
     pub items: Vec<OrderItemInput>,
-    pub AddressID: Option<String>,
-    pub Remark: Option<String>,
-    pub PaymentMethod: Option<String>,
+    pub contact_name: Option<String>,
+    pub contact_phone: Option<String>,
+    pub address: Option<String>,
+    pub payment_method: Option<String>,
+    pub remark: Option<String>,
 }
 
 pub async fn place_online_order(
@@ -365,7 +359,7 @@ pub async fn place_online_order(
     Json(body): Json<PlaceOnlineOrderParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let today = chrono::Local::now().format("%Y%m%d").to_string();
 
     if body.items.is_empty() {
@@ -382,11 +376,39 @@ pub async fn place_online_order(
 
     let order_no = format!("OL{}{:04}", today, seq);
 
-    let total_amt: f64 = body.items.iter().map(|item| item.Price * item.Qty as f64).sum();
+    // Look up product info for each item from tOnline_Goods + tBas_Goods
+    let mut total_amt: f64 = 0.0;
+    let mut detail_rows: Vec<(String, String, String, i32, f64, f64, String)> = Vec::new();
+    for item in &body.items {
+        let prod_sql = r#"SELECT og.[GDSID], og.[SaleType], og.[ClearancePrice], g.[GDSDesc], g.[GDSNO], g.[SPrice]
+            FROM [tOnline_Goods] og
+            LEFT JOIN [tBas_Goods] g ON og.[GDSID] = g.[GDSID]
+            WHERE og.[OnlineGDSID] = @p1 AND og.[State] <> 'D' AND og.[Status] = 1"#;
+        let prod_stream = conn.query(prod_sql, &[&item.online_product_id.as_str()]).await?;
+        if let Some(row) = prod_stream.into_row().await? {
+            let gds_id: String = row.get::<&str, _>("GDSID").unwrap_or("").to_string();
+            let gds_desc: String = row.get::<&str, _>("GDSDesc").unwrap_or("").to_string();
+            let gds_no: String = row.get::<&str, _>("GDSNO").unwrap_or("").to_string();
+            let sale_type: String = row.get::<&str, _>("SaleType").unwrap_or("normal").to_string();
+            let clearance_price: f64 = row_get_f64(&row, "ClearancePrice");
+            let s_price: f64 = row_get_f64(&row, "SPrice");
+            let price = if sale_type == "clearance" && clearance_price > 0.0 { clearance_price } else { s_price };
+            let qty = item.quantity;
+            let line_amt = price * qty as f64;
+            total_amt += line_amt;
+            detail_rows.push((gds_id, gds_no, gds_desc, qty, price, line_amt, sale_type));
+        }
+    }
 
-    let address_id = body.AddressID.as_deref().unwrap_or("");
-    let remark = body.Remark.as_deref().unwrap_or("");
-    let payment_method = body.PaymentMethod.as_deref().unwrap_or("");
+    if detail_rows.is_empty() {
+        return Ok(Json(ApiResponse::err("商品信息查询失败")));
+    }
+
+    let contact_name = body.contact_name.as_deref().unwrap_or("");
+    let contact_phone = body.contact_phone.as_deref().unwrap_or("");
+    let address = body.address.as_deref().unwrap_or("");
+    let remark = body.remark.as_deref().unwrap_or("");
+    let payment_method = body.payment_method.as_deref().unwrap_or("cod");
 
     let emp_sql = "SELECT TOP 1 [EmpID] FROM [tBas_Emp] WHERE [EmpNo] = @p1 AND [State] <> 'D'";
     let emp_stream = conn.query(emp_sql, &[&claims.user_code.as_str()]).await?;
@@ -396,13 +418,15 @@ pub async fn place_online_order(
         "".to_string()
     };
 
-    let order_sql = r#"INSERT INTO [tOnline_Order] ([OrderID], [OrderNo], [EmpID], [AddressID], [TotalAmt], [Status], [PaymentStatus], [PaymentMethod], [Remark], [State], [EDate], [EUser])
-        VALUES (NEWID(), @p1, @p2, @p3, @p4, 'pending', 'unpaid', @p5, @p6, 'A', @p7, @p8)"#;
+    let order_sql = r#"INSERT INTO [tOnline_Order] ([OnlineOrderID], [OrderNo], [EmpID], [ContactName], [ContactPhone], [Address], [TotalAmt], [Status], [PaymentStatus], [PaymentMethod], [Remark], [State], [EDate], [EUser])
+        VALUES (NEWID(), @p1, @p2, @p3, @p4, @p5, @p6, 'pending', 'unpaid', @p7, @p8, 'A', @p9, @p10)"#;
 
     conn.execute(order_sql, &[
         &order_no.as_str(),
         &emp_id.as_str(),
-        &address_id,
+        &contact_name,
+        &contact_phone,
+        &address,
         &total_amt,
         &payment_method,
         &remark,
@@ -410,31 +434,34 @@ pub async fn place_online_order(
         &claims.user_code.as_str(),
     ]).await?;
 
-    let order_id_sql = "SELECT [OrderID] FROM [tOnline_Order] WHERE [OrderNo] = @p1";
+    let order_id_sql = "SELECT [OnlineOrderID] FROM [tOnline_Order] WHERE [OrderNo] = @p1";
     let oid_stream = conn.query(order_id_sql, &[&order_no.as_str()]).await?;
     let order_id = if let Some(row) = oid_stream.into_row().await? {
-        row.get::<&str, _>("OrderID").unwrap_or("").to_string()
+        row.get::<&str, _>("OnlineOrderID").unwrap_or("").to_string()
     } else {
         return Ok(Json(ApiResponse::err("订单创建失败")));
     };
 
-    for item in &body.items {
-        let line_amt = item.Price * item.Qty as f64;
-        let detail_sql = r#"INSERT INTO [tOnline_OrderDetail] ([DetailID], [OrderID], [GDSID], [Qty], [Price], [LineAmt], [State])
-            VALUES (NEWID(), @p1, @p2, @p3, @p4, @p5, 'A')"#;
+    for (gds_id, gds_no, gds_desc, qty, price, line_amt, sale_type) in &detail_rows {
+        let detail_sql = r#"INSERT INTO [tOnline_OrderDetail] ([OnlineOrderDtlID], [OnlineOrderID], [GDSID], [GDSNO], [GDSDesc], [Qty], [Price], [Amt], [SaleType], [CostPrice], [State])
+            VALUES (NEWID(), @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, 0, 'A')"#;
         conn.execute(detail_sql, &[
             &order_id.as_str(),
-            &item.GDSID.as_str(),
-            &item.Qty,
-            &item.Price,
-            &line_amt,
+            &gds_id.as_str(),
+            &gds_no.as_str(),
+            &gds_desc.as_str(),
+            qty,
+            price,
+            line_amt,
+            &sale_type.as_str(),
         ]).await?;
     }
 
-    Ok(Json(ApiResponse::ok(serde_json::json!({ "OrderNo": order_no, "OrderID": order_id }))))
+    Ok(Json(ApiResponse::ok(serde_json::json!({ "OrderNo": order_no, "OrderID": order_id, "TotalAmt": total_amt }))))
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct GetOnlineOrdersParams {
     pub page: Option<u32>,
     pub page_size: Option<u32>,
@@ -454,7 +481,7 @@ pub async fn get_online_orders(
 ) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>> {
     let mut conn = get_pool().get().await?;
     let page = params.page.unwrap_or(1);
-    let page_size = std::cmp::min(params.page_size.unwrap_or(50), 200);
+    let page_size = std::cmp::min(params.page_size.unwrap_or(50), 1000);
 
     let mut base_query = r#"SELECT o.*, e.[EmpName]
         FROM [tOnline_Order] o
@@ -507,7 +534,6 @@ pub async fn get_online_orders(
     if let Some(ed) = &params.end_date {
         if !ed.is_empty() {
             base_query.push_str(&format!(" AND CONVERT(varchar(10), o.[EDate], 120) <= @p{}", pidx));
-            pidx += 1;
             query_params.push(Some(ed.clone()));
         }
     }
@@ -530,6 +556,7 @@ pub async fn get_online_orders(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct GetMyOnlineOrdersParams {
     pub page: Option<u32>,
     pub page_size: Option<u32>,
@@ -545,7 +572,7 @@ pub async fn get_my_online_orders(
 ) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>> {
     let mut conn = get_pool().get().await?;
     let page = params.page.unwrap_or(1);
-    let page_size = std::cmp::min(params.page_size.unwrap_or(50), 200);
+    let page_size = std::cmp::min(params.page_size.unwrap_or(50), 1000);
 
     let emp_sql = "SELECT TOP 1 [EmpID] FROM [tBas_Emp] WHERE [EmpNo] = @p1 AND [State] <> 'D'";
     let emp_stream = conn.query(emp_sql, &[&claims.user_code.as_str()]).await?;
@@ -560,12 +587,11 @@ pub async fn get_my_online_orders(
         LEFT JOIN [tBas_Emp] e ON o.[EmpID] = e.[EmpID]
         WHERE o.[State] <> 'D' AND o.[EmpID] = @p1"#.to_string();
     let mut query_params: Vec<Option<String>> = vec![Some(emp_id.clone())];
-    let mut pidx = 2;
+    let pidx = 2;
 
     if let Some(st) = &params.status {
         if !st.is_empty() {
             base_query.push_str(&format!(" AND o.[Status] = @p{}", pidx));
-            pidx += 1;
             query_params.push(Some(st.clone()));
         }
     }
@@ -588,6 +614,7 @@ pub async fn get_my_online_orders(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct GetOnlineOrderParams {
     pub id: String,
 }
@@ -601,7 +628,7 @@ pub async fn get_online_order(
     let order_sql = r#"SELECT o.*, e.[EmpName]
         FROM [tOnline_Order] o
         LEFT JOIN [tBas_Emp] e ON o.[EmpID] = e.[EmpID]
-        WHERE o.[OrderID] = @p1 AND o.[State] <> 'D'"#;
+        WHERE o.[OnlineOrderID] = @p1 AND o.[State] <> 'D'"#;
     let order_stream = conn.query(order_sql, &[&params.id.as_str()]).await?;
 
     let order_row = match order_stream.into_row().await? {
@@ -610,10 +637,10 @@ pub async fn get_online_order(
     };
     let mut order_data = row_to_json(&order_row);
 
-    let detail_sql = r#"SELECT od.*, g.[GDSDesc], g.[GDSNO], g.[GDSSpec], g.[GDSBarCode]
+    let detail_sql = r#"SELECT od.*, g.[GDSDesc], g.[GDSNO], g.[GDSSpec], g.[BarCode]
         FROM [tOnline_OrderDetail] od
         LEFT JOIN [tBas_Goods] g ON od.[GDSID] = g.[GDSID]
-        WHERE od.[OrderID] = @p1 AND od.[State] <> 'D'"#;
+        WHERE od.[OnlineOrderID] = @p1 AND od.[State] <> 'D'"#;
     let detail_stream = conn.query(detail_sql, &[&params.id.as_str()]).await?;
     let detail_rows: Vec<Row> = detail_stream.into_first_result().await?;
     let details: Vec<serde_json::Value> = detail_rows.iter().map(row_to_json).collect();
@@ -626,6 +653,7 @@ pub async fn get_online_order(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct ConfirmOnlineOrderParams {
     pub id: String,
 }
@@ -636,10 +664,10 @@ pub async fn confirm_online_order(
     Json(body): Json<ConfirmOnlineOrderParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     let sql = r#"UPDATE [tOnline_Order] SET [Status] = 'confirmed', [EDate] = @p1, [EUser] = @p2
-        WHERE [OrderID] = @p3 AND [State] <> 'D' AND [Status] = 'pending'"#;
+        WHERE [OnlineOrderID] = @p3 AND [State] <> 'D' AND [Status] = 'pending'"#;
     let result = conn.execute(sql, &[
         &now,
         &claims.user_code.as_str(),
@@ -654,6 +682,7 @@ pub async fn confirm_online_order(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct CancelOnlineOrderParams {
     pub id: String,
     pub reason: Option<String>,
@@ -665,12 +694,12 @@ pub async fn cancel_online_order(
     Json(body): Json<CancelOnlineOrderParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     let reason = body.reason.as_deref().unwrap_or("");
 
     let sql = r#"UPDATE [tOnline_Order] SET [Status] = 'cancelled', [Remark] = ISNULL([Remark],'') + @p1, [EDate] = @p2, [EUser] = @p3
-        WHERE [OrderID] = @p4 AND [State] <> 'D' AND [Status] IN ('pending', 'confirmed')"#;
+        WHERE [OnlineOrderID] = @p4 AND [State] <> 'D' AND [Status] IN ('pending', 'confirmed')"#;
     let cancel_remark = if reason.is_empty() { "".to_string() } else { format!(" [取消原因: {}]", reason) };
     let result = conn.execute(sql, &[
         &cancel_remark.as_str(),
@@ -687,11 +716,12 @@ pub async fn cancel_online_order(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct UpdateOnlineOrderShipInfoParams {
     pub id: String,
-    pub ShipCompany: Option<String>,
-    pub ShipNo: Option<String>,
-    pub ShipStatus: Option<String>,
+    pub ship_company: Option<String>,
+    pub ship_no: Option<String>,
+    pub ship_status: Option<String>,
 }
 
 pub async fn update_online_order_ship_info(
@@ -700,14 +730,14 @@ pub async fn update_online_order_ship_info(
     Json(body): Json<UpdateOnlineOrderShipInfoParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
-    let ship_company = body.ShipCompany.as_deref().unwrap_or("");
-    let ship_no = body.ShipNo.as_deref().unwrap_or("");
-    let ship_status = body.ShipStatus.as_deref().unwrap_or("unshipped");
+    let ship_company = body.ship_company.as_deref().unwrap_or("");
+    let ship_no = body.ship_no.as_deref().unwrap_or("");
+    let ship_status = body.ship_status.as_deref().unwrap_or("unshipped");
 
-    let sql = r#"UPDATE [tOnline_Order] SET [ShipCompany] = @p1, [ShipNo] = @p2, [ShipStatus] = @p3, [EDate] = @p4, [EUser] = @p5
-        WHERE [OrderID] = @p6 AND [State] <> 'D'"#;
+    let sql = r#"UPDATE [tOnline_Order] SET [TrackingCompany] = @p1, [TrackingNo] = @p2, [ShipStatus] = @p3, [EDate] = @p4, [EUser] = @p5
+        WHERE [OnlineOrderID] = @p6 AND [State] <> 'D'"#;
 
     conn.execute(sql, &[
         &ship_company,
@@ -722,14 +752,16 @@ pub async fn update_online_order_ship_info(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct BatchUpdateShipInfoItem {
     pub id: String,
-    pub ShipCompany: Option<String>,
-    pub ShipNo: Option<String>,
-    pub ShipStatus: Option<String>,
+    pub ship_company: Option<String>,
+    pub ship_no: Option<String>,
+    pub ship_status: Option<String>,
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct BatchUpdateOnlineOrderShipInfoParams {
     pub items: Vec<BatchUpdateShipInfoItem>,
 }
@@ -740,7 +772,7 @@ pub async fn batch_update_online_order_ship_info(
     Json(body): Json<BatchUpdateOnlineOrderShipInfoParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     if body.items.is_empty() {
         return Ok(Json(ApiResponse::err("请选择要更新的订单")));
@@ -748,12 +780,12 @@ pub async fn batch_update_online_order_ship_info(
 
     let mut updated = 0u32;
     for item in &body.items {
-        let ship_company = item.ShipCompany.as_deref().unwrap_or("");
-        let ship_no = item.ShipNo.as_deref().unwrap_or("");
-        let ship_status = item.ShipStatus.as_deref().unwrap_or("unshipped");
+        let ship_company = item.ship_company.as_deref().unwrap_or("");
+        let ship_no = item.ship_no.as_deref().unwrap_or("");
+        let ship_status = item.ship_status.as_deref().unwrap_or("unshipped");
 
-        let sql = r#"UPDATE [tOnline_Order] SET [ShipCompany] = @p1, [ShipNo] = @p2, [ShipStatus] = @p3, [EDate] = @p4, [EUser] = @p5
-            WHERE [OrderID] = @p6 AND [State] <> 'D'"#;
+        let sql = r#"UPDATE [tOnline_Order] SET [TrackingCompany] = @p1, [TrackingNo] = @p2, [ShipStatus] = @p3, [EDate] = @p4, [EUser] = @p5
+            WHERE [OnlineOrderID] = @p6 AND [State] <> 'D'"#;
 
         let result = conn.execute(sql, &[
             &ship_company,
@@ -771,6 +803,7 @@ pub async fn batch_update_online_order_ship_info(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct BatchGenerateSalesOrdersParams {
     pub order_ids: Vec<String>,
 }
@@ -781,7 +814,7 @@ pub async fn batch_generate_sales_orders(
     Json(body): Json<BatchGenerateSalesOrdersParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     if body.order_ids.is_empty() {
         return Ok(Json(ApiResponse::err("请选择要生成销售单的订单")));
@@ -791,9 +824,9 @@ pub async fn batch_generate_sales_orders(
     let mut results: Vec<serde_json::Value> = Vec::new();
 
     for order_id in &body.order_ids {
-        let order_sql = r#"SELECT o.[OrderID], o.[OrderNo], o.[EmpID], o.[TotalAmt]
+        let order_sql = r#"SELECT o.[OnlineOrderID], o.[OrderNo], o.[EmpID], o.[TotalAmt]
             FROM [tOnline_Order] o
-            WHERE o.[OrderID] = @p1 AND o.[State] <> 'D' AND o.[Status] = 'confirmed'"#;
+            WHERE o.[OnlineOrderID] = @p1 AND o.[State] <> 'D' AND o.[Status] = 'confirmed'"#;
         let order_stream = conn.query(order_sql, &[&order_id.as_str()]).await?;
 
         let order_row = match order_stream.into_row().await? {
@@ -806,15 +839,18 @@ pub async fn batch_generate_sales_orders(
         let total_amt: f64 = row_get_f64(&order_row, "TotalAmt");
 
         let sal_no = format!("SOL{}", &order_no[2..]);
+        let si_id = format!("{}", uuid::Uuid::new_v4());
 
-        let sal_sql = r#"INSERT INTO [tSal_Inv] ([InvID], [InvNO], [CustID], [TotalAmt], [Kind], [State], [EDate], [EUser])
-            VALUES (NEWID(), @p1, @p2, @p3, 'POS', 'N', @p4, @p5)"#;
+        let sal_sql = r#"INSERT INTO [tSal_Inv] ([SIID], [SINo], [SIDate], [CustID], [SumAmt], [State], [EDate], [EUser], [LUTime])
+            VALUES (@p1, @p2, @p3, @p4, @p5, 'N', @p3, @p6, @p3)"#;
+        let zero_uuid = "00000000-0000-0000-0000-000000000000";
         conn.execute(sal_sql, &[
+            &si_id.as_str(),
             &sal_no.as_str(),
+            &now,
             &emp_id,
             &total_amt,
-            &now,
-            &claims.user_code.as_str(),
+            &zero_uuid,
         ]).await?;
 
         let detail_sql = r#"SELECT [GDSID], [Qty], [Price], [LineAmt]
@@ -823,24 +859,20 @@ pub async fn batch_generate_sales_orders(
         let detail_stream = conn.query(detail_sql, &[&order_id.as_str()]).await?;
         let detail_rows: Vec<Row> = detail_stream.into_first_result().await?;
 
-        let sal_inv_id_sql = "SELECT [InvID] FROM [tSal_Inv] WHERE [InvNO] = @p1";
-        let sal_inv_stream = conn.query(sal_inv_id_sql, &[&sal_no.as_str()]).await?;
-        let sal_inv_id = if let Some(row) = sal_inv_stream.into_row().await? {
-            row.get::<&str, _>("InvID").unwrap_or("").to_string()
-        } else {
-            continue;
-        };
+        let sal_inv_id = si_id.clone();
 
-        for dr in &detail_rows {
+        for (i, dr) in detail_rows.iter().enumerate() {
             let gds_id: &str = dr.get::<&str, _>("GDSID").unwrap_or("");
             let qty: i32 = dr.get::<i32, _>("Qty").unwrap_or(0);
             let price: f64 = row_get_f64(&dr, "Price");
             let line_amt: f64 = row_get_f64(&dr, "LineAmt");
+            let row_no = format!("{:03}", i + 1);
 
-            let sal_detail_sql = r#"INSERT INTO [tSal_InvDetail] ([DetailID], [InvID], [GDSID], [Qty], [Price], [LineAmt], [State])
-                VALUES (NEWID(), @p1, @p2, @p3, @p4, @p5, 'A')"#;
+            let sal_detail_sql = r#"INSERT INTO [tSal_InvDetail] ([SIID], [SIDetailID], [RowNO], [GDSID], [Qty], [Price], [Amt])
+                VALUES (@p1, NEWID(), @p2, @p3, @p4, @p5, @p6)"#;
             conn.execute(sal_detail_sql, &[
                 &sal_inv_id.as_str(),
+                &row_no,
                 &gds_id,
                 &qty,
                 &price,
@@ -849,12 +881,18 @@ pub async fn batch_generate_sales_orders(
         }
 
         let update_order_sql = r#"UPDATE [tOnline_Order] SET [Status] = 'processed', [EDate] = @p1, [EUser] = @p2
-            WHERE [OrderID] = @p3 AND [State] <> 'D'"#;
+            WHERE [OnlineOrderID] = @p3 AND [State] <> 'D'"#;
         conn.execute(update_order_sql, &[
             &now,
             &claims.user_code.as_str(),
             &order_id.as_str(),
         ]).await?;
+
+        // ★ 线上订单生成销售单后自动重算提成（对齐 88 项目，不依赖前端调用）
+        // 提成计算失败不影响订单处理主流程，仅记录 warn 日志
+        if let Err(e) = crate::services::commission_service::recalc_invoice_commission(&mut conn, &si_id).await {
+            tracing::warn!("[batch_generate_sales_orders] 线上订单 {} 生成销售单 {} 提成重算失败: {}", order_no, si_id, e);
+        }
 
         generated += 1;
         results.push(serde_json::json!({ "OrderNo": order_no, "SalInvNO": sal_no }));
@@ -871,6 +909,7 @@ pub async fn batch_generate_sales_orders(
 // ============================================================
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct GetPaymentConfigsParams {
     pub page: Option<u32>,
     pub page_size: Option<u32>,
@@ -885,16 +924,15 @@ pub async fn get_payment_configs(
 ) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>> {
     let mut conn = get_pool().get().await?;
     let page = params.page.unwrap_or(1);
-    let page_size = std::cmp::min(params.page_size.unwrap_or(50), 200);
+    let page_size = std::cmp::min(params.page_size.unwrap_or(50), 1000);
 
     let mut base_query = r#"SELECT * FROM [tOnline_PaymentConfig] WHERE [State] <> 'D'"#.to_string();
     let mut query_params: Vec<Option<String>> = Vec::new();
-    let mut pidx = 1;
+    let pidx = 1;
 
     if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
-            base_query.push_str(&format!(" AND ([PayName] LIKE @p{} OR [PayCode] LIKE @p{})", pidx, pidx + 1));
-            pidx += 2;
+            base_query.push_str(&format!(" AND ([PName] LIKE @p{} OR [PCode] LIKE @p{})", pidx, pidx + 1));
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
         }
@@ -918,6 +956,7 @@ pub async fn get_payment_configs(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct GetPaymentConfigParams {
     pub id: String,
 }
@@ -928,7 +967,7 @@ pub async fn get_payment_config(
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
 
-    let sql = "SELECT * FROM [tOnline_PaymentConfig] WHERE [PayConfigID] = @p1 AND [State] <> 'D'";
+    let sql = "SELECT * FROM [tOnline_PaymentConfig] WHERE [PaymentConfigID] = @p1 AND [State] <> 'D'";
     let stream = conn.query(sql, &[&params.id.as_str()]).await?;
 
     if let Some(row) = stream.into_row().await? {
@@ -939,14 +978,14 @@ pub async fn get_payment_config(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct CreatePaymentConfigParams {
-    pub PayCode: Option<String>,
-    pub PayName: Option<String>,
-    pub PayType: Option<String>,
-    pub PayDesc: Option<String>,
-    pub Sort: Option<i32>,
-    pub Enabled: Option<String>,
-    pub Config: Option<String>,
+    pub code: Option<String>,
+    pub name: Option<String>,
+    pub kind: Option<String>,
+    pub help: Option<String>,
+    pub sort: Option<i32>,
+    pub enabled: Option<i32>,
 }
 
 pub async fn create_payment_config(
@@ -955,27 +994,25 @@ pub async fn create_payment_config(
     Json(body): Json<CreatePaymentConfigParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
-    let pay_code = body.PayCode.as_deref().unwrap_or("");
-    let pay_name = body.PayName.as_deref().unwrap_or("");
-    let pay_type = body.PayType.as_deref().unwrap_or("");
-    let pay_desc = body.PayDesc.as_deref().unwrap_or("");
-    let sort = body.Sort.unwrap_or(0);
-    let enabled = body.Enabled.as_deref().unwrap_or("Y");
-    let config = body.Config.as_deref().unwrap_or("");
+    let code = body.code.as_deref().unwrap_or("");
+    let name = body.name.as_deref().unwrap_or("");
+    let kind = body.kind.as_deref().unwrap_or("payment");
+    let help = body.help.as_deref().unwrap_or("");
+    let sort = body.sort.unwrap_or(0);
+    let enabled = body.enabled.unwrap_or(1);
 
-    let sql = r#"INSERT INTO [tOnline_PaymentConfig] ([PayConfigID], [PayCode], [PayName], [PayType], [PayDesc], [Sort], [Enabled], [Config], [State], [EDate], [EUser])
-        VALUES (NEWID(), @p1, @p2, @p3, @p4, @p5, @p6, @p7, 'A', @p8, @p9)"#;
+    let sql = r#"INSERT INTO [tOnline_PaymentConfig] ([PaymentConfigID], [PCode], [PName], [PKind], [PHelp], [Enabled], [Sort], [State], [EDate], [EUser])
+        VALUES (NEWID(), @p1, @p2, @p3, @p4, @p5, @p6, 'A', @p7, @p8)"#;
 
     conn.execute(sql, &[
-        &pay_code,
-        &pay_name,
-        &pay_type,
-        &pay_desc,
-        &sort,
+        &code,
+        &name,
+        &kind,
+        &help,
         &enabled,
-        &config,
+        &sort,
         &now,
         &claims.user_code.as_str(),
     ]).await?;
@@ -984,15 +1021,15 @@ pub async fn create_payment_config(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct UpdatePaymentConfigParams {
-    pub PayConfigID: String,
-    pub PayCode: Option<String>,
-    pub PayName: Option<String>,
-    pub PayType: Option<String>,
-    pub PayDesc: Option<String>,
-    pub Sort: Option<i32>,
-    pub Enabled: Option<String>,
-    pub Config: Option<String>,
+    pub id: String,
+    pub code: Option<String>,
+    pub name: Option<String>,
+    pub kind: Option<String>,
+    pub help: Option<String>,
+    pub sort: Option<i32>,
+    pub enabled: Option<i32>,
 }
 
 pub async fn update_payment_config(
@@ -1001,38 +1038,37 @@ pub async fn update_payment_config(
     Json(body): Json<UpdatePaymentConfigParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
-    let pay_code = body.PayCode.as_deref().unwrap_or("");
-    let pay_name = body.PayName.as_deref().unwrap_or("");
-    let pay_type = body.PayType.as_deref().unwrap_or("");
-    let pay_desc = body.PayDesc.as_deref().unwrap_or("");
-    let sort = body.Sort.unwrap_or(0);
-    let enabled = body.Enabled.as_deref().unwrap_or("Y");
-    let config = body.Config.as_deref().unwrap_or("");
+    let code = body.code.as_deref().unwrap_or("");
+    let name = body.name.as_deref().unwrap_or("");
+    let kind = body.kind.as_deref().unwrap_or("payment");
+    let help = body.help.as_deref().unwrap_or("");
+    let sort = body.sort.unwrap_or(0);
+    let enabled = body.enabled.unwrap_or(1);
 
     let sql = r#"UPDATE [tOnline_PaymentConfig] SET
-        [PayCode] = @p1, [PayName] = @p2, [PayType] = @p3, [PayDesc] = @p4,
-        [Sort] = @p5, [Enabled] = @p6, [Config] = @p7, [EDate] = @p8, [EUser] = @p9
-        WHERE [PayConfigID] = @p10 AND [State] <> 'D'"#;
+        [PCode] = @p1, [PName] = @p2, [PKind] = @p3, [PHelp] = @p4,
+        [Enabled] = @p5, [Sort] = @p6, [EDate] = @p7, [EUser] = @p8
+        WHERE [PaymentConfigID] = @p9 AND [State] <> 'D'"#;
 
     conn.execute(sql, &[
-        &pay_code,
-        &pay_name,
-        &pay_type,
-        &pay_desc,
-        &sort,
+        &code,
+        &name,
+        &kind,
+        &help,
         &enabled,
-        &config,
+        &sort,
         &now,
         &claims.user_code.as_str(),
-        &body.PayConfigID.as_str(),
+        &body.id.as_str(),
     ]).await?;
 
     Ok(Json(ApiResponse::msg("支付配置更新成功")))
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct DeletePaymentConfigParams {
     pub ids: Vec<String>,
 }
@@ -1048,7 +1084,7 @@ pub async fn delete_payment_config(
     }
 
     for id in &body.ids {
-        let sql = "UPDATE [tOnline_PaymentConfig] SET [State] = 'D' WHERE [PayConfigID] = @p1";
+        let sql = "UPDATE [tOnline_PaymentConfig] SET [State] = 'D' WHERE [PaymentConfigID] = @p1";
         conn.execute(sql, &[&id.as_str()]).await?;
     }
 
@@ -1061,7 +1097,7 @@ pub async fn get_available_payment_methods(
 ) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>> {
     let mut conn = get_pool().get().await?;
 
-    let sql = "SELECT [PayConfigID], [PayCode], [PayName], [PayType], [PayDesc], [Sort] FROM [tOnline_PaymentConfig] WHERE [State] <> 'D' AND [Enabled] = 'Y' ORDER BY [Sort]";
+    let sql = "SELECT [PaymentConfigID], [PCode], [PName], [PKind], [PHelp], [QRCodeUrl], [IsPersonal], [Enabled], [Sort] FROM [tOnline_PaymentConfig] WHERE [State] <> 'D' AND [Enabled] = 1 ORDER BY [Sort]";
     let stream = conn.query(sql, &[]).await?;
     let rows: Vec<Row> = stream.into_first_result().await?;
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
@@ -1070,10 +1106,10 @@ pub async fn get_available_payment_methods(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct CreateOnlineOrderPaymentParams {
-    pub OrderID: String,
-    pub PayConfigID: Option<String>,
-    pub PayMethod: Option<String>,
+    pub order_id: String,
+    pub payment_method: Option<String>,
 }
 
 pub async fn create_online_order_payment(
@@ -1082,13 +1118,12 @@ pub async fn create_online_order_payment(
     Json(body): Json<CreateOnlineOrderPaymentParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
-    let pay_config_id = body.PayConfigID.as_deref().unwrap_or("");
-    let pay_method = body.PayMethod.as_deref().unwrap_or("");
+    let pay_method = body.payment_method.as_deref().unwrap_or("");
 
-    let check_sql = "SELECT [OrderID], [Status], [PaymentStatus] FROM [tOnline_Order] WHERE [OrderID] = @p1 AND [State] <> 'D'";
-    let stream = conn.query(check_sql, &[&body.OrderID.as_str()]).await?;
+    let check_sql = "SELECT [OnlineOrderID], [Status], [PaymentStatus] FROM [tOnline_Order] WHERE [OnlineOrderID] = @p1 AND [State] <> 'D'";
+    let stream = conn.query(check_sql, &[&body.order_id.as_str()]).await?;
 
     let order_row = match stream.into_row().await? {
         Some(row) => row,
@@ -1100,26 +1135,26 @@ pub async fn create_online_order_payment(
         return Ok(Json(ApiResponse::err("订单已支付")));
     }
 
-    let sql = r#"UPDATE [tOnline_Order] SET [PaymentStatus] = 'pending', [PaymentMethod] = @p1, [PayConfigID] = @p2, [EDate] = @p3, [EUser] = @p4
-        WHERE [OrderID] = @p5 AND [State] <> 'D'"#;
+    let sql = r#"UPDATE [tOnline_Order] SET [PaymentStatus] = 'pending', [PaymentMethod] = @p1, [EDate] = @p2, [EUser] = @p3
+        WHERE [OnlineOrderID] = @p4 AND [State] <> 'D'"#;
 
     conn.execute(sql, &[
         &pay_method,
-        &pay_config_id,
         &now,
         &claims.user_code.as_str(),
-        &body.OrderID.as_str(),
+        &body.order_id.as_str(),
     ]).await?;
 
     Ok(Json(ApiResponse::ok(serde_json::json!({
-        "OrderID": body.OrderID,
+        "OrderID": body.order_id,
         "PaymentStatus": "pending"
     }))))
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct QueryPaymentStatusParams {
-    pub OrderID: String,
+    pub order_id: String,
 }
 
 pub async fn query_payment_status(
@@ -1128,8 +1163,8 @@ pub async fn query_payment_status(
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
 
-    let sql = "SELECT [OrderID], [OrderNo], [PaymentStatus], [PaymentMethod], [PaymentProof], [PayTime] FROM [tOnline_Order] WHERE [OrderID] = @p1 AND [State] <> 'D'";
-    let stream = conn.query(sql, &[&params.OrderID.as_str()]).await?;
+    let sql = "SELECT [OnlineOrderID], [OrderNo], [PaymentStatus], [PaymentMethod], [PaymentProof] FROM [tOnline_Order] WHERE [OnlineOrderID] = @p1 AND [State] <> 'D'";
+    let stream = conn.query(sql, &[&params.order_id.as_str()]).await?;
 
     if let Some(row) = stream.into_row().await? {
         Ok(Json(ApiResponse::ok(row_to_json(&row))))
@@ -1139,9 +1174,10 @@ pub async fn query_payment_status(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct UploadPaymentProofParams {
-    pub OrderID: String,
-    pub PaymentProof: Option<String>,
+    pub order_id: String,
+    pub payment_proof: Option<String>,
 }
 
 pub async fn upload_payment_proof(
@@ -1150,26 +1186,27 @@ pub async fn upload_payment_proof(
     Json(body): Json<UploadPaymentProofParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
-    let payment_proof = body.PaymentProof.as_deref().unwrap_or("");
+    let payment_proof = body.payment_proof.as_deref().unwrap_or("");
 
     let sql = r#"UPDATE [tOnline_Order] SET [PaymentProof] = @p1, [PaymentStatus] = 'proof_uploaded', [EDate] = @p2, [EUser] = @p3
-        WHERE [OrderID] = @p4 AND [State] <> 'D'"#;
+        WHERE [OnlineOrderID] = @p4 AND [State] <> 'D'"#;
 
     conn.execute(sql, &[
         &payment_proof,
         &now,
         &claims.user_code.as_str(),
-        &body.OrderID.as_str(),
+        &body.order_id.as_str(),
     ]).await?;
 
     Ok(Json(ApiResponse::msg("支付凭证上传成功")))
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct VerifyPaymentParams {
-    pub OrderID: String,
+    pub order_id: String,
     pub verified: Option<bool>,
 }
 
@@ -1179,30 +1216,31 @@ pub async fn verify_payment(
     Json(body): Json<VerifyPaymentParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     let new_status = if body.verified.unwrap_or(true) { "paid" } else { "verify_failed" };
 
     let sql = if new_status == "paid" {
-        r#"UPDATE [tOnline_Order] SET [PaymentStatus] = 'paid', [PayTime] = @p1, [EDate] = @p1, [EUser] = @p2
-            WHERE [OrderID] = @p3 AND [State] <> 'D'"#
+        r#"UPDATE [tOnline_Order] SET [PaymentStatus] = 'paid', [LUTime] = @p1, [EDate] = @p1, [EUser] = @p2
+            WHERE [OnlineOrderID] = @p3 AND [State] <> 'D'"#
     } else {
         r#"UPDATE [tOnline_Order] SET [PaymentStatus] = 'verify_failed', [EDate] = @p1, [EUser] = @p2
-            WHERE [OrderID] = @p3 AND [State] <> 'D'"#
+            WHERE [OnlineOrderID] = @p3 AND [State] <> 'D'"#
     };
 
     conn.execute(sql, &[
         &now,
         &claims.user_code.as_str(),
-        &body.OrderID.as_str(),
+        &body.order_id.as_str(),
     ]).await?;
 
     Ok(Json(ApiResponse::msg(if new_status == "paid" { "支付验证通过" } else { "支付验证未通过" })))
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct ClaimPersonalPaymentParams {
-    pub OrderID: String,
+    pub order_id: String,
 }
 
 pub async fn claim_personal_payment(
@@ -1211,7 +1249,7 @@ pub async fn claim_personal_payment(
     Json(body): Json<ClaimPersonalPaymentParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     let emp_sql = "SELECT TOP 1 [EmpID] FROM [tBas_Emp] WHERE [EmpNo] = @p1 AND [State] <> 'D'";
     let emp_stream = conn.query(emp_sql, &[&claims.user_code.as_str()]).await?;
@@ -1221,13 +1259,13 @@ pub async fn claim_personal_payment(
         return Ok(Json(ApiResponse::err("用户信息获取失败")));
     };
 
-    let sql = r#"UPDATE [tOnline_Order] SET [PaymentStatus] = 'paid', [PayTime] = @p1, [PaymentMethod] = 'personal', [EDate] = @p1, [EUser] = @p2
-        WHERE [OrderID] = @p3 AND [EmpID] = @p4 AND [State] <> 'D' AND [PaymentStatus] IN ('unpaid', 'pending', 'proof_uploaded')"#;
+    let sql = r#"UPDATE [tOnline_Order] SET [PaymentStatus] = 'paid', [LUTime] = @p1, [PaymentMethod] = 'personal', [EDate] = @p1, [EUser] = @p2
+        WHERE [OnlineOrderID] = @p3 AND [EmpID] = @p4 AND [State] <> 'D' AND [PaymentStatus] IN ('unpaid', 'pending', 'proof_uploaded')"#;
 
     let result = conn.execute(sql, &[
         &now,
         &claims.user_code.as_str(),
-        &body.OrderID.as_str(),
+        &body.order_id.as_str(),
         &emp_id.as_str(),
     ]).await?;
 
@@ -1243,6 +1281,7 @@ pub async fn claim_personal_payment(
 // ============================================================
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct GetAddressesParams {
     pub page: Option<u32>,
     pub page_size: Option<u32>,
@@ -1255,7 +1294,7 @@ pub async fn get_addresses(
 ) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>> {
     let mut conn = get_pool().get().await?;
     let page = params.page.unwrap_or(1);
-    let page_size = std::cmp::min(params.page_size.unwrap_or(50), 200);
+    let page_size = std::cmp::min(params.page_size.unwrap_or(50), 1000);
 
     let emp_sql = "SELECT TOP 1 [EmpID] FROM [tBas_Emp] WHERE [EmpNo] = @p1 AND [State] <> 'D'";
     let emp_stream = conn.query(emp_sql, &[&claims.user_code.as_str()]).await?;
@@ -1289,14 +1328,15 @@ pub async fn get_addresses(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct CreateAddressParams {
-    pub ReceiverName: Option<String>,
-    pub Phone: Option<String>,
-    pub Province: Option<String>,
-    pub City: Option<String>,
-    pub District: Option<String>,
-    pub DetailAddr: Option<String>,
-    pub IsDefault: Option<String>,
+    pub contact_name: Option<String>,
+    pub phone: Option<String>,
+    pub province: Option<String>,
+    pub city: Option<String>,
+    pub district: Option<String>,
+    pub address: Option<String>,
+    pub is_default: Option<i32>,
 }
 
 pub async fn create_address(
@@ -1305,7 +1345,7 @@ pub async fn create_address(
     Json(body): Json<CreateAddressParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     let emp_sql = "SELECT TOP 1 [EmpID] FROM [tBas_Emp] WHERE [EmpNo] = @p1 AND [State] <> 'D'";
     let emp_stream = conn.query(emp_sql, &[&claims.user_code.as_str()]).await?;
@@ -1315,31 +1355,31 @@ pub async fn create_address(
         return Ok(Json(ApiResponse::err("用户信息获取失败")));
     };
 
-    let receiver_name = body.ReceiverName.as_deref().unwrap_or("");
-    let phone = body.Phone.as_deref().unwrap_or("");
-    let province = body.Province.as_deref().unwrap_or("");
-    let city = body.City.as_deref().unwrap_or("");
-    let district = body.District.as_deref().unwrap_or("");
-    let detail_addr = body.DetailAddr.as_deref().unwrap_or("");
-    let is_default = body.IsDefault.as_deref().unwrap_or("N");
+    let contact_name = body.contact_name.as_deref().unwrap_or("");
+    let phone = body.phone.as_deref().unwrap_or("");
+    let province = body.province.as_deref().unwrap_or("");
+    let city = body.city.as_deref().unwrap_or("");
+    let district = body.district.as_deref().unwrap_or("");
+    let address = body.address.as_deref().unwrap_or("");
+    let is_default_int: i32 = if body.is_default.unwrap_or(0) == 1 { 1 } else { 0 };
 
-    if is_default == "Y" {
-        let clear_default_sql = "UPDATE [tOnline_Address] SET [IsDefault] = 'N' WHERE [EmpID] = @p1 AND [State] <> 'D'";
+    if is_default_int == 1 {
+        let clear_default_sql = "UPDATE [tOnline_Address] SET [IsDefault] = 0 WHERE [EmpID] = @p1 AND [State] <> 'D'";
         conn.execute(clear_default_sql, &[&emp_id.as_str()]).await?;
     }
 
-    let sql = r#"INSERT INTO [tOnline_Address] ([AddressID], [EmpID], [ReceiverName], [Phone], [Province], [City], [District], [DetailAddr], [IsDefault], [State], [EDate], [EUser])
+    let sql = r#"INSERT INTO [tOnline_Address] ([AddressID], [EmpID], [ContactName], [Phone], [Province], [City], [District], [Address], [IsDefault], [State], [EDate], [EUser])
         VALUES (NEWID(), @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, 'A', @p9, @p10)"#;
 
     conn.execute(sql, &[
         &emp_id.as_str(),
-        &receiver_name,
+        &contact_name,
         &phone,
         &province,
         &city,
         &district,
-        &detail_addr,
-        &is_default,
+        &address,
+        &is_default_int,
         &now,
         &claims.user_code.as_str(),
     ]).await?;
@@ -1348,15 +1388,16 @@ pub async fn create_address(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct UpdateAddressParams {
-    pub AddressID: String,
-    pub ReceiverName: Option<String>,
-    pub Phone: Option<String>,
-    pub Province: Option<String>,
-    pub City: Option<String>,
-    pub District: Option<String>,
-    pub DetailAddr: Option<String>,
-    pub IsDefault: Option<String>,
+    pub id: String,
+    pub contact_name: Option<String>,
+    pub phone: Option<String>,
+    pub province: Option<String>,
+    pub city: Option<String>,
+    pub district: Option<String>,
+    pub address: Option<String>,
+    pub is_default: Option<i32>,
 }
 
 pub async fn update_address(
@@ -1365,48 +1406,49 @@ pub async fn update_address(
     Json(body): Json<UpdateAddressParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
-    let receiver_name = body.ReceiverName.as_deref().unwrap_or("");
-    let phone = body.Phone.as_deref().unwrap_or("");
-    let province = body.Province.as_deref().unwrap_or("");
-    let city = body.City.as_deref().unwrap_or("");
-    let district = body.District.as_deref().unwrap_or("");
-    let detail_addr = body.DetailAddr.as_deref().unwrap_or("");
-    let is_default = body.IsDefault.as_deref().unwrap_or("N");
+    let contact_name = body.contact_name.as_deref().unwrap_or("");
+    let phone = body.phone.as_deref().unwrap_or("");
+    let province = body.province.as_deref().unwrap_or("");
+    let city = body.city.as_deref().unwrap_or("");
+    let district = body.district.as_deref().unwrap_or("");
+    let address = body.address.as_deref().unwrap_or("");
+    let is_default_int: i32 = if body.is_default.unwrap_or(0) == 1 { 1 } else { 0 };
 
-    if is_default == "Y" {
+    if is_default_int == 1 {
         let emp_sql = "SELECT TOP 1 [EmpID] FROM [tBas_Emp] WHERE [EmpNo] = @p1 AND [State] <> 'D'";
         let emp_stream = conn.query(emp_sql, &[&claims.user_code.as_str()]).await?;
         if let Some(row) = emp_stream.into_row().await? {
             let emp_id = row.get::<&str, _>("EmpID").unwrap_or("").to_string();
-            let clear_default_sql = "UPDATE [tOnline_Address] SET [IsDefault] = 'N' WHERE [EmpID] = @p1 AND [State] <> 'D'";
+            let clear_default_sql = "UPDATE [tOnline_Address] SET [IsDefault] = 0 WHERE [EmpID] = @p1 AND [State] <> 'D'";
             conn.execute(clear_default_sql, &[&emp_id.as_str()]).await?;
         }
     }
 
     let sql = r#"UPDATE [tOnline_Address] SET
-        [ReceiverName] = @p1, [Phone] = @p2, [Province] = @p3, [City] = @p4,
-        [District] = @p5, [DetailAddr] = @p6, [IsDefault] = @p7, [EDate] = @p8, [EUser] = @p9
+        [ContactName] = @p1, [Phone] = @p2, [Province] = @p3, [City] = @p4,
+        [District] = @p5, [Address] = @p6, [IsDefault] = @p7, [EDate] = @p8, [EUser] = @p9
         WHERE [AddressID] = @p10 AND [State] <> 'D'"#;
 
     conn.execute(sql, &[
-        &receiver_name,
+        &contact_name,
         &phone,
         &province,
         &city,
         &district,
-        &detail_addr,
-        &is_default,
+        &address,
+        &is_default_int,
         &now,
         &claims.user_code.as_str(),
-        &body.AddressID.as_str(),
+        &body.id.as_str(),
     ]).await?;
 
     Ok(Json(ApiResponse::msg("地址更新成功")))
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct DeleteAddressParams {
     pub ids: Vec<String>,
 }
@@ -1430,6 +1472,7 @@ pub async fn delete_address(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct SetDefaultAddressParams {
     pub id: String,
 }
@@ -1445,11 +1488,11 @@ pub async fn set_default_address(
     let emp_stream = conn.query(emp_sql, &[&claims.user_code.as_str()]).await?;
     if let Some(row) = emp_stream.into_row().await? {
         let emp_id = row.get::<&str, _>("EmpID").unwrap_or("").to_string();
-        let clear_sql = "UPDATE [tOnline_Address] SET [IsDefault] = 'N' WHERE [EmpID] = @p1 AND [State] <> 'D'";
+        let clear_sql = "UPDATE [tOnline_Address] SET [IsDefault] = 0 WHERE [EmpID] = @p1 AND [State] <> 'D'";
         conn.execute(clear_sql, &[&emp_id.as_str()]).await?;
     }
 
-    let set_sql = "UPDATE [tOnline_Address] SET [IsDefault] = 'Y' WHERE [AddressID] = @p1 AND [State] <> 'D'";
+    let set_sql = "UPDATE [tOnline_Address] SET [IsDefault] = 1 WHERE [AddressID] = @p1 AND [State] <> 'D'";
     conn.execute(set_sql, &[&body.id.as_str()]).await?;
 
     Ok(Json(ApiResponse::msg("默认地址设置成功")))

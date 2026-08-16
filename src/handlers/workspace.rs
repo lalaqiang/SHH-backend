@@ -5,7 +5,7 @@ use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
 use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
-use crate::handlers::base_data::try_get_value;
+use crate::handlers::base_data::row_to_json;
 use crate::middleware::auth::Claims;
 
 #[derive(Deserialize)]
@@ -22,55 +22,62 @@ pub struct CommonMenusParams {
     pub menus: Option<String>,
 }
 
-fn row_to_json(row: &Row) -> serde_json::Value {
-    let columns = row.columns();
-    let mut map = serde_json::Map::new();
-    for col in columns {
-        let name = col.name().to_string();
-        if name == "_rn" {
-            continue;
-        }
-        let val = try_get_value(row, &name);
-        map.insert(name, val);
-    }
-    serde_json::Value::Object(map)
-}
-
 /// POST /api/workspace/todo - 获取待审批单据列表
 /// 查询 tPur_Order, tSal_Order, tStk_IO, tStk_Move, tSal_Inv 中 State='N' 的单据
+///
+/// P1-6 修复：按 EUser 过滤（当前登录用户创建的单据）+ TOP 20 限制
+/// 原实现未按 EUser 过滤，返回全公司所有新建单据，违反数据隔离原则
 pub async fn get_todo_list(
     State(_config): State<Config>,
-    Extension(_claims): Extension<Claims>,
+    Extension(claims): Extension<Claims>,
     Json(params): Json<WorkspaceParams>,
 ) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>> {
     let mut conn = get_pool().get().await?;
     let page = params.page.unwrap_or(1);
+    // P1-6: 默认 20 条，最大 100，避免全表返回
     let page_size = std::cmp::min(params.page_size.unwrap_or(20), 100);
+    let euser = if claims.emp_id.is_empty() {
+        // 旧 token 无 emp_id 时回退到 user_code（与 finance.rs 兜底策略一致）
+        if claims.user_code.is_empty() {
+            return Ok(Json(ApiResponse::err("无法获取当前用户信息，请重新登录")));
+        }
+        claims.user_code.clone()
+    } else {
+        claims.emp_id.clone()
+    };
 
     // 使用 UNION ALL 合并各表的新建单据，统一返回 docType, docNo, docDate, amount, state
+    // P1-6: 每个子查询加 EUser 过滤 + TOP 20，避免全表扫描
     let base_query = r#"
-        SELECT '采购订单' AS docType, PoNo AS docNo, PoDate AS docDate, TotalAmt AS amount, State AS state FROM tPur_Order WHERE State = 'N'
+        SELECT TOP 20 '采购订单' AS docType, PoNo AS docNo, PoDate AS docDate, SumAmt AS amount, State AS state
+        FROM tPur_Order WHERE State = 'N' AND EUser = @p1
         UNION ALL
-        SELECT '销售订单' AS docType, SoNo AS docNo, SoDate AS docDate, TotalAmt AS amount, State AS state FROM tSal_Order WHERE State = 'N'
+        SELECT TOP 20 '销售订单' AS docType, SoNo AS docNo, SoDate AS docDate, SumAmt AS amount, State AS state
+        FROM tSal_Order WHERE State = 'N' AND EUser = @p1
         UNION ALL
-        SELECT '入出库单' AS docType, IONo AS docNo, IODate AS docDate, TotalAmt AS amount, State AS state FROM tStk_IO WHERE State = 'N'
+        SELECT TOP 20 '入出库单' AS docType, IONo AS docNo, IODate AS docDate, SumAmt AS amount, State AS state
+        FROM tStk_IO WHERE State = 'N' AND EUser = @p1
         UNION ALL
-        SELECT '调拨单' AS docType, MoveNo AS docNo, MoveDate AS docDate, TotalAmt AS amount, State AS state FROM tStk_Move WHERE State = 'N'
+        SELECT TOP 20 '调拨单' AS docType, MoveNO AS docNo, MoveDate AS docDate, SumAmt AS amount, State AS state
+        FROM tStk_Move WHERE State = 'N' AND EUser = @p1
         UNION ALL
-        SELECT '销售发票' AS docType, InvNo AS docNo, InvDate AS docDate, TotalAmt AS amount, State AS state FROM tSal_Inv WHERE State = 'N'
+        SELECT TOP 20 '销售发票' AS docType, SINo AS docNo, SIDate AS docDate, SumAmt AS amount, State AS state
+        FROM tSal_Inv WHERE State = 'N' AND EUser = @p1
     "#.trim();
 
-    let mut query_params: Vec<Option<String>> = Vec::new();
+    let mut query_params: Vec<Option<String>> = vec![Some(euser.clone()); 5];
+    let pidx = 6;
 
     // 如果有关键词搜索，需要在外层包装 WHERE 条件
     let filtered_query = if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
-            format!(
-                "SELECT * FROM ({}) t WHERE t.docNo LIKE @p1 OR t.docType LIKE @p2",
-                base_query
-            )
+            let result = format!(
+                "SELECT * FROM ({}) t WHERE t.docNo LIKE @p{} OR t.docType LIKE @p{}",
+                base_query, pidx, pidx + 1
+            );
+            result
         } else {
             base_query.to_string()
         }
@@ -106,6 +113,9 @@ pub async fn get_todo_list(
 
 /// POST /api/workspace/doing - 获取当前用户正在处理的单据列表
 /// 查询各表中 State='E' 且 EUser 为当前用户的单据
+///
+/// P1-6 修复：用 claims.emp_id（EUser 字段存的是 EmpID 而非 user_code）
+/// 原实现用 claims.user_code 作为 EUser，与单据创建时写入的 emp_id 不一致，导致查询为空
 pub async fn get_doing_list(
     State(_config): State<Config>,
     Extension(claims): Extension<Claims>,
@@ -114,24 +124,36 @@ pub async fn get_doing_list(
     let mut conn = get_pool().get().await?;
     let page = params.page.unwrap_or(1);
     let page_size = std::cmp::min(params.page_size.unwrap_or(20), 100);
-    let user_code = claims.user_code.clone();
+    // P1-6: EUser 字段存的是 EmpID（UUID），不是 user_code
+    let euser = if claims.emp_id.is_empty() {
+        if claims.user_code.is_empty() {
+            return Ok(Json(ApiResponse::err("无法获取当前用户信息，请重新登录")));
+        }
+        claims.user_code.clone()
+    } else {
+        claims.emp_id.clone()
+    };
 
     let base_query = r#"
-        SELECT '采购订单' AS docType, PoNo AS docNo, PoDate AS docDate, TotalAmt AS amount, State AS state FROM tPur_Order WHERE State = 'E' AND EUser = @p1
+        SELECT TOP 20 '采购订单' AS docType, PoNo AS docNo, PoDate AS docDate, SumAmt AS amount, State AS state
+        FROM tPur_Order WHERE State = 'E' AND EUser = @p1
         UNION ALL
-        SELECT '销售订单' AS docType, SoNo AS docNo, SoDate AS docDate, TotalAmt AS amount, State AS state FROM tSal_Order WHERE State = 'E' AND EUser = @p1
+        SELECT TOP 20 '销售订单' AS docType, SoNo AS docNo, SoDate AS docDate, SumAmt AS amount, State AS state
+        FROM tSal_Order WHERE State = 'E' AND EUser = @p1
         UNION ALL
-        SELECT '入出库单' AS docType, IONo AS docNo, IODate AS docDate, TotalAmt AS amount, State AS state FROM tStk_IO WHERE State = 'E' AND EUser = @p1
+        SELECT TOP 20 '入出库单' AS docType, IONo AS docNo, IODate AS docDate, SumAmt AS amount, State AS state
+        FROM tStk_IO WHERE State = 'E' AND EUser = @p1
         UNION ALL
-        SELECT '调拨单' AS docType, MoveNo AS docNo, MoveDate AS docDate, TotalAmt AS amount, State AS state FROM tStk_Move WHERE State = 'E' AND EUser = @p1
+        SELECT TOP 20 '调拨单' AS docType, MoveNO AS docNo, MoveDate AS docDate, SumAmt AS amount, State AS state
+        FROM tStk_Move WHERE State = 'E' AND EUser = @p1
         UNION ALL
-        SELECT '销售发票' AS docType, InvNo AS docNo, InvDate AS docDate, TotalAmt AS amount, State AS state FROM tSal_Inv WHERE State = 'E' AND EUser = @p1
+        SELECT TOP 20 '销售发票' AS docType, SINo AS docNo, SIDate AS docDate, SumAmt AS amount, State AS state
+        FROM tSal_Inv WHERE State = 'E' AND EUser = @p1
     "#.trim();
 
-    let mut query_params: Vec<Option<String>> = vec![Some(user_code)];
-    let mut pidx = 2;
+    let mut query_params: Vec<Option<String>> = vec![Some(euser.clone()); 5];
+    let pidx = 6;
 
-    // 如果有关键词搜索，需要在外层包装 WHERE 条件
     let filtered_query = if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
             query_params.push(Some(format!("%{}%", kw)));
@@ -140,7 +162,6 @@ pub async fn get_doing_list(
                 "SELECT * FROM ({}) t WHERE t.docNo LIKE @p{} OR t.docType LIKE @p{}",
                 base_query, pidx, pidx + 1
             );
-            pidx += 2;
             result
         } else {
             base_query.to_string()
@@ -177,6 +198,9 @@ pub async fn get_doing_list(
 
 /// POST /api/workspace/common-menus - 获取/保存常用菜单
 /// 如果请求体中包含 menus 字段，则保存；否则返回常用菜单列表
+///
+/// P1-7 修复：UTF-8 编码损坏的中文字符串全部修复
+/// 常用菜单按 user_code 持久化到 tSys_Parameters 表
 pub async fn get_common_menus(
     State(_config): State<Config>,
     Extension(claims): Extension<Claims>,
@@ -184,13 +208,15 @@ pub async fn get_common_menus(
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
     let user_code = claims.user_code.clone();
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let zero_uuid = "00000000-0000-0000-0000-000000000000";
+    let pcode = format!("common_menus_{}", user_code);
 
     // 如果传了 menus，则保存/更新
     if let Some(menus) = &params.menus {
         // 先检查是否已有记录
-        let check_sql = "SELECT COUNT(*) AS cnt FROM tSys_Parameters WHERE PKind = 'common_menus' AND EUser = @p1";
-        let check_params: Vec<&dyn tiberius::ToSql> = vec![&user_code];
+        let check_sql = "SELECT COUNT(*) AS cnt FROM tSys_Parameters WHERE PKind = 'common_menus' AND PCode = @p1";
+        let check_params: Vec<&dyn tiberius::ToSql> = vec![&pcode];
         let check_stream = conn.query(check_sql, &check_params).await?;
         let mut count: i32 = 0;
         if let Some(row) = check_stream.into_row().await? {
@@ -199,23 +225,23 @@ pub async fn get_common_menus(
 
         if count > 0 {
             // 更新
-            let update_sql = "UPDATE tSys_Parameters SET PValue = @p1, EDate = @p2 WHERE PKind = 'common_menus' AND EUser = @p3";
-            let update_params: Vec<&dyn tiberius::ToSql> = vec![menus, &now, &user_code];
+            let update_sql = "UPDATE tSys_Parameters SET PValue = @p1, EDate = @p2, EUser = @p3 WHERE PKind = 'common_menus' AND PCode = @p4";
+            let update_params: Vec<&dyn tiberius::ToSql> = vec![menus, &now, &zero_uuid, &pcode];
             conn.execute(update_sql, &update_params).await?;
         } else {
             // 新增
-            let pkey = format!("common_menus_{}", user_code);
-            let insert_sql = r#"INSERT INTO tSys_Parameters (PKind, PKey, PValue, PDesc, EDate, EUser)
-                                VALUES (@p1, @p2, @p3, @p4, @p5, @p6)"#;
+            let insert_sql = r#"INSERT INTO tSys_Parameters (ParametersID, PCode, PName, PKind, PHelp, PValue, EUser, EDate)
+                                VALUES (NEWID(), @p1, @p2, @p3, @p4, @p5, @p6, @p7)"#;
             let pkind = "common_menus";
             let pdesc = "用户常用菜单";
             let insert_params: Vec<&dyn tiberius::ToSql> = vec![
-                &pkind,
-                &pkey,
-                menus,
+                &pcode,
                 &pdesc,
-                &now,
+                &pkind,
                 &user_code,
+                menus,
+                &zero_uuid,
+                &now,
             ];
             conn.execute(insert_sql, &insert_params).await?;
         }
@@ -224,8 +250,8 @@ pub async fn get_common_menus(
     }
 
     // 查询常用菜单
-    let query_sql = "SELECT PValue FROM tSys_Parameters WHERE PKind = 'common_menus' AND EUser = @p1";
-    let query_params: Vec<&dyn tiberius::ToSql> = vec![&user_code];
+    let query_sql = "SELECT PValue FROM tSys_Parameters WHERE PKind = 'common_menus' AND PCode = @p1";
+    let query_params: Vec<&dyn tiberius::ToSql> = vec![&pcode];
     let stream = conn.query(query_sql, &query_params).await?;
 
     if let Some(row) = stream.into_row().await? {
@@ -247,7 +273,7 @@ pub async fn get_common_menus(
         { "name": "商品资料", "path": "/base/goods", "icon": "Goods" },
         { "name": "客户资料", "path": "/base/customer", "icon": "User" },
         { "name": "供应商资料", "path": "/base/supplier", "icon": "OfficeBuilding" },
-        { "name": "报表中心", "path": "/report/index", "icon": "DataAnalysis" },
+        { "name": "报表中心", "path": "/report/index", "icon": "DataAnalysis" }
     ]);
     Ok(Json(ApiResponse::ok(default_menus)))
 }

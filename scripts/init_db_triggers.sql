@@ -37,15 +37,17 @@ BEGIN
         WHERE io.State IN ('S', 'Y')
     ),
     -- 按 (GDSID, StkID) 聚合 + 按 Kind 决定方向
+    -- 权威来源：tBas_BillType.InOut 字段（+1=入库, -1=出库, 0=调拨）
+    -- RI=领用单(出库), TH=门店退仓(调拨), PR=采购退货(出库)
     delta AS (
         SELECT
             GDSID, StkID,
             SUM(CASE
-                WHEN Kind IN ('RI', 'PD', 'SR', 'OT') AND Qty > 0 THEN Qty       -- 正向入库
-                WHEN Kind IN ('SD', 'POS', 'SI', 'TH', 'PR', 'ZP') AND Qty > 0 THEN -Qty -- 正向出库
-                WHEN Kind IN ('RI', 'PD', 'SR', 'OT') AND Qty < 0 THEN Qty       -- 负向入库（冲销）
-                WHEN Kind IN ('SD', 'POS', 'SI', 'TH', 'PR', 'ZP') AND Qty < 0 THEN -Qty
-                ELSE 0
+                WHEN Kind IN ('PD', 'SR', 'OTI', 'DBI') AND Qty > 0 THEN Qty       -- 正向入库
+                WHEN Kind IN ('SD', 'POS', 'SI', 'RI', 'PR', 'OTO', 'DBO') AND Qty > 0 THEN -Qty -- 正向出库
+                WHEN Kind IN ('PD', 'SR', 'OTI', 'DBI') AND Qty < 0 THEN Qty       -- 负向入库（冲销）
+                WHEN Kind IN ('SD', 'POS', 'SI', 'RI', 'PR', 'OTO', 'DBO') AND Qty < 0 THEN -Qty
+                ELSE 0  -- TH/DB/ZP/OT 等调拨类不在触发器处理，由应用层双边过账
             END) AS Delta
         FROM audited
         GROUP BY GDSID, StkID

@@ -8,7 +8,7 @@ use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
 use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
-use super::base_data::{try_get_value, row_to_json};
+use super::base_data::row_to_json;
 
 #[derive(Deserialize)]
 pub struct PaginationParams {
@@ -26,11 +26,11 @@ pub async fn list_emp_sales(
     let mut conn = get_pool().get().await?;
 
     let page = params.page.unwrap_or(1);
-    let page_size = std::cmp::min(params.page_size.unwrap_or(20), 100);
+    let page_size = std::cmp::min(params.page_size.unwrap_or(20), 1000);
 
     let mut base_query = "SELECT * FROM tSal_EmpSales WHERE State <> 'D'".to_string();
     let mut query_params: Vec<Option<String>> = Vec::new();
-    let mut pidx = 1;
+    let pidx = 1;
 
     if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
@@ -38,7 +38,6 @@ pub async fn list_emp_sales(
                 " AND (EmpNo LIKE @p{} OR EmpName LIKE @p{} OR GDSNO LIKE @p{} OR GDSDesc LIKE @p{})",
                 pidx, pidx + 1, pidx + 2, pidx + 3
             ));
-            pidx += 4;
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
@@ -104,7 +103,7 @@ pub async fn create_emp_sales(
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
 
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let emp_no = json_str(&body, "EmpNo");
     let emp_name = json_str(&body, "EmpName");
     let gdsno = json_str(&body, "GDSNO");
@@ -113,12 +112,16 @@ pub async fn create_emp_sales(
     let price = json_f64(&body, "Price");
     let amt = json_f64(&body, "Amt");
     let amt = if amt == 0.0 { qty * price } else { amt };
-    let sale_date = json_opt_str(&body, "SaleDate").unwrap_or_else(|| now.format("%Y-%m-%d").to_string());
+    let sale_date = json_opt_str(&body, "SaleDate").unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
     let state = json_opt_str(&body, "State").unwrap_or_else(|| "N".to_string());
 
     let sql = r#"INSERT INTO tSal_EmpSales (EmpNo, EmpName, GDSNO, GDSDesc, Qty, Price, Amt, SaleDate, State, EDate, EUser)
         VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11)"#;
 
+    // P5 修复：tSal_EmpSales.EUser 是 uniqueidentifier 列，传 "system" 字符串会报
+    //   "Conversion failed when converting from a character string to uniqueidentifier"
+    //   该函数无 Extension<Claims> 注入，使用 ZERO_UUID 作为审计占位（列可空）
+    const EUSER_PLACEHOLDER: &str = "00000000-0000-0000-0000-000000000000";
     conn.execute(sql, &[
         &emp_no.as_str(),
         &emp_name.as_str(),
@@ -130,7 +133,7 @@ pub async fn create_emp_sales(
         &sale_date.as_str(),
         &state.as_str(),
         &now,
-        &"system",
+        &EUSER_PLACEHOLDER,
     ]).await?;
 
     Ok(Json(ApiResponse::msg("员工销量录入成功")))
@@ -147,7 +150,7 @@ pub async fn update_emp_sales(
         return Ok(Json(ApiResponse::err("记录ID不能为空")));
     }
 
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let emp_no = json_str(&body, "EmpNo");
     let emp_name = json_str(&body, "EmpName");
     let gdsno = json_str(&body, "GDSNO");
@@ -156,7 +159,7 @@ pub async fn update_emp_sales(
     let price = json_f64(&body, "Price");
     let amt = json_f64(&body, "Amt");
     let amt = if amt == 0.0 { qty * price } else { amt };
-    let sale_date = json_opt_str(&body, "SaleDate").unwrap_or_else(|| now.format("%Y-%m-%d").to_string());
+    let sale_date = json_opt_str(&body, "SaleDate").unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
     let state = json_opt_str(&body, "State").unwrap_or_else(|| "N".to_string());
 
     let sql = r#"UPDATE tSal_EmpSales SET EmpNo=@p1, EmpName=@p2, GDSNO=@p3, GDSDesc=@p4,

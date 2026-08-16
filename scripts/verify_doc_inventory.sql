@@ -190,21 +190,21 @@ BEGIN
     ORDER BY BTPID
 
     -- 检查批发/零售 BTPID 是否存在
-    IF NOT EXISTS (SELECT 1 FROM tBas_BillType WHERE BTPID = '00000000-0000-0000-0000-000000000010')
+    IF NOT EXISTS (SELECT 1 FROM tBas_BillType WHERE BTPID = '6D8E9880-30BC-41F0-A8DE-E27263453DE4')
     BEGIN
-        PRINT '  ❌ 批发 BTPID (…0010) 缺失！请执行 add_wholesale_btpid.sql'
+        PRINT '  ❌ 批发 BTPID (6D8E9880-...) 缺失！请执行 add_wholesale_btpid.sql'
         SET @ErrCount = @ErrCount + 1
     END
     ELSE
-        PRINT '  ✓ 批发 BTPID (…0010) 已存在'
+        PRINT '  ✓ 批发 BTPID (6D8E9880-...) 已存在'
 
-    IF NOT EXISTS (SELECT 1 FROM tBas_BillType WHERE BTPID = '00000000-0000-0000-0000-000000000020')
+    IF NOT EXISTS (SELECT 1 FROM tBas_BillType WHERE BTPID = 'DE94C869-A125-44FD-A0B2-B93CB7749E37')
     BEGIN
-        PRINT '  ⚠ 零售 BTPID (…0020) 缺失，建议补充'
+        PRINT '  ⚠ 零售 BTPID (DE94C869-...) 缺失，建议补充'
         SET @WarnCount = @WarnCount + 1
     END
     ELSE
-        PRINT '  ✓ 零售 BTPID (…0020) 已存在'
+        PRINT '  ✓ 零售 BTPID (DE94C869-...) 已存在'
 END
 ELSE
 BEGIN

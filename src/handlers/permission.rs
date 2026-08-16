@@ -115,7 +115,10 @@ pub async fn assign_role_permissions(
     }.await;
     if let Err(e) = tx_result {
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("权限分配失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "权限分配失败: {}",
+            &e,
+        ))));
     }
 
     // 清除所有用户的权限缓存（角色权限变更可能影响多个用户）
@@ -645,7 +648,10 @@ pub async fn delete_role(
     .await;
     if let Err(e) = tx_result {
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("角色删除失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "角色删除失败: {}",
+            &e,
+        ))));
     }
 
     // 角色删除后级联清除了 tSys_RuleMenu 和 tSys_UserRule，
@@ -708,7 +714,10 @@ pub async fn assign_user_roles(
     .await;
     if let Err(e) = tx_result {
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("用户角色分配失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "用户角色分配失败: {}",
+            &e,
+        ))));
     }
 
     // 清除该用户的权限缓存
@@ -751,7 +760,10 @@ pub async fn save_table_column_config(
         Ok(c) => c,
         Err(e) => {
             tracing::warn!("[save_table_column_config] 获取连接失败: {}", e);
-            return Ok(Json(ApiResponse::err(&format!("连接数据库失败: {}", e))));
+            return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+                "连接数据库失败: {}",
+                &e,
+            ))));
         }
     };
     tracing::debug!("[save_table_column_config] 已拿到连接");
@@ -779,14 +791,20 @@ pub async fn save_table_column_config(
         Ok(s) => s,
         Err(e) => {
             tracing::warn!("[save_table_column_config] check 查询失败: {}", e);
-            return Ok(Json(ApiResponse::err(&format!("SQL 查询失败: {}", e))));
+            return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+                "SQL 查询失败: {}",
+                &e,
+            ))));
         }
     };
     let existing = match stream.into_row().await {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("[save_table_column_config] check 取行失败: {}", e);
-            return Ok(Json(ApiResponse::err(&format!("取行失败: {}", e))));
+            return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+                "取行失败: {}",
+                &e,
+            ))));
         }
     };
     tracing::debug!("[save_table_column_config] 已存在?={}", existing.is_some());
@@ -810,7 +828,10 @@ pub async fn save_table_column_config(
             }
             Err(e) => {
                 tracing::warn!("[save_table_column_config] UPDATE 失败: {}", e);
-                return Ok(Json(ApiResponse::err(&format!("UPDATE 失败: {}", e))));
+                return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+                    "UPDATE 失败: {}",
+                    &e,
+                ))));
             }
         }
     } else {
@@ -831,7 +852,10 @@ pub async fn save_table_column_config(
             }
             Err(e) => {
                 tracing::warn!("[save_table_column_config] INSERT 失败: {}", e);
-                return Ok(Json(ApiResponse::err(&format!("INSERT 失败: {}", e))));
+                return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+                    "INSERT 失败: {}",
+                    &e,
+                ))));
             }
         }
     }
@@ -858,7 +882,10 @@ pub async fn get_table_column_config(
         Ok(c) => c,
         Err(e) => {
             tracing::warn!("[get_table_column_config] 获取连接失败: {}", e);
-            return Ok(Json(ApiResponse::err(&format!("连接数据库失败: {}", e))));
+            return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+                "连接数据库失败: {}",
+                &e,
+            ))));
         }
     };
     tracing::debug!("[get_table_column_config] 已拿到连接");
@@ -881,7 +908,10 @@ pub async fn get_table_column_config(
         Ok(s) => s,
         Err(e) => {
             tracing::warn!("[get_table_column_config] conn.query 失败: {}", e);
-            return Ok(Json(ApiResponse::err(&format!("SQL 查询失败: {}", e))));
+            return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+                "SQL 查询失败: {}",
+                &e,
+            ))));
         }
     };
     tracing::debug!("[get_table_column_config] SQL 已执行, 准备收集行");
@@ -899,7 +929,10 @@ pub async fn get_table_column_config(
         }
         Err(e) => {
             tracing::warn!("[get_table_column_config] into_results 失败: {}", e);
-            return Ok(Json(ApiResponse::err(&format!("取行失败: {}", e))));
+            return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+                "取行失败: {}",
+                &e,
+            ))));
         }
     };
     tracing::debug!(

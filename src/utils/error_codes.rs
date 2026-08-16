@@ -22,6 +22,8 @@ pub const AUTH_TOKEN_INVALID: &str = "AUTH_TOKEN_INVALID";
 pub const AUTH_TOKEN_EXPIRED: &str = "AUTH_TOKEN_EXPIRED";
 /// 用户名不存在
 pub const AUTH_USER_NOT_FOUND: &str = "AUTH_USER_NOT_FOUND";
+/// 登录统一失败码：不区分"账号不存在"与"密码错误"，防工号枚举
+pub const AUTH_LOGIN_FAILED: &str = "AUTH_LOGIN_FAILED";
 /// 密码错误
 pub const AUTH_PASSWORD_WRONG: &str = "AUTH_PASSWORD_WRONG";
 /// 密码长度不足（P1-12：已废弃，密码长度限制已移除以符合内部易用性偏好；保留常量仅供向后兼容）
@@ -118,6 +120,7 @@ mod tests {
             AUTH_TOKEN_EXPIRED,
             AUTH_USER_NOT_FOUND,
             AUTH_PASSWORD_WRONG,
+            AUTH_LOGIN_FAILED,
             AUTH_PASSWORD_TOO_SHORT,
             AUTH_PASSWORD_SAME,
             PERM_DENIED,
@@ -159,6 +162,7 @@ mod tests {
             AUTH_TOKEN_EXPIRED,
             AUTH_USER_NOT_FOUND,
             AUTH_PASSWORD_WRONG,
+            AUTH_LOGIN_FAILED,
             AUTH_PASSWORD_TOO_SHORT,
             AUTH_PASSWORD_SAME,
             PERM_DENIED,

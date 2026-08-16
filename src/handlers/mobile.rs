@@ -98,7 +98,10 @@ pub async fn mobile_login(
         }
 
         if stored_password.is_empty() || !verify_password(&body.Password, &stored_password) {
-            return Ok(Json(ApiResponse::<MobileLoginResponse>::err("密码错误")));
+            // P1 修复：与"未找到工号"分支同消息，防枚举
+            return Ok(Json(ApiResponse::<MobileLoginResponse>::err(
+                "工号或密码错误",
+            )));
         }
 
         let emp_id = get_str(&row, "EmpID");
@@ -133,8 +136,13 @@ pub async fn mobile_login(
         };
         Ok(Json(ApiResponse::ok(resp)))
     } else {
+        // P1 修复（防工号枚举）：与密码错误分支返回相同消息，并做等时 dummy 校验
+        let _ = verify_password(
+            &body.Password,
+            crate::utils::password::DUMMY_BCRYPT_FOR_TIMING,
+        );
         Ok(Json(ApiResponse::<MobileLoginResponse>::err(
-            "未找到该工号或无移动端登录权限",
+            "工号或密码错误",
         )))
     }
 }
@@ -703,7 +711,10 @@ pub async fn submit_stock_check(
     }.await;
     if let Err(e) = tx_result {
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("盘点单保存失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "盘点单保存失败: {}",
+            &e,
+        ))));
     }
 
     Ok(Json(ApiResponse::ok(serde_json::json!({

@@ -192,7 +192,10 @@ pub async fn create_purchase_order(
     }.await;
     if let Err(e) = tx_result {
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("采购订单保存失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "采购订单保存失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::ok(
         serde_json::json!({ "PoNo": po_no, "POID": poid_out }),
@@ -286,7 +289,10 @@ pub async fn update_purchase_order(
     }.await;
     if let Err(e) = tx_result {
         inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("采购订单更新失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "采购订单更新失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::msg("采购订单更新成功")))
 }
@@ -445,7 +451,10 @@ pub async fn create_purchase_inbound(
     }.await;
     if let Err(e) = tx_result {
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("采购入库保存失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "采购入库保存失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::ok(
         serde_json::json!({ "IONo": io_no, "IOID": ioid_out }),
@@ -673,7 +682,10 @@ pub async fn create_purchase_return(
     }.await;
     if let Err(e) = tx_result {
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("采购退货保存失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "采购退货保存失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::ok(
         serde_json::json!({ "IONo": io_no, "IOID": ioid_out }),
@@ -803,7 +815,10 @@ pub async fn create_purchase_quote(
     }.await;
     if let Err(e) = tx_result {
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("采购报价保存失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "采购报价保存失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::ok(
         serde_json::json!({ "PqNo": pq_no, "PQID": pqid_out }),
@@ -876,7 +891,10 @@ pub async fn update_purchase_quote(
     }.await;
     if let Err(e) = tx_result {
         inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("采购报价更新失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "采购报价更新失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::msg("采购报价更新成功")))
 }
@@ -1018,7 +1036,10 @@ pub async fn create_purchase_adjprice(
     }.await;
     if let Err(e) = tx_result {
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("采购调价保存失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "采购调价保存失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::ok(
         serde_json::json!({ "PAPNo": pap_no, "PAPID": paid_out }),

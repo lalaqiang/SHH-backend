@@ -176,7 +176,10 @@ pub async fn retail_sale(
     if let Err(e) = result {
         // 回滚主事务（仅回滚数据写入，不回滚已分配的单据号）
         inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("销售失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "销售失败: {}",
+            &e,
+        ))));
     }
 
     // ★ POS 零售保存成功后自动重算提成（对齐 88 项目，不依赖前端调用）

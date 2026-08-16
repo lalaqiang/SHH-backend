@@ -252,7 +252,10 @@ pub async fn create_backup(
 
     match conn.execute(&backup_sql, &[]).await {
         Ok(_) => Ok(Json(ApiResponse::msg("数据库备份成功"))),
-        Err(e) => Ok(Json(ApiResponse::err(&format!("备份失败: {}", e)))),
+        Err(e) => Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "备份失败: {}",
+            &e,
+        )))),
     }
 }
 

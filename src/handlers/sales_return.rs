@@ -262,7 +262,10 @@ pub async fn create_sales_return(
     }.await;
     if let Err(e) = tx_result {
         inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("销售退货保存失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "销售退货保存失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::ok(
         serde_json::json!({ "IONo": io_no, "IOID": ioid_out }),
@@ -354,7 +357,10 @@ pub async fn update_sales_return(
     }.await;
     if let Err(e) = tx_result {
         inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("销售退货更新失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "销售退货更新失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::msg("销售退货更新成功")))
 }

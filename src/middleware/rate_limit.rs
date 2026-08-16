@@ -165,22 +165,27 @@ pub async fn smart_rate_limit(
     next: Next,
 ) -> Result<Response, Response> {
     let path = request.uri().path();
-    let cfg = if path.contains("/export") {
-        Some(presets::EXPORT)
+    // P1 修复：原仅对 /export 与 /api/print/* 限流，其余接口完全不限。
+    // 现按语义分层挂载全部预设：
+    //   导出（20/min）< 打印（60/min）< 写操作（120/min）< 通用读取（600/min）
+    // 写操作识别复用权限中间件的动词表（save/create/approve/... 结尾），
+    // 避免把大量"POST 即查询"的读接口误伤进写入档。
+    let c = if path.contains("/export") {
+        presets::EXPORT
     } else if path.starts_with("/api/print/") || path == "/api/approval/print-log" {
-        Some(presets::PRINT)
+        presets::PRINT
+    } else if crate::middleware::permission::is_write_action_path(path) {
+        presets::WRITE
     } else {
-        None
+        presets::READ
     };
-    if let Some(c) = cfg {
-        let client_ip = extract_client_ip(&request, state.trust_proxy);
-        if !check_rate_limit(&client_ip, c.max_requests) {
-            warn!(
-                "[RateLimit] 限流触发 ip={} desc={} path={}",
-                client_ip, c.description, path
-            );
-            return Err(rate_limited_response(c.description, c.max_requests));
-        }
+    let client_ip = extract_client_ip(&request, state.trust_proxy);
+    if !check_rate_limit(&client_ip, c.max_requests) {
+        warn!(
+            "[RateLimit] 限流触发 ip={} desc={} path={}",
+            client_ip, c.description, path
+        );
+        return Err(rate_limited_response(c.description, c.max_requests));
     }
     Ok(next.run(request).await)
 }

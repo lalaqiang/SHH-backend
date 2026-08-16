@@ -178,7 +178,12 @@ pub async fn delete_supplier(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(conn) => conn,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
 
     if body.ids.is_empty() {
@@ -245,7 +250,10 @@ pub async fn delete_supplier(
             let sql = "DELETE FROM tBas_Supp WHERE SuppID = @p1";
             let id_str = id.as_str();
             if let Err(e) = conn.execute(sql, &[&id_str]).await {
-                return Json(ApiResponse::err(&format!("彻底删除供应商失败: {}", e)));
+                return Json(ApiResponse::err(&crate::utils::db_err(
+                    "彻底删除供应商失败: {}",
+                    &e,
+                )));
             }
         }
         return Json(ApiResponse::msg(&format!(
@@ -259,7 +267,10 @@ pub async fn delete_supplier(
         let sql = "UPDATE tBas_Supp SET State = 'D' WHERE SuppID = @p1";
         let id_str = id.as_str();
         if let Err(e) = conn.execute(sql, &[&id_str]).await {
-            return Json(ApiResponse::err(&format!("作废供应商失败: {}", e)));
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "作废供应商失败: {}",
+                &e,
+            )));
         }
     }
 
@@ -275,7 +286,12 @@ pub async fn delete_warehouse(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(conn) => conn,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
 
     if body.ids.is_empty() {
@@ -342,7 +358,10 @@ pub async fn delete_warehouse(
             let sql = "DELETE FROM tBas_Stock WHERE StkID = @p1";
             let id_str = id.as_str();
             if let Err(e) = conn.execute(sql, &[&id_str]).await {
-                return Json(ApiResponse::err(&format!("彻底删除仓库失败: {}", e)));
+                return Json(ApiResponse::err(&crate::utils::db_err(
+                    "彻底删除仓库失败: {}",
+                    &e,
+                )));
             }
         }
         return Json(ApiResponse::msg(&format!(
@@ -356,7 +375,10 @@ pub async fn delete_warehouse(
         let sql = "UPDATE tBas_Stock SET Used = 'N' WHERE StkID = @p1";
         let id_str = id.as_str();
         if let Err(e) = conn.execute(sql, &[&id_str]).await {
-            return Json(ApiResponse::err(&format!("停用仓库失败: {}", e)));
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "停用仓库失败: {}",
+                &e,
+            )));
         }
     }
 
@@ -394,7 +416,12 @@ pub async fn create_customer(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(conn) => conn,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
 
     let custid = format!("{}", uuid::Uuid::new_v4());
@@ -454,7 +481,10 @@ pub async fn create_customer(
         )
         .await
     {
-        return Json(ApiResponse::err(&format!("新增客户失败: {}", e)));
+        return Json(ApiResponse::err(&crate::utils::db_err(
+            "新增客户失败: {}",
+            &e,
+        )));
     }
 
     Json(ApiResponse::msg("客户新增成功"))
@@ -489,7 +519,12 @@ pub async fn update_customer(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(conn) => conn,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let zero_uuid = "00000000-0000-0000-0000-000000000000";
@@ -544,7 +579,10 @@ pub async fn update_customer(
         )
         .await
     {
-        return Json(ApiResponse::err(&format!("更新客户失败: {}", e)));
+        return Json(ApiResponse::err(&crate::utils::db_err(
+            "更新客户失败: {}",
+            &e,
+        )));
     }
 
     Json(ApiResponse::msg("客户更新成功"))
@@ -556,7 +594,12 @@ pub async fn delete_customer(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(conn) => conn,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
 
     if body.ids.is_empty() {
@@ -624,7 +667,10 @@ pub async fn delete_customer(
             let sql = "DELETE FROM tBas_Cust WHERE CustID = @p1";
             let id_str = id.as_str();
             if let Err(e) = conn.execute(sql, &[&id_str]).await {
-                return Json(ApiResponse::err(&format!("彻底删除客户失败: {}", e)));
+                return Json(ApiResponse::err(&crate::utils::db_err(
+                    "彻底删除客户失败: {}",
+                    &e,
+                )));
             }
         }
         return Json(ApiResponse::msg(&format!(
@@ -638,7 +684,10 @@ pub async fn delete_customer(
         let sql = "UPDATE tBas_Cust SET State = 'D' WHERE CustID = @p1";
         let id_str = id.as_str();
         if let Err(e) = conn.execute(sql, &[&id_str]).await {
-            return Json(ApiResponse::err(&format!("作废客户失败: {}", e)));
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "作废客户失败: {}",
+                &e,
+            )));
         }
     }
 
@@ -653,7 +702,12 @@ pub async fn get_base_versions(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(conn) => conn,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
 
     let mut goods_version: String = String::new();
@@ -721,7 +775,12 @@ pub async fn get_suppliers(
 ) -> Json<ApiResponse<Vec<serde_json::Value>>> {
     let mut conn = match get_pool().get().await {
         Ok(conn) => conn,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
     let page = params.page.unwrap_or(1);
     let page_size = std::cmp::min(params.page_size.unwrap_or(20), 1000);
@@ -758,23 +817,43 @@ pub async fn get_suppliers(
     let mut total: i32 = 0;
     let count_stream = match conn.query(&count_sql, &param_refs).await {
         Ok(stream) => stream,
-        Err(e) => return Json(ApiResponse::err(&format!("查询供应商总数失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询供应商总数失败: {}",
+                &e,
+            )));
+        }
     };
     match count_stream.into_row().await {
         Ok(Some(row)) => {
             total = row.get::<i32, _>("cnt").unwrap_or(0);
         }
         Ok(None) => {}
-        Err(e) => return Json(ApiResponse::err(&format!("获取供应商总数行失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取供应商总数行失败: {}",
+                &e,
+            )));
+        }
     }
 
     let data_stream = match conn.query(&paginated_sql, &param_refs).await {
         Ok(stream) => stream,
-        Err(e) => return Json(ApiResponse::err(&format!("查询供应商数据失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询供应商数据失败: {}",
+                &e,
+            )));
+        }
     };
     let rows: Vec<Row> = match data_stream.into_first_result().await {
         Ok(rows) => rows,
-        Err(e) => return Json(ApiResponse::err(&format!("获取供应商数据结果失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取供应商数据结果失败: {}",
+                &e,
+            )));
+        }
     };
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
@@ -784,154 +863,6 @@ pub async fn get_suppliers(
         page,
         page_size,
     ))
-}
-
-#[derive(Deserialize)]
-pub struct RetailSearchParams {
-    pub keyword: String,
-}
-
-pub async fn retail_goods_search(
-    State(_config): State<Config>,
-    Json(params): Json<RetailSearchParams>,
-) -> Json<ApiResponse<Vec<serde_json::Value>>> {
-    let mut conn = match get_pool().get().await {
-        Ok(conn) => conn,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
-    };
-
-    let kw_pattern = format!("%{}%", params.keyword);
-    let sql = "SELECT TOP 50 GDSID, GDSNO, GDSDesc, BarCode, UnitNO, SPrice as Price, 999 as StockQty FROM tBas_Goods WHERE (GDSNO LIKE @p1 OR GDSDesc LIKE @p2 OR BarCode LIKE @p3) AND State = 'Y'";
-
-    let stream = match conn
-        .query(
-            sql,
-            &[
-                &kw_pattern.as_str(),
-                &kw_pattern.as_str(),
-                &kw_pattern.as_str(),
-            ],
-        )
-        .await
-    {
-        Ok(stream) => stream,
-        Err(e) => return Json(ApiResponse::err(&format!("搜索商品失败: {}", e))),
-    };
-    let rows: Vec<Row> = match stream.into_first_result().await {
-        Ok(rows) => rows,
-        Err(e) => return Json(ApiResponse::err(&format!("获取搜索结果失败: {}", e))),
-    };
-    let data: Vec<serde_json::Value> = rows
-        .iter()
-        .map(|row| {
-            let mut map = serde_json::Map::new();
-            for col in row.columns() {
-                map.insert(col.name().to_string(), try_get_value(row, col.name()));
-            }
-            serde_json::Value::Object(map)
-        })
-        .collect();
-
-    Json(ApiResponse::ok(data))
-}
-
-#[derive(Deserialize)]
-pub struct RetailSettleParams {
-    pub items: Vec<RetailSettleItem>,
-    pub total_amt: Option<f64>,
-}
-
-#[derive(Deserialize)]
-pub struct RetailSettleItem {
-    pub gdsno: Option<String>,
-    pub qty: Option<f64>,
-    pub price: Option<f64>,
-}
-
-pub async fn retail_sales_settle(
-    State(_config): State<Config>,
-    Json(params): Json<RetailSettleParams>,
-) -> Json<ApiResponse<serde_json::Value>> {
-    let mut conn = match get_pool().get().await {
-        Ok(conn) => conn,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
-    };
-
-    let inv_no = format!("RT{}", chrono::Local::now().format("%Y%m%d%H%M%S"));
-    let total_amt = params.total_amt.unwrap_or(0.0);
-    let zero_uuid = "00000000-0000-0000-0000-000000000000";
-    let si_id = format!("{}", uuid::Uuid::new_v4());
-
-    let inv_sql = r#"INSERT INTO tSal_Inv (SIID, SINo, SIDate, CustID, SumAmt, State, EDate, EUser, LUTime)
-                     VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p7)"#;
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    if let Err(e) = conn
-        .execute(
-            inv_sql,
-            &[
-                &si_id.as_str(),
-                &inv_no.as_str(),
-                &now,
-                &zero_uuid,
-                &total_amt,
-                &"S",
-                &now,
-                &zero_uuid,
-            ],
-        )
-        .await
-    {
-        return Json(ApiResponse::err(&format!("插入销售单失败: {}", e)));
-    }
-
-    for (i, item) in params.items.iter().enumerate() {
-        let gdsno = item.gdsno.as_deref().unwrap_or("");
-        let qty = item.qty.unwrap_or(0.0);
-        let price = item.price.unwrap_or(0.0);
-        let amt = qty * price;
-        let row_no = format!("{:03}", i + 1);
-
-        // 从 GDSNO 查 GDSID
-        let gds_id = if !gdsno.is_empty() {
-            let gsql = "SELECT CAST(GDSID AS NVARCHAR(40)) AS G FROM tBas_Goods WHERE GDSNO = @p1";
-            match conn.query(gsql, &[&gdsno]).await {
-                Ok(s) => match s.into_row().await {
-                    Ok(Some(r)) => r.get::<&str, _>("G").unwrap_or(zero_uuid).to_string(),
-                    _ => zero_uuid.to_string(),
-                },
-                _ => zero_uuid.to_string(),
-            }
-        } else {
-            zero_uuid.to_string()
-        };
-
-        let detail_sql = r#"INSERT INTO tSal_InvDetail (SIID, SIDetailID, RowNO, GDSID, StkID, Qty, Price, DisRate, Amt)
-                            VALUES (@p1, NEWID(), @p2, @p3, @p4, @p5, @p6, @p7, @p8)"#;
-        let dis_rate: f64 = 100.0;
-        if let Err(e) = conn
-            .execute(
-                detail_sql,
-                &[
-                    &si_id.as_str(),
-                    &row_no.as_str(),
-                    &gds_id.as_str(),
-                    &zero_uuid,
-                    &qty,
-                    &price,
-                    &dis_rate,
-                    &amt,
-                ],
-            )
-            .await
-        {
-            return Json(ApiResponse::err(&format!("插入销售明细失败: {}", e)));
-        }
-    }
-
-    Json(ApiResponse::msg(&format!(
-        "结算成功，共{}件商品",
-        params.items.len()
-    )))
 }
 
 #[derive(Deserialize)]
@@ -1031,7 +962,12 @@ pub async fn create_goods(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(conn) => conn,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
 
     let gdsid = format!("{}", uuid::Uuid::new_v4());
@@ -1141,7 +1077,10 @@ pub async fn create_goods(
         )
         .await
     {
-        return Json(ApiResponse::err(&format!("新增商品失败: {}", e)));
+        return Json(ApiResponse::err(&crate::utils::db_err(
+            "新增商品失败: {}",
+            &e,
+        )));
     }
 
     Json(ApiResponse::msg("商品新增成功"))
@@ -1153,7 +1092,12 @@ pub async fn update_goods(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(conn) => conn,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
 
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -1264,7 +1208,10 @@ pub async fn update_goods(
         )
         .await
     {
-        return Json(ApiResponse::err(&format!("更新商品失败: {}", e)));
+        return Json(ApiResponse::err(&crate::utils::db_err(
+            "更新商品失败: {}",
+            &e,
+        )));
     }
 
     Json(ApiResponse::msg("商品更新成功"))
@@ -1283,7 +1230,12 @@ pub async fn delete_goods(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(conn) => conn,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
 
     if body.ids.is_empty() {
@@ -1354,7 +1306,10 @@ pub async fn delete_goods(
             let sql = "DELETE FROM tBas_Goods WHERE GDSID = @p1";
             let id_str = id.as_str();
             if let Err(e) = conn.execute(sql, &[&id_str]).await {
-                return Json(ApiResponse::err(&format!("彻底删除商品失败: {}", e)));
+                return Json(ApiResponse::err(&crate::utils::db_err(
+                    "彻底删除商品失败: {}",
+                    &e,
+                )));
             }
         }
         return Json(ApiResponse::msg(&format!(
@@ -1368,7 +1323,10 @@ pub async fn delete_goods(
         let sql = "UPDATE tBas_Goods SET State = 'D' WHERE GDSID = @p1";
         let id_str = id.as_str();
         if let Err(e) = conn.execute(sql, &[&id_str]).await {
-            return Json(ApiResponse::err(&format!("作废商品失败: {}", e)));
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "作废商品失败: {}",
+                &e,
+            )));
         }
     }
 
@@ -1384,7 +1342,12 @@ pub async fn get_customers(
 ) -> Json<ApiResponse<Vec<serde_json::Value>>> {
     let mut conn = match get_pool().get().await {
         Ok(conn) => conn,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
     let page = params.page.unwrap_or(1);
     let page_size = std::cmp::min(params.page_size.unwrap_or(20), 1000);
@@ -1421,23 +1384,43 @@ pub async fn get_customers(
     let mut total: i32 = 0;
     let count_stream = match conn.query(&count_sql, &param_refs).await {
         Ok(stream) => stream,
-        Err(e) => return Json(ApiResponse::err(&format!("查询客户总数失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询客户总数失败: {}",
+                &e,
+            )));
+        }
     };
     match count_stream.into_row().await {
         Ok(Some(row)) => {
             total = row.get::<i32, _>("cnt").unwrap_or(0);
         }
         Ok(None) => {}
-        Err(e) => return Json(ApiResponse::err(&format!("获取客户总数行失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取客户总数行失败: {}",
+                &e,
+            )));
+        }
     }
 
     let data_stream = match conn.query(&paginated_sql, &param_refs).await {
         Ok(stream) => stream,
-        Err(e) => return Json(ApiResponse::err(&format!("查询客户数据失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询客户数据失败: {}",
+                &e,
+            )));
+        }
     };
     let rows: Vec<Row> = match data_stream.into_first_result().await {
         Ok(rows) => rows,
-        Err(e) => return Json(ApiResponse::err(&format!("获取客户数据结果失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取客户数据结果失败: {}",
+                &e,
+            )));
+        }
     };
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
@@ -1455,7 +1438,12 @@ pub async fn get_goods(
 ) -> Json<ApiResponse<Vec<serde_json::Value>>> {
     let mut conn = match get_pool().get().await {
         Ok(conn) => conn,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
     let page = params.page.unwrap_or(1);
     let page_size = std::cmp::min(params.page_size.unwrap_or(20), 1000);
@@ -1494,23 +1482,43 @@ pub async fn get_goods(
     let mut total: i32 = 0;
     let count_stream = match conn.query(&count_sql, &param_refs).await {
         Ok(stream) => stream,
-        Err(e) => return Json(ApiResponse::err(&format!("查询商品总数失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询商品总数失败: {}",
+                &e,
+            )));
+        }
     };
     match count_stream.into_row().await {
         Ok(Some(row)) => {
             total = row.get::<i32, _>("cnt").unwrap_or(0);
         }
         Ok(None) => {}
-        Err(e) => return Json(ApiResponse::err(&format!("获取商品总数行失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取商品总数行失败: {}",
+                &e,
+            )));
+        }
     }
 
     let data_stream = match conn.query(&paginated_sql, &param_refs).await {
         Ok(stream) => stream,
-        Err(e) => return Json(ApiResponse::err(&format!("查询商品数据失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询商品数据失败: {}",
+                &e,
+            )));
+        }
     };
     let rows: Vec<Row> = match data_stream.into_first_result().await {
         Ok(rows) => rows,
-        Err(e) => return Json(ApiResponse::err(&format!("获取商品数据结果失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取商品数据结果失败: {}",
+                &e,
+            )));
+        }
     };
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
@@ -1527,7 +1535,12 @@ pub async fn get_dashboard_stats(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(conn) => conn,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
 
     let mut goods_count: i32 = 0;
@@ -1539,14 +1552,24 @@ pub async fn get_dashboard_stats(
         .await
     {
         Ok(stream) => stream,
-        Err(e) => return Json(ApiResponse::err(&format!("查询商品数量失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询商品数量失败: {}",
+                &e,
+            )));
+        }
     };
     match stream.into_row().await {
         Ok(Some(row)) => {
             goods_count = row.get::<i32, _>("cnt").unwrap_or(0);
         }
         Ok(None) => {}
-        Err(e) => return Json(ApiResponse::err(&format!("获取商品数量行失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取商品数量行失败: {}",
+                &e,
+            )));
+        }
     }
 
     let mut supplier_count: i32 = 0;
@@ -1558,14 +1581,24 @@ pub async fn get_dashboard_stats(
         .await
     {
         Ok(stream) => stream,
-        Err(e) => return Json(ApiResponse::err(&format!("查询供应商数量失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询供应商数量失败: {}",
+                &e,
+            )));
+        }
     };
     match stream.into_row().await {
         Ok(Some(row)) => {
             supplier_count = row.get::<i32, _>("cnt").unwrap_or(0);
         }
         Ok(None) => {}
-        Err(e) => return Json(ApiResponse::err(&format!("获取供应商数量行失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取供应商数量行失败: {}",
+                &e,
+            )));
+        }
     }
 
     let mut customer_count: i32 = 0;
@@ -1577,14 +1610,24 @@ pub async fn get_dashboard_stats(
         .await
     {
         Ok(stream) => stream,
-        Err(e) => return Json(ApiResponse::err(&format!("查询客户数量失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询客户数量失败: {}",
+                &e,
+            )));
+        }
     };
     match stream.into_row().await {
         Ok(Some(row)) => {
             customer_count = row.get::<i32, _>("cnt").unwrap_or(0);
         }
         Ok(None) => {}
-        Err(e) => return Json(ApiResponse::err(&format!("获取客户数量行失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取客户数量行失败: {}",
+                &e,
+            )));
+        }
     }
 
     let mut purchase_order_count: i32 = 0;
@@ -1614,14 +1657,24 @@ pub async fn get_dashboard_stats(
         .await
     {
         Ok(stream) => stream,
-        Err(e) => return Json(ApiResponse::err(&format!("查询活跃商品数量失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询活跃商品数量失败: {}",
+                &e,
+            )));
+        }
     };
     match stream.into_row().await {
         Ok(Some(row)) => {
             active_goods_count = row.get::<i32, _>("cnt").unwrap_or(0);
         }
         Ok(None) => {}
-        Err(e) => return Json(ApiResponse::err(&format!("获取活跃商品数量行失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取活跃商品数量行失败: {}",
+                &e,
+            )));
+        }
     }
 
     let mut sales_trend = serde_json::json!([]);
@@ -1709,7 +1762,12 @@ pub async fn get_inventory_stock(
 ) -> Json<ApiResponse<Vec<serde_json::Value>>> {
     let mut conn = match get_pool().get().await {
         Ok(conn) => conn,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
 
     let page = params.page.unwrap_or(1);
@@ -1797,23 +1855,43 @@ pub async fn get_inventory_stock(
     let mut total: i32 = 0;
     let count_stream = match conn.query(&count_sql, &param_refs).await {
         Ok(stream) => stream,
-        Err(e) => return Json(ApiResponse::err(&format!("查询库存总数失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询库存总数失败: {}",
+                &e,
+            )));
+        }
     };
     match count_stream.into_row().await {
         Ok(Some(row)) => {
             total = row.get::<i32, _>("cnt").unwrap_or(0);
         }
         Ok(None) => {}
-        Err(e) => return Json(ApiResponse::err(&format!("获取库存总数行失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取库存总数行失败: {}",
+                &e,
+            )));
+        }
     }
 
     let data_stream = match conn.query(&paginated_sql, &param_refs).await {
         Ok(stream) => stream,
-        Err(e) => return Json(ApiResponse::err(&format!("查询库存数据失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询库存数据失败: {}",
+                &e,
+            )));
+        }
     };
     let rows: Vec<Row> = match data_stream.into_first_result().await {
         Ok(rows) => rows,
-        Err(e) => return Json(ApiResponse::err(&format!("获取库存数据结果失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取库存数据结果失败: {}",
+                &e,
+            )));
+        }
     };
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
@@ -1831,7 +1909,12 @@ pub async fn get_stock_summary(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(conn) => conn,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
 
     let mut base_query = "SELECT \
@@ -1897,7 +1980,12 @@ pub async fn get_stock_summary(
         .collect();
     let stream = match conn.query(&base_query, &param_refs).await {
         Ok(s) => s,
-        Err(e) => return Json(ApiResponse::err(&format!("查询库存汇总失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询库存汇总失败: {}",
+                &e,
+            )));
+        }
     };
     let row = match stream.into_row().await {
         Ok(Some(r)) => r,
@@ -1906,7 +1994,12 @@ pub async fn get_stock_summary(
                 serde_json::json!({ "product_types": 0, "record_count": 0, "total_value": 0.0, "total_quantity": 0 }),
             ));
         }
-        Err(e) => return Json(ApiResponse::err(&format!("获取库存汇总行失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取库存汇总行失败: {}",
+                &e,
+            )));
+        }
     };
     let summary = serde_json::json!({
         "product_types": row.get::<i32, _>("product_types").unwrap_or(0),
@@ -1922,7 +2015,12 @@ pub async fn get_sales_analysis(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(conn) => conn,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
 
     let mut monthly_sales = serde_json::json!([]);
@@ -2015,7 +2113,12 @@ pub async fn get_purchase_analysis(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(conn) => conn,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
 
     let mut monthly_purchase = serde_json::json!([]);
@@ -2084,7 +2187,7 @@ pub async fn create_supplier(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("DB: {}", e))),
+        Err(e) => return Json(ApiResponse::err(&crate::utils::db_err("DB: {}", &e))),
     };
     if body.SuppNo.is_empty() || body.SuppName.is_empty() {
         return Json(ApiResponse::err("供应商编码和名称不能为空"));
@@ -2148,7 +2251,10 @@ pub async fn create_supplier(
         )
         .await
     {
-        return Json(ApiResponse::err(&format!("新增供应商失败: {}", e)));
+        return Json(ApiResponse::err(&crate::utils::db_err(
+            "新增供应商失败: {}",
+            &e,
+        )));
     }
     Json(ApiResponse::msg("供应商新增成功"))
 }
@@ -2184,7 +2290,7 @@ pub async fn update_supplier(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("DB: {}", e))),
+        Err(e) => return Json(ApiResponse::err(&crate::utils::db_err("DB: {}", &e))),
     };
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let zero_uuid = "00000000-0000-0000-0000-000000000000";
@@ -2241,7 +2347,10 @@ pub async fn update_supplier(
         )
         .await
     {
-        return Json(ApiResponse::err(&format!("更新供应商失败: {}", e)));
+        return Json(ApiResponse::err(&crate::utils::db_err(
+            "更新供应商失败: {}",
+            &e,
+        )));
     }
     Json(ApiResponse::msg("供应商更新成功"))
 }
@@ -2279,7 +2388,7 @@ pub async fn create_warehouse(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("DB: {}", e))),
+        Err(e) => return Json(ApiResponse::err(&crate::utils::db_err("DB: {}", &e))),
     };
     if body.StkCode.is_empty() || body.StkName.is_empty() {
         return Json(ApiResponse::err("仓库编码和名称不能为空"));
@@ -2352,7 +2461,10 @@ pub async fn create_warehouse(
         )
         .await
     {
-        return Json(ApiResponse::err(&format!("新增仓库失败: {}", e)));
+        return Json(ApiResponse::err(&crate::utils::db_err(
+            "新增仓库失败: {}",
+            &e,
+        )));
     }
     Json(ApiResponse::msg("仓库新增成功"))
 }
@@ -2391,7 +2503,7 @@ pub async fn update_warehouse(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("DB: {}", e))),
+        Err(e) => return Json(ApiResponse::err(&crate::utils::db_err("DB: {}", &e))),
     };
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let zero_uuid = "00000000-0000-0000-0000-000000000000".to_string();
@@ -2458,7 +2570,10 @@ pub async fn update_warehouse(
         )
         .await
     {
-        return Json(ApiResponse::err(&format!("更新仓库失败: {}", e)));
+        return Json(ApiResponse::err(&crate::utils::db_err(
+            "更新仓库失败: {}",
+            &e,
+        )));
     }
     Json(ApiResponse::msg("仓库更新成功"))
 }
@@ -2477,7 +2592,7 @@ pub async fn create_brand(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("DB: {}", e))),
+        Err(e) => return Json(ApiResponse::err(&crate::utils::db_err("DB: {}", &e))),
     };
     if body.BrandCode.is_empty() || body.BrandName.is_empty() {
         return Json(ApiResponse::err("品牌编码和名称不能为空"));
@@ -2494,7 +2609,10 @@ pub async fn create_brand(
         )
         .await
     {
-        return Json(ApiResponse::err(&format!("新增品牌失败: {}", e)));
+        return Json(ApiResponse::err(&crate::utils::db_err(
+            "新增品牌失败: {}",
+            &e,
+        )));
     }
     Json(ApiResponse::msg("品牌新增成功"))
 }
@@ -2514,7 +2632,7 @@ pub async fn update_brand(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("DB: {}", e))),
+        Err(e) => return Json(ApiResponse::err(&crate::utils::db_err("DB: {}", &e))),
     };
     let sql = r#"UPDATE tBas_Brand SET BrandCode=@p1, BrandName=@p2, BrandEN=@p3, Used=@p4 WHERE BrandID=@p5"#;
     let branden = body.BrandEN.as_deref().unwrap_or("");
@@ -2532,7 +2650,10 @@ pub async fn update_brand(
         )
         .await
     {
-        return Json(ApiResponse::err(&format!("更新品牌失败: {}", e)));
+        return Json(ApiResponse::err(&crate::utils::db_err(
+            "更新品牌失败: {}",
+            &e,
+        )));
     }
     Json(ApiResponse::msg("品牌更新成功"))
 }
@@ -2569,7 +2690,7 @@ pub async fn create_employee(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("DB: {}", e))),
+        Err(e) => return Json(ApiResponse::err(&crate::utils::db_err("DB: {}", &e))),
     };
     if body.EmpNo.is_empty() || body.EmpName.is_empty() {
         return Json(ApiResponse::err("员工编码和姓名不能为空"));
@@ -2649,7 +2770,10 @@ pub async fn create_employee(
         )
         .await
     {
-        return Json(ApiResponse::err(&format!("新增员工失败: {}", e)));
+        return Json(ApiResponse::err(&crate::utils::db_err(
+            "新增员工失败: {}",
+            &e,
+        )));
     }
     Json(ApiResponse::msg("员工新增成功"))
 }
@@ -2687,7 +2811,7 @@ pub async fn update_employee(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("DB: {}", e))),
+        Err(e) => return Json(ApiResponse::err(&crate::utils::db_err("DB: {}", &e))),
     };
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let zero_uuid = "00000000-0000-0000-0000-000000000000";
@@ -2826,7 +2950,10 @@ pub async fn update_employee(
     values.push(&body.EmpID);
 
     if let Err(e) = conn.execute(&sql, &values).await {
-        return Json(ApiResponse::err(&format!("更新员工失败: {}", e)));
+        return Json(ApiResponse::err(&crate::utils::db_err(
+            "更新员工失败: {}",
+            &e,
+        )));
     }
     Json(ApiResponse::msg("员工更新成功"))
 }
@@ -2836,7 +2963,12 @@ pub async fn get_profit_analysis(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(conn) => conn,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
 
     let mut monthly_profit = serde_json::json!([]);
@@ -2889,7 +3021,12 @@ pub async fn get_warehouses(
 ) -> Json<ApiResponse<Vec<serde_json::Value>>> {
     let mut conn = match get_pool().get().await {
         Ok(conn) => conn,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
     let page = params.page.unwrap_or(1);
     let page_size = std::cmp::min(params.page_size.unwrap_or(20), 1000);
@@ -2908,23 +3045,43 @@ pub async fn get_warehouses(
     let mut total: i32 = 0;
     let count_stream = match conn.query(&count_sql, &[]).await {
         Ok(stream) => stream,
-        Err(e) => return Json(ApiResponse::err(&format!("查询仓库总数失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询仓库总数失败: {}",
+                &e,
+            )));
+        }
     };
     match count_stream.into_row().await {
         Ok(Some(row)) => {
             total = row.get::<i32, _>("cnt").unwrap_or(0);
         }
         Ok(None) => {}
-        Err(e) => return Json(ApiResponse::err(&format!("获取仓库总数行失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取仓库总数行失败: {}",
+                &e,
+            )));
+        }
     }
 
     let data_stream = match conn.query(&paginated_sql, &[]).await {
         Ok(stream) => stream,
-        Err(e) => return Json(ApiResponse::err(&format!("查询仓库数据失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询仓库数据失败: {}",
+                &e,
+            )));
+        }
     };
     let rows: Vec<Row> = match data_stream.into_first_result().await {
         Ok(rows) => rows,
-        Err(e) => return Json(ApiResponse::err(&format!("获取仓库数据结果失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取仓库数据结果失败: {}",
+                &e,
+            )));
+        }
     };
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
@@ -2942,7 +3099,12 @@ pub async fn get_employees(
 ) -> Json<ApiResponse<Vec<serde_json::Value>>> {
     let mut conn = match get_pool().get().await {
         Ok(conn) => conn,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
     let page = params.page.unwrap_or(1);
     let page_size = std::cmp::min(params.page_size.unwrap_or(20), 1000);
@@ -2979,23 +3141,43 @@ pub async fn get_employees(
     let mut total: i32 = 0;
     let count_stream = match conn.query(&count_sql, &param_refs).await {
         Ok(stream) => stream,
-        Err(e) => return Json(ApiResponse::err(&format!("查询员工总数失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询员工总数失败: {}",
+                &e,
+            )));
+        }
     };
     match count_stream.into_row().await {
         Ok(Some(row)) => {
             total = row.get::<i32, _>("cnt").unwrap_or(0);
         }
         Ok(None) => {}
-        Err(e) => return Json(ApiResponse::err(&format!("获取员工总数行失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取员工总数行失败: {}",
+                &e,
+            )));
+        }
     }
 
     let data_stream = match conn.query(&paginated_sql, &param_refs).await {
         Ok(stream) => stream,
-        Err(e) => return Json(ApiResponse::err(&format!("查询员工数据失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询员工数据失败: {}",
+                &e,
+            )));
+        }
     };
     let rows: Vec<Row> = match data_stream.into_first_result().await {
         Ok(rows) => rows,
-        Err(e) => return Json(ApiResponse::err(&format!("获取员工数据结果失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取员工数据结果失败: {}",
+                &e,
+            )));
+        }
     };
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
@@ -3013,7 +3195,12 @@ pub async fn get_brands(
 ) -> Json<ApiResponse<Vec<serde_json::Value>>> {
     let mut conn = match get_pool().get().await {
         Ok(conn) => conn,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
     let page = params.page.unwrap_or(1);
     let page_size = std::cmp::min(params.page_size.unwrap_or(20), 1000);
@@ -3032,23 +3219,43 @@ pub async fn get_brands(
     let mut total: i32 = 0;
     let count_stream = match conn.query(&count_sql, &[]).await {
         Ok(stream) => stream,
-        Err(e) => return Json(ApiResponse::err(&format!("查询品牌总数失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询品牌总数失败: {}",
+                &e,
+            )));
+        }
     };
     match count_stream.into_row().await {
         Ok(Some(row)) => {
             total = row.get::<i32, _>("cnt").unwrap_or(0);
         }
         Ok(None) => {}
-        Err(e) => return Json(ApiResponse::err(&format!("获取品牌总数行失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取品牌总数行失败: {}",
+                &e,
+            )));
+        }
     }
 
     let data_stream = match conn.query(&paginated_sql, &[]).await {
         Ok(stream) => stream,
-        Err(e) => return Json(ApiResponse::err(&format!("查询品牌数据失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询品牌数据失败: {}",
+                &e,
+            )));
+        }
     };
     let rows: Vec<Row> = match data_stream.into_first_result().await {
         Ok(rows) => rows,
-        Err(e) => return Json(ApiResponse::err(&format!("获取品牌数据结果失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取品牌数据结果失败: {}",
+                &e,
+            )));
+        }
     };
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 

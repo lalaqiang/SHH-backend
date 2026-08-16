@@ -19,6 +19,11 @@ const BCRYPT_COST: u32 = 12;
 /// bcrypt 哈希前缀，用于区分格式
 pub const BCRYPT_PREFIX: &str = "BCRYPT:";
 
+/// 防枚举等时校验用的固定 bcrypt 哈希（cost 与真实密码一致 = 12，明文为无意义占位串）。
+/// 仅用于"账号不存在"分支调用 verify_password 消耗与真实校验相同的时间，返回值丢弃。
+pub const DUMMY_BCRYPT_FOR_TIMING: &str =
+    "BCRYPT:$2b$12$RDfMsRa4Pl3Ov5ImxlRAMu5UcQ1TrXO4y4mshRmt5/6sSvLaiWZ9y";
+
 /// 旧 SHA256+静态盐前缀（仅用于验证旧密码，不再用于新哈希）
 const SHA256_PREFIX: &str = "SHA256:";
 /// 旧静态盐（仅用于验证旧 SHA256 密码）

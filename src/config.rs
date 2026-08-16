@@ -18,6 +18,13 @@ pub struct Config {
     /// 是否信任反向代理（nginx 等）设置的 X-Forwarded-For / X-Real-IP。
     /// 仅当服务只经受信代理暴露时设为 true；否则攻击者可伪造转发头绕过限流。
     pub trust_proxy: bool,
+    /// SQL Server 连接加密级别：off / on / not_supported（默认）/ required。
+    /// 默认 not_supported 保持对旧版 SQL Server Express 的兼容；
+    /// 生产环境跨网段访问数据库时建议 required（见 .env.example）。
+    pub db_encryption: String,
+    /// 是否跳过 DB TLS 证书校验（默认 true，兼容自签证书——加密但不去验身份）。
+    /// 生产建议在 DB 侧配置有效证书后改为 false。
+    pub db_trust_cert: bool,
     /// 是否开放移动端自助注册（默认关闭）。
     /// /api/mobile/register 是公开端点，开启意味着任何人可匿名创建可登录账号，
     /// 仅在确有业务需要（如门店导购自助开通）且配合验证码/限流时才设为 true。
@@ -83,6 +90,11 @@ impl Config {
             trust_proxy: std::env::var("TRUST_PROXY")
                 .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
                 .unwrap_or(false),
+            db_encryption: std::env::var("DB_ENCRYPTION")
+                .unwrap_or_else(|_| "not_supported".into()),
+            db_trust_cert: std::env::var("DB_TRUST_CERT")
+                .map(|v| !(v.eq_ignore_ascii_case("false") || v == "0"))
+                .unwrap_or(true),
             allow_mobile_register: std::env::var("ALLOW_MOBILE_REGISTER")
                 .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
                 .unwrap_or(false),
@@ -98,9 +110,19 @@ impl Config {
             &self.db_user,
             &self.db_password,
         ));
-        config.trust_cert();
-        // 本地 SQL Server Express 通常不支持加密,使用 NotSupported 避免 TLS 握手超时
-        config.encryption(tiberius::EncryptionLevel::NotSupported);
+        // P1 修复：加密级别改为可配置（DB_ENCRYPTION），默认 NotSupported 保持
+        // 对本地 SQL Server Express 的兼容；跨网段部署建议 required。
+        // 证书校验同样可配置（DB_TRUST_CERT，默认 true 兼容自签证书）：
+        // trust_cert=true 时只加密不验身份，防被动窃听但不防中间人。
+        match self.db_encryption.to_ascii_lowercase().as_str() {
+            "off" => config.encryption(tiberius::EncryptionLevel::Off),
+            "on" => config.encryption(tiberius::EncryptionLevel::On),
+            "required" => config.encryption(tiberius::EncryptionLevel::Required),
+            _ => config.encryption(tiberius::EncryptionLevel::NotSupported),
+        }
+        if self.db_trust_cert {
+            config.trust_cert();
+        }
         // 工作站 ID 便于 SQL Server 端日志排查
         config.application_name("ERP-Server");
         config

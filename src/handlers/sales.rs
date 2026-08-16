@@ -193,7 +193,10 @@ pub async fn create_sales_order(
     }.await;
     if let Err(e) = tx_result {
         inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("销售订单保存失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "销售订单保存失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::ok(
         serde_json::json!({ "SoNo": so_no, "SOID": soid_out }),
@@ -284,7 +287,10 @@ pub async fn update_sales_order(
     }.await;
     if let Err(e) = tx_result {
         inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("销售订单更新失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "销售订单更新失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::msg("销售订单更新成功")))
 }
@@ -441,7 +447,10 @@ pub async fn create_sales_outbound(
     }.await;
     if let Err(e) = tx_result {
         inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("销售出库保存失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "销售出库保存失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::ok(
         serde_json::json!({ "IONo": io_no, "IOID": ioid_out }),
@@ -533,7 +542,10 @@ pub async fn update_sales_outbound(
     }.await;
     if let Err(e) = tx_result {
         inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("销售出库更新失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "销售出库更新失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::msg("销售出库更新成功")))
 }
@@ -665,7 +677,10 @@ pub async fn create_sales_quote(
     }.await;
     if let Err(e) = tx_result {
         inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("销售报价保存失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "销售报价保存失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::ok(
         serde_json::json!({ "SQNo": sq_no, "SQID": sqid_out }),
@@ -738,7 +753,10 @@ pub async fn update_sales_quote(
     }.await;
     if let Err(e) = tx_result {
         inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("销售报价更新失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "销售报价更新失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::msg("销售报价更新成功")))
 }
@@ -864,7 +882,10 @@ pub async fn create_sales_adjprice(
     }.await;
     if let Err(e) = tx_result {
         inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("销售调价保存失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "销售调价保存失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::ok(
         serde_json::json!({ "SAPNo": sap_no, "SAPID": sapid_out }),

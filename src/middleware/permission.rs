@@ -217,6 +217,13 @@ fn infer_permission_from_path(path: &str) -> Option<String> {
     None
 }
 
+/// 判断路径是否为"写操作动词结尾"的路径（供限流等模块复用）。
+/// 与 infer_common_action_permission 的动词表一致：末段命中写动词表
+/// 或为显式登记的写端点（如 /api/retail/sale）即视为写操作。
+pub fn is_write_action_path(path: &str) -> bool {
+    infer_common_action_permission(path).is_some()
+}
+
 /// 判断路径是否在白名单中
 fn is_whitelisted(path: &str) -> bool {
     const WHITELIST: &[&str] = &[
@@ -258,8 +265,6 @@ fn is_whitelisted(path: &str) -> bool {
         "/api/base/dashboard-stats",
         "/api/base/versions",
         "/api/base/stock-query",
-        "/api/base/retail-goods-search",
-        "/api/base/retail-sales-settle",
         "/api/inventory/stock-query",
         "/api/inventory/flows",
         "/api/health",

@@ -265,14 +265,6 @@ async fn main() {
             post(base_data::get_dashboard_stats),
         )
         .route("/api/dashboard/stats", post(base_data::get_dashboard_stats))
-        .route(
-            "/api/base/retail-goods-search",
-            post(base_data::retail_goods_search),
-        )
-        .route(
-            "/api/base/retail-sales-settle",
-            post(base_data::retail_sales_settle),
-        )
         .route("/api/base/versions", post(base_data::get_base_versions))
         // ===== Categories =====
         .route("/api/categories", post(categories::get_categories))
@@ -1088,13 +1080,39 @@ async fn main() {
         }
     };
     // P1-10: 启用 ConnectInfo，让 handler 可通过 ConnectInfo<SocketAddr> 获取客户端真实 IP
+    // P1 修复：优雅停机——收到 SIGTERM（容器停止）/Ctrl-C 后停止接收新连接，
+    // 等待进行中的请求（含库存过账事务）完成再退出，避免硬断连依赖 DB 端回滚。
     if let Err(e) = axum::serve(
         listener,
         api.into_make_service_with_connect_info::<SocketAddr>(),
     )
+    .with_graceful_shutdown(shutdown_signal())
     .await
     {
         tracing::error!("HTTP 服务异常退出: {}", e);
         std::process::exit(1);
+    }
+}
+
+/// 优雅停机信号：监听 Ctrl-C（全平台）与 SIGTERM（unix 容器）
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => tracing::info!("收到 Ctrl-C，开始优雅停机（等待进行中请求完成）..."),
+        _ = terminate => tracing::info!("收到 SIGTERM，开始优雅停机（等待进行中请求完成）..."),
     }
 }

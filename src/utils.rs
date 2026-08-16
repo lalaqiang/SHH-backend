@@ -63,6 +63,16 @@ fn format_guid_bytes(b: &[u8; 16]) -> String {
     )
 }
 
+/// P1 修复：错误细节不再回显给客户端。
+///
+/// 原先全库约 190 处 `ApiResponse::err(&format!("上下文: {}", e))` 会把 tiberius/DB 的
+/// 底层错误（含表结构、SQL 片段、连接串上下文）直接透给前端。
+/// 统一改走本函数：服务端 tracing 记录完整错误，客户端只收到上下文消息本身。
+pub fn db_err(context: &str, e: &impl std::fmt::Display) -> String {
+    tracing::error!(context = context, error = %e, "数据库/后端操作失败");
+    context.to_string()
+}
+
 #[derive(Serialize)]
 pub struct ApiResponse<T: Serialize> {
     pub success: bool,

@@ -668,7 +668,10 @@ pub async fn create_mobile_data(
             }.await;
             if let Err(e) = tx_result {
                 inventory_ledger::rollback_tran(&mut conn).await;
-                return Ok(Json(ApiResponse::err(&format!("盘点单保存失败: {}", e))));
+                return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+                    "盘点单保存失败: {}",
+                    &e,
+                ))));
             }
             return Ok(Json(ApiResponse::ok(
                 serde_json::json!({ "id": move_id, "MoveNo": move_no }),
@@ -837,7 +840,10 @@ pub async fn update_mobile_data(
             }.await;
             if let Err(e) = tx_result {
                 inventory_ledger::rollback_tran(&mut conn).await;
-                return Ok(Json(ApiResponse::err(&format!("盘点更新失败: {}", e))));
+                return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+                    "盘点更新失败: {}",
+                    &e,
+                ))));
             }
             return Ok(Json(ApiResponse::msg("更新成功")));
         }
@@ -887,7 +893,10 @@ pub async fn update_mobile_data(
             }.await;
             if let Err(e) = tx_result {
                 inventory_ledger::rollback_tran(&mut conn).await;
-                return Ok(Json(ApiResponse::err(&format!("补货更新失败: {}", e))));
+                return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+                    "补货更新失败: {}",
+                    &e,
+                ))));
             }
             return Ok(Json(ApiResponse::msg("更新成功")));
         }

@@ -5,7 +5,9 @@ use crate::services::inventory_ledger::record_oper;
 use crate::utils::ApiResponse;
 use crate::utils::error_codes::*;
 use crate::utils::jwt::{create_token, make_claims};
-use crate::utils::password::{hash_password, needs_upgrade, verify_password};
+use crate::utils::password::{
+    DUMMY_BCRYPT_FOR_TIMING, hash_password, needs_upgrade, verify_password,
+};
 use axum::{Extension, Json, extract::State};
 use serde::{Deserialize, Serialize};
 
@@ -73,14 +75,17 @@ pub async fn login(
     let row = match stream.into_row().await {
         Ok(Some(r)) => r,
         Ok(None) => {
+            // P1 修复（防工号枚举）：账号不存在与密码错误返回完全相同的消息与错误码，
+            // 并执行一次等时 dummy bcrypt 校验，消除"响应快=账号不存在"的时序侧信道
+            let _ = verify_password(&body.password, DUMMY_BCRYPT_FOR_TIMING);
             return Json(ApiResponse::<LoginResponse>::err_with_code(
-                "账号不存在或已停用/离职",
-                AUTH_USER_NOT_FOUND,
+                "工号或密码错误",
+                AUTH_LOGIN_FAILED,
             ));
         }
         Err(e) => {
             return Json(ApiResponse::<LoginResponse>::err_with_code(
-                &format!("读取用户数据失败: {}", e),
+                &crate::utils::db_err("读取用户数据失败", &e),
                 SYS_DB_ERROR,
             ));
         }
@@ -93,9 +98,10 @@ pub async fn login(
 
     // 密码为空，可能是NULL或字段不存在
     if stored_password.is_empty() || !verify_password(&body.password, &stored_password) {
+        // P1 修复：与"账号不存在"分支同消息同错误码，防枚举
         return Json(ApiResponse::<LoginResponse>::err_with_code(
-            "密码错误",
-            AUTH_PASSWORD_WRONG,
+            "工号或密码错误",
+            AUTH_LOGIN_FAILED,
         ));
     }
 

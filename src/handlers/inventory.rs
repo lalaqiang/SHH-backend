@@ -331,7 +331,10 @@ pub async fn create_io(
     }.await;
     if let Err(e) = tx_result {
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("入出库单保存失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "入出库单保存失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::ok(
         serde_json::json!({ "IONo": io_no, "IOID": ioid_out }),
@@ -412,7 +415,10 @@ pub async fn update_io(
     }.await;
     if let Err(e) = tx_result {
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("入出库单更新失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "入出库单更新失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::msg("入出库单更新成功")))
 }
@@ -560,7 +566,10 @@ pub async fn create_move(
     }.await;
     if let Err(e) = tx_result {
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("调拨单保存失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "调拨单保存失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::ok(
         serde_json::json!({ "MoveNO": move_no, "MoveID": moveid_out }),
@@ -642,7 +651,10 @@ pub async fn update_move(
     }.await;
     if let Err(e) = tx_result {
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("调拨单更新失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "调拨单更新失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::msg("调拨单更新成功")))
 }
@@ -778,7 +790,10 @@ pub async fn create_check(
     }.await;
     if let Err(e) = tx_result {
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("盘点单保存失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "盘点单保存失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::ok(
         serde_json::json!({ "TranNo": tran_no, "TranID": tranid_out }),
@@ -920,7 +935,10 @@ pub async fn create_replenish(
     }.await;
     if let Err(e) = tx_result {
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("补货申请保存失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "补货申请保存失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::ok(
         serde_json::json!({ "ReplenishApplyNo": apply_no, "ReplenishApplyID": apply_id_out }),
@@ -1424,7 +1442,10 @@ pub async fn replenish_from_alert(
             }
             Err(e) => {
                 rollback_tran(&mut conn).await;
-                return Ok(Json(ApiResponse::err(&format!("采购订单生成失败: {}", e))));
+                return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+                    "采购订单生成失败: {}",
+                    &e,
+                ))));
             }
         }
     }
@@ -2447,7 +2468,10 @@ pub async fn update_check(
     }.await;
     if let Err(e) = tx_result {
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("盘点单更新失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "盘点单更新失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::msg("盘点单更新成功")))
 }
@@ -2495,7 +2519,10 @@ pub async fn delete_io(
     .await;
     if let Err(e) = result {
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("删除失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "删除失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::msg("入出库单已删除")))
 }
@@ -2542,7 +2569,10 @@ pub async fn delete_move(
     .await;
     if let Err(e) = result {
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("删除失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "删除失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::msg("调拨单已删除")))
 }
@@ -2589,7 +2619,10 @@ pub async fn delete_check(
     .await;
     if let Err(e) = result {
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
-        return Ok(Json(ApiResponse::err(&format!("删除失败: {}", e))));
+        return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+            "删除失败: {}",
+            &e,
+        ))));
     }
     Ok(Json(ApiResponse::msg("盘点单已删除")))
 }

@@ -2123,7 +2123,12 @@ pub async fn generic_query(
     }
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Ok(Json(ApiResponse::err(&format!("数据库连接失败: {}", e)))),
+        Err(e) => {
+            return Ok(Json(ApiResponse::err(&crate::utils::db_err(
+                "数据库连接失败: {}",
+                &e,
+            ))));
+        }
     };
 
     // ★ 调试日志：打印收到的 where 条件（临时，排查 IsDefault 过滤问题）
@@ -2294,7 +2299,12 @@ pub async fn generic_export(
     }
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
 
     let built = build_base_query(
@@ -2324,7 +2334,12 @@ pub async fn generic_export(
     };
     let rows = match data_stream.into_first_result().await {
         Ok(r) => r,
-        Err(e) => return Json(ApiResponse::err(&format!("导出读取数据失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "导出读取数据失败: {}",
+                &e,
+            )));
+        }
     };
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
@@ -2377,7 +2392,12 @@ pub async fn generic_cleanup_orphan_stock(
 
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
 
     // 参数化 IN 子句
@@ -2437,9 +2457,19 @@ pub async fn generic_cleanup_orphan_stock(
                     }
                 }
             }
-            Err(e) => return Json(ApiResponse::err(&format!("查询孤儿库存记录失败: {}", e))),
+            Err(e) => {
+                return Json(ApiResponse::err(&crate::utils::db_err(
+                    "查询孤儿库存记录失败: {}",
+                    &e,
+                )));
+            }
         },
-        Err(e) => return Json(ApiResponse::err(&format!("查询孤儿库存记录失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询孤儿库存记录失败: {}",
+                &e,
+            )));
+        }
     }
 
     if orphan_keys.is_empty() {
@@ -2551,7 +2581,12 @@ pub async fn generic_delete(
     }
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
 
     if params.ids.is_empty() {
@@ -2609,7 +2644,12 @@ pub async fn generic_delete(
                     ));
                 }
             }
-            Err(e) => return Json(ApiResponse::err(&format!("引用检查失败: {}", e))),
+            Err(e) => {
+                return Json(ApiResponse::err(&crate::utils::db_err(
+                    "引用检查失败: {}",
+                    &e,
+                )));
+            }
         }
 
         // 引用检查通过，执行物理删除
@@ -2831,7 +2871,12 @@ pub async fn generic_restore(
     }
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
 
     // 自动选状态字段：先看客户端传入，再按表查找，最后兜底
@@ -3452,7 +3497,12 @@ pub async fn generic_tree(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
 
     // 修复 SQL 注入：校验所有用户可控的标识符（表名/字段名）
@@ -3566,9 +3616,14 @@ pub async fn generic_tree(
     let flat_rows = match conn.query(&sql, &[]).await {
         Ok(s) => match s.into_first_result().await {
             Ok(rows) => rows,
-            Err(e) => return Json(ApiResponse::err(&format!("读取数据失败: {}", e))),
+            Err(e) => {
+                return Json(ApiResponse::err(&crate::utils::db_err(
+                    "读取数据失败: {}",
+                    &e,
+                )));
+            }
         },
-        Err(e) => return Json(ApiResponse::err(&format!("查询失败: {}", e))),
+        Err(e) => return Json(ApiResponse::err(&crate::utils::db_err("查询失败: {}", &e))),
     };
 
     let mut flat: Vec<serde_json::Map<String, serde_json::Value>> = Vec::new();
@@ -3786,7 +3841,12 @@ pub async fn generic_create(
     }
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
 
     if params.data.is_empty() {
@@ -4011,7 +4071,10 @@ pub async fn generic_create(
             if is_true {
                 let clear_sql = "UPDATE [tBas_Stock] SET [IsDefault] = 0 WHERE [IsDefault] = 1";
                 if let Err(e) = conn.execute(clear_sql, &[]).await {
-                    return Json(ApiResponse::err(&format!("清除默认仓库失败: {}", e)));
+                    return Json(ApiResponse::err(&crate::utils::db_err(
+                        "清除默认仓库失败: {}",
+                        &e,
+                    )));
                 }
             }
         }
@@ -4133,7 +4196,12 @@ pub async fn generic_update(
     }
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
 
     if params.data.is_empty() {
@@ -4290,7 +4358,10 @@ pub async fn generic_update(
             if is_true {
                 let clear_sql = "UPDATE [tBas_Stock] SET [IsDefault] = 0 WHERE [IsDefault] = 1";
                 if let Err(e) = conn.execute(clear_sql, &[]).await {
-                    return Json(ApiResponse::err(&format!("清除默认仓库失败: {}", e)));
+                    return Json(ApiResponse::err(&crate::utils::db_err(
+                        "清除默认仓库失败: {}",
+                        &e,
+                    )));
                 }
             }
         }
@@ -4388,7 +4459,12 @@ pub async fn generic_import(
     }
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
 
     if params.data.is_empty() {
@@ -4452,7 +4528,10 @@ pub async fn generic_import(
 
     // 开启事务：保证全部成功或全部回滚
     if let Err(e) = inventory_ledger::begin_tran(&mut conn).await {
-        return Json(ApiResponse::err(&format!("开启事务失败: {}", e)));
+        return Json(ApiResponse::err(&crate::utils::db_err(
+            "开启事务失败: {}",
+            &e,
+        )));
     }
 
     let mut success_count = 0u32;
@@ -4634,7 +4713,10 @@ pub async fn generic_import(
         // 全部成功，提交事务
         if let Err(e) = inventory_ledger::commit_tran(&mut conn).await {
             let _ = inventory_ledger::rollback_tran(&mut conn).await;
-            return Json(ApiResponse::err(&format!("提交事务失败: {}", e)));
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "提交事务失败: {}",
+                &e,
+            )));
         }
         // 写操作日志
         let _ = inventory_ledger::record_oper(
@@ -4767,7 +4849,12 @@ pub async fn generic_batch_update(
     }
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
 
     if params.ids.is_empty() {
@@ -4861,7 +4948,10 @@ pub async fn generic_batch_update(
     }
 
     if let Err(e) = inventory_ledger::begin_tran(&mut conn).await {
-        return Json(ApiResponse::err(&format!("开启事务失败: {}", e)));
+        return Json(ApiResponse::err(&crate::utils::db_err(
+            "开启事务失败: {}",
+            &e,
+        )));
     }
 
     let updated_count: i64 = match conn.execute(&sql, &param_refs).await {
@@ -4869,13 +4959,19 @@ pub async fn generic_batch_update(
         Err(e) => {
             inventory_ledger::rollback_tran(&mut conn).await;
             tracing::warn!("批量更新失败: {:?}", e);
-            return Json(ApiResponse::err(&format!("批量更新失败: {}", e)));
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "批量更新失败: {}",
+                &e,
+            )));
         }
     };
 
     if let Err(e) = inventory_ledger::commit_tran(&mut conn).await {
         inventory_ledger::rollback_tran(&mut conn).await;
-        return Json(ApiResponse::err(&format!("提交事务失败: {}", e)));
+        return Json(ApiResponse::err(&crate::utils::db_err(
+            "提交事务失败: {}",
+            &e,
+        )));
     }
 
     // 事务提交成功后记录操作日志：每条 ID 一条，含修改前数据快照
@@ -4996,7 +5092,12 @@ pub async fn generic_import_excel(
     loop {
         let field = match multipart.next_field().await {
             Ok(f) => f,
-            Err(e) => return Json(ApiResponse::err(&format!("读取上传文件失败: {}", e))),
+            Err(e) => {
+                return Json(ApiResponse::err(&crate::utils::db_err(
+                    "读取上传文件失败: {}",
+                    &e,
+                )));
+            }
         };
         let Some(field) = field else {
             break;
@@ -5007,7 +5108,12 @@ pub async fn generic_import_excel(
         } else if name == "file" {
             let bytes = match field.bytes().await {
                 Ok(b) => b,
-                Err(e) => return Json(ApiResponse::err(&format!("读取文件内容失败: {}", e))),
+                Err(e) => {
+                    return Json(ApiResponse::err(&crate::utils::db_err(
+                        "读取文件内容失败: {}",
+                        &e,
+                    )));
+                }
             };
             file_data = bytes.to_vec();
         }
@@ -5048,7 +5154,12 @@ pub async fn generic_import_excel(
 
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
 
     let join_fields = get_join_fields_for_table(&table_name);
@@ -5189,7 +5300,12 @@ pub async fn generic_table_schema(
     }
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("获取数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "获取数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
     let sql = "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, CHARACTER_MAXIMUM_LENGTH \
                FROM INFORMATION_SCHEMA.COLUMNS \
@@ -5197,9 +5313,19 @@ pub async fn generic_table_schema(
     let rows = match conn.query(sql, &[&params.table]).await {
         Ok(stream) => match stream.into_first_result().await {
             Ok(r) => r,
-            Err(e) => return Json(ApiResponse::err(&format!("查询表结构失败: {}", e))),
+            Err(e) => {
+                return Json(ApiResponse::err(&crate::utils::db_err(
+                    "查询表结构失败: {}",
+                    &e,
+                )));
+            }
         },
-        Err(e) => return Json(ApiResponse::err(&format!("查询表结构失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询表结构失败: {}",
+                &e,
+            )));
+        }
     };
     let columns: Vec<serde_json::Value> = rows
         .iter()

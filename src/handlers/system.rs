@@ -31,7 +31,12 @@ pub async fn save_print_log(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
     let doc_type = body.doc_type.unwrap_or_default();
     let doc_id = body.doc_id.unwrap_or_default();
@@ -60,7 +65,10 @@ pub async fn save_print_log(
     let v5: &dyn tiberius::ToSql = &print_com_name;
     match conn.execute(sql, &[v1, v2, v3, v4, v5]).await {
         Ok(_) => Json(ApiResponse::msg("打印日志已记录")),
-        Err(e) => Json(ApiResponse::err(&format!("写入打印日志失败: {}", e))),
+        Err(e) => Json(ApiResponse::err(&crate::utils::db_err(
+            "写入打印日志失败: {}",
+            &e,
+        ))),
     }
 }
 
@@ -85,7 +93,12 @@ pub async fn get_role_list(
 ) -> Json<ApiResponse<Vec<serde_json::Value>>> {
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
     let page = params.page.unwrap_or(1);
     let page_size = std::cmp::min(params.page_size.unwrap_or(20), 1000);
@@ -117,11 +130,21 @@ pub async fn get_role_list(
     }
     let data_stream = match conn.query(&paginated_sql, &param_refs).await {
         Ok(s) => s,
-        Err(e) => return Json(ApiResponse::err(&format!("查询角色失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询角色失败: {}",
+                &e,
+            )));
+        }
     };
     let rows = match data_stream.into_first_result().await {
         Ok(r) => r,
-        Err(e) => return Json(ApiResponse::err(&format!("读取角色数据失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "读取角色数据失败: {}",
+                &e,
+            )));
+        }
     };
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
     Json(ApiResponse::ok_paginated(
@@ -137,16 +160,31 @@ pub async fn get_menu_list(
 ) -> Json<ApiResponse<Vec<serde_json::Value>>> {
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
     let sql = "SELECT SYM_ID, SYM_PID, SYM_CAPTION, SYM_NO, MDCallName, Used, Flg FROM tSys_Menus ORDER BY SYM_NO";
     let stream = match conn.query(sql, &[]).await {
         Ok(s) => s,
-        Err(e) => return Json(ApiResponse::err(&format!("查询菜单失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询菜单失败: {}",
+                &e,
+            )));
+        }
     };
     let rows = match stream.into_first_result().await {
         Ok(r) => r,
-        Err(e) => return Json(ApiResponse::err(&format!("读取菜单数据失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "读取菜单数据失败: {}",
+                &e,
+            )));
+        }
     };
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
     Json(ApiResponse::ok(data))
@@ -157,16 +195,31 @@ pub async fn get_dictionary_list(
 ) -> Json<ApiResponse<Vec<serde_json::Value>>> {
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
     let sql = "SELECT * FROM tBas_Dict ORDER BY DictType, SortNo, DictCode";
     let stream = match conn.query(sql, &[]).await {
         Ok(s) => s,
-        Err(e) => return Json(ApiResponse::err(&format!("查询字典失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询字典失败: {}",
+                &e,
+            )));
+        }
     };
     let rows = match stream.into_first_result().await {
         Ok(r) => r,
-        Err(e) => return Json(ApiResponse::err(&format!("读取字典数据失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "读取字典数据失败: {}",
+                &e,
+            )));
+        }
     };
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
     Json(ApiResponse::ok(data))
@@ -220,7 +273,7 @@ pub async fn create_oper_log(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("db error: {}", e))),
+        Err(e) => return Json(ApiResponse::err(&crate::utils::db_err("db error: {}", &e))),
     };
     // 优先用客户端传入的 user_code，否则从 token claims 提取
     let user_code = body.user_code.unwrap_or_else(|| claims.user_code.clone());
@@ -250,7 +303,7 @@ pub async fn get_oper_log_list(
 ) -> Json<ApiResponse<Vec<serde_json::Value>>> {
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("db error: {}", e))),
+        Err(e) => return Json(ApiResponse::err(&crate::utils::db_err("db error: {}", &e))),
     };
     let page = params.page.unwrap_or(1);
     let page_size = std::cmp::min(params.page_size.unwrap_or(20), 1000);
@@ -473,11 +526,21 @@ pub async fn get_oper_log_list(
     }
     let data_stream = match conn.query(&paginated_sql, &param_refs).await {
         Ok(s) => s,
-        Err(e) => return Json(ApiResponse::err(&format!("query log failed: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "query log failed: {}",
+                &e,
+            )));
+        }
     };
     let rows = match data_stream.into_first_result().await {
         Ok(r) => r,
-        Err(e) => return Json(ApiResponse::err(&format!("读取日志数据失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "读取日志数据失败: {}",
+                &e,
+            )));
+        }
     };
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
     Json(ApiResponse::ok_paginated(
@@ -504,7 +567,7 @@ pub async fn delete_oper_log(
     }
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("db error: {}", e))),
+        Err(e) => return Json(ApiResponse::err(&crate::utils::db_err("db error: {}", &e))),
     };
     let mut new_ids: Vec<String> = Vec::new();
     let mut old_ids: Vec<String> = Vec::new();
@@ -560,7 +623,7 @@ pub async fn cleanup_oper_log(
     }
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("db error: {}", e))),
+        Err(e) => return Json(ApiResponse::err(&crate::utils::db_err("db error: {}", &e))),
     };
     let cutoff = format!("DATEADD(day, -{}, GETDATE())", days);
     let del_new = format!("DELETE FROM tSys_OperLog WHERE OperDate < {}", cutoff);
@@ -619,7 +682,12 @@ pub async fn list_system_params(
 ) -> Json<ApiResponse<Vec<serde_json::Value>>> {
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
     let mut sql = "SELECT ParametersID, PCode, PName, PKind, PHelp, PTerm, PValue, EDate FROM tSys_Parameters WHERE 1=1".to_string();
     let mut query_params: Vec<Option<String>> = Vec::new();
@@ -647,11 +715,21 @@ pub async fn list_system_params(
         .collect();
     let stream = match conn.query(&sql, &param_refs).await {
         Ok(s) => s,
-        Err(e) => return Json(ApiResponse::err(&format!("查询系统参数失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询系统参数失败: {}",
+                &e,
+            )));
+        }
     };
     let rows = match stream.into_first_result().await {
         Ok(r) => r,
-        Err(e) => return Json(ApiResponse::err(&format!("读取系统参数失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "读取系统参数失败: {}",
+                &e,
+            )));
+        }
     };
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
     Json(ApiResponse::ok(data))
@@ -682,7 +760,12 @@ pub async fn save_system_param(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let pcode = body.PCode.unwrap_or_default();
@@ -704,7 +787,10 @@ pub async fn save_system_param(
             let v8: &dyn tiberius::ToSql = &pid;
             return match conn.execute(sql, &[v1, v2, v3, v4, v5, v6, v7, v8]).await {
                 Ok(_) => Json(ApiResponse::msg("参数更新成功")),
-                Err(e) => Json(ApiResponse::err(&format!("更新参数失败: {}", e))),
+                Err(e) => Json(ApiResponse::err(&crate::utils::db_err(
+                    "更新参数失败: {}",
+                    &e,
+                ))),
             };
         }
     }
@@ -720,7 +806,10 @@ pub async fn save_system_param(
     let v8: &dyn tiberius::ToSql = &now;
     match conn.execute(sql, &[v1, v2, v3, v4, v5, v6, v7, v8]).await {
         Ok(_) => Json(ApiResponse::msg("参数创建成功")),
-        Err(e) => Json(ApiResponse::err(&format!("创建参数失败: {}", e))),
+        Err(e) => Json(ApiResponse::err(&crate::utils::db_err(
+            "创建参数失败: {}",
+            &e,
+        ))),
     }
 }
 
@@ -735,13 +824,21 @@ pub async fn delete_system_param(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
     let sql = "DELETE FROM tSys_Parameters WHERE ParametersID = @p1";
     let v: &dyn tiberius::ToSql = &body.ParametersID;
     match conn.execute(sql, &[v]).await {
         Ok(_) => Json(ApiResponse::msg("参数删除成功")),
-        Err(e) => Json(ApiResponse::err(&format!("删除参数失败: {}", e))),
+        Err(e) => Json(ApiResponse::err(&crate::utils::db_err(
+            "删除参数失败: {}",
+            &e,
+        ))),
     }
 }
 
@@ -756,7 +853,12 @@ pub async fn get_sys_params(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
     let key = params.key.unwrap_or_default();
     let sql =
@@ -764,11 +866,21 @@ pub async fn get_sys_params(
     let v: &dyn tiberius::ToSql = &key;
     let stream = match conn.query(sql, &[v]).await {
         Ok(s) => s,
-        Err(e) => return Json(ApiResponse::err(&format!("查询参数失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "查询参数失败: {}",
+                &e,
+            )));
+        }
     };
     let rows = match stream.into_first_result().await {
         Ok(r) => r,
-        Err(e) => return Json(ApiResponse::err(&format!("读取参数失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "读取参数失败: {}",
+                &e,
+            )));
+        }
     };
     if let Some(row) = rows.first() {
         Json(ApiResponse::ok(row_to_json(row)))
@@ -789,7 +901,12 @@ pub async fn save_sys_params(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err(&format!("数据库连接失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&crate::utils::db_err(
+                "数据库连接失败: {}",
+                &e,
+            )));
+        }
     };
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let val = match &body.value {
@@ -814,7 +931,10 @@ pub async fn save_sys_params(
         let v3: &dyn tiberius::ToSql = &body.key;
         match conn.execute(sql, &[v1, v2, v3]).await {
             Ok(_) => Json(ApiResponse::msg("参数已更新")),
-            Err(e) => Json(ApiResponse::err(&format!("更新参数失败: {}", e))),
+            Err(e) => Json(ApiResponse::err(&crate::utils::db_err(
+                "更新参数失败: {}",
+                &e,
+            ))),
         }
     } else {
         let sql = "INSERT INTO tSys_Parameters (ParametersID, PCode, PName, PKind, PHelp, PValue, EUser, EDate) VALUES (NEWID(), @p1, @p2, 'custom', @p3, @p4, @p5, @p6)";
@@ -828,7 +948,10 @@ pub async fn save_sys_params(
         let v6: &dyn tiberius::ToSql = &now;
         match conn.execute(sql, &[v1, v2, v3, v4, v5, v6]).await {
             Ok(_) => Json(ApiResponse::msg("参数已保存")),
-            Err(e) => Json(ApiResponse::err(&format!("保存参数失败: {}", e))),
+            Err(e) => Json(ApiResponse::err(&crate::utils::db_err(
+                "保存参数失败: {}",
+                &e,
+            ))),
         }
     }
 }

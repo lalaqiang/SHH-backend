@@ -48,3 +48,6 @@ check_admin.ps1
 *.head.rs
 *.branch.rs
 /recovery/
+
+# 远程库数据转储（含业务数据/联系方式，且 >50MB，禁止入库）
+scripts/copy_remote_db/*_data*.sql

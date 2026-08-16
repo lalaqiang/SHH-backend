@@ -1,27 +1,27 @@
-use axum::extract::{State, Json, Extension};
-use serde::Deserialize;
-use tiberius::Row;
 use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
-use crate::utils::{ApiResponse, row_get_f64};
 use crate::handlers::base_data::try_get_value;
 use crate::middleware::auth::Claims;
+use crate::utils::{ApiResponse, row_get_f64};
+use axum::extract::{Extension, Json, State};
+use serde::Deserialize;
 use std::collections::HashMap;
+use tiberius::Row;
 
 #[derive(Deserialize)]
 pub struct ReportParams {
     pub start_date: Option<String>,
     pub end_date: Option<String>,
     // P0-2 修复：扩展业务维度筛选字段（所有 Option，不传时 None，不影响其他报表）
-    pub warehouse_id: Option<String>,   // 仓库 ID
-    pub gdstype_id: Option<String>,     // 商品类型 ID
-    pub brand_id: Option<String>,       // 品牌 ID
-    pub supp_id: Option<String>,        // 供应商 ID
-    pub cust_id: Option<String>,        // 客户 ID
-    pub emp_id: Option<String>,         // 业务员/采购员 EmpID
-    pub dept_id: Option<String>,        // 部门 ID
-    pub keyword: Option<String>,        // 关键词模糊搜索
+    pub warehouse_id: Option<String>, // 仓库 ID
+    pub gdstype_id: Option<String>,   // 商品类型 ID
+    pub brand_id: Option<String>,     // 品牌 ID
+    pub supp_id: Option<String>,      // 供应商 ID
+    pub cust_id: Option<String>,      // 客户 ID
+    pub emp_id: Option<String>,       // 业务员/采购员 EmpID
+    pub dept_id: Option<String>,      // 部门 ID
+    pub keyword: Option<String>,      // 关键词模糊搜索
 }
 
 pub async fn get_purchase_report(
@@ -270,10 +270,7 @@ pub async fn get_business_report(
     if let Ok(stream) = conn.query(&purchase_sql, &purchase_refs).await {
         if let Ok(rows) = stream.into_first_result().await {
             for row in &rows {
-                let month = row
-                    .get::<&str, _>("month")
-                    .unwrap_or("")
-                    .to_string();
+                let month = row.get::<&str, _>("month").unwrap_or("").to_string();
                 let amt = row_get_f64(&row, "purchase_amt");
                 let cnt = row.get::<i32, _>("purchase_count").unwrap_or(0);
                 purchase_map.insert(month, (amt, cnt));
@@ -329,10 +326,7 @@ pub async fn get_business_report(
     if let Ok(stream) = conn.query(&sales_sql, &sales_refs).await {
         if let Ok(rows) = stream.into_first_result().await {
             for row in &rows {
-                let month = row
-                    .get::<&str, _>("month")
-                    .unwrap_or("")
-                    .to_string();
+                let month = row.get::<&str, _>("month").unwrap_or("").to_string();
                 let sales_amt = row_get_f64(&row, "sales_amt");
                 let cost_amt = row_get_f64(&row, "cost_amt");
                 sales_map.insert(month, (sales_amt, cost_amt));
@@ -437,7 +431,11 @@ pub async fn get_stock_report(
     // 关键词筛选（仓库名或商品名）
     if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
-            sql.push_str(&format!(" AND (s.StockName LIKE @p{} OR g.GDSDesc LIKE @p{})", pidx, pidx + 1));
+            sql.push_str(&format!(
+                " AND (s.StockName LIKE @p{} OR g.GDSDesc LIKE @p{})",
+                pidx,
+                pidx + 1
+            ));
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
         }
@@ -459,8 +457,14 @@ pub async fn get_stock_report(
             let total_amt = row_get_f64(&row, "total_amt");
             let goods_count = row.get::<i32, _>("goods_count").unwrap_or(0);
             // 使用 try_get_value 处理 GUID/字符串类型，避免 tiberius 解析错误
-            let stock_id = try_get_value(&row, "StockID").as_str().map(|s| s.to_string()).unwrap_or_default();
-            let stock_name = try_get_value(&row, "StockName").as_str().map(|s| s.to_string()).unwrap_or_default();
+            let stock_id = try_get_value(&row, "StockID")
+                .as_str()
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            let stock_name = try_get_value(&row, "StockName")
+                .as_str()
+                .map(|s| s.to_string())
+                .unwrap_or_default();
             serde_json::json!({
                 "stockID": stock_id,
                 "stockName": stock_name,
@@ -533,7 +537,8 @@ pub async fn get_profit_analysis(
             "m.EmpID",
             "(SELECT TOP 1 e.EmpName FROM tBas_Emp e WHERE e.EmpID = m.EmpID)",
         ),
-        _ => ( // goods
+        _ => (
+            // goods
             "ISNULL(CONVERT(varchar(40), g.GDSID),'') AS DimID, ISNULL(g.GDSDesc,'(未填)') AS DimName",
             "LEFT JOIN tBas_Goods g ON d.GDSID = g.GDSID",
             "g.GDSID, g.GDSDesc",
@@ -572,7 +577,8 @@ pub async fn get_profit_analysis(
     }
     sql.push_str(&format!(" GROUP BY {} ORDER BY SaleAmt DESC", group_dim));
     let _ = order_dim; // suppress unused warning
-    let param_refs: Vec<&dyn tiberius::ToSql> = qparams.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let param_refs: Vec<&dyn tiberius::ToSql> =
+        qparams.iter().map(|v| v as &dyn tiberius::ToSql).collect();
     let stream = conn.query(&sql, &param_refs).await?;
     let rows: Vec<Row> = stream.into_first_result().await?;
     let mut items: Vec<serde_json::Value> = Vec::new();
@@ -584,7 +590,11 @@ pub async fn get_profit_analysis(
         let sale = row_get_f64(row, "SaleAmt");
         let cost = row_get_f64(row, "CostAmt");
         let profit = sale - cost;
-        let margin = if sale > 0.0001 { (profit / sale) * 100.0 } else { 0.0 };
+        let margin = if sale > 0.0001 {
+            (profit / sale) * 100.0
+        } else {
+            0.0
+        };
         grand_qty += qty;
         grand_sale += sale;
         grand_cost += cost;
@@ -600,7 +610,11 @@ pub async fn get_profit_analysis(
         }));
     }
     let grand_profit = grand_sale - grand_cost;
-    let grand_margin = if grand_sale > 0.0001 { (grand_profit / grand_sale) * 100.0 } else { 0.0 };
+    let grand_margin = if grand_sale > 0.0001 {
+        (grand_profit / grand_sale) * 100.0
+    } else {
+        0.0
+    };
     let data = serde_json::json!({
         "dim": dim,
         "items": items,
@@ -624,7 +638,7 @@ pub async fn get_profit_analysis(
 
 #[derive(Deserialize)]
 pub struct AgeAnalysisParams {
-    pub as_of_date: Option<String>,  // 截止日期（默认今天）
+    pub as_of_date: Option<String>, // 截止日期（默认今天）
 }
 
 pub async fn get_receivable_aging(
@@ -632,7 +646,9 @@ pub async fn get_receivable_aging(
     Json(params): Json<AgeAnalysisParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
-    let as_of = params.as_of_date.unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
+    let as_of = params
+        .as_of_date
+        .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
 
     let sql = r#"
         WITH Sales AS (
@@ -685,14 +701,22 @@ pub async fn get_receivable_aging(
     let stream = conn.query(sql, &[p1]).await?;
     let rows: Vec<Row> = stream.into_first_result().await?;
     let mut items: Vec<serde_json::Value> = Vec::new();
-    let mut s0 = 0.0; let mut s30 = 0.0; let mut s60 = 0.0; let mut s90 = 0.0; let mut st = 0.0;
+    let mut s0 = 0.0;
+    let mut s30 = 0.0;
+    let mut s60 = 0.0;
+    let mut s90 = 0.0;
+    let mut st = 0.0;
     for row in &rows {
         let b0 = row_get_f64(row, "B0_30");
         let b30 = row_get_f64(row, "B31_60");
         let b60 = row_get_f64(row, "B61_90");
         let b90 = row_get_f64(row, "B90Plus");
         let total = row_get_f64(row, "Total");
-        s0 += b0; s30 += b30; s60 += b60; s90 += b90; st += total;
+        s0 += b0;
+        s30 += b30;
+        s60 += b60;
+        s90 += b90;
+        st += total;
         items.push(serde_json::json!({
             "dimId": try_get_value(row, "DimID").as_str().map(|s| s.to_string()).unwrap_or_default(),
             "dimName": try_get_value(row, "DimName").as_str().map(|s| s.to_string()).unwrap_or_default(),
@@ -728,7 +752,9 @@ pub async fn get_payable_aging(
     Json(params): Json<AgeAnalysisParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
-    let as_of = params.as_of_date.unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
+    let as_of = params
+        .as_of_date
+        .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
 
     let sql = r#"
         WITH Purchases AS (
@@ -781,14 +807,22 @@ pub async fn get_payable_aging(
     let stream = conn.query(sql, &[p1]).await?;
     let rows: Vec<Row> = stream.into_first_result().await?;
     let mut items: Vec<serde_json::Value> = Vec::new();
-    let mut s0 = 0.0; let mut s30 = 0.0; let mut s60 = 0.0; let mut s90 = 0.0; let mut st = 0.0;
+    let mut s0 = 0.0;
+    let mut s30 = 0.0;
+    let mut s60 = 0.0;
+    let mut s90 = 0.0;
+    let mut st = 0.0;
     for row in &rows {
         let b0 = row_get_f64(row, "B0_30");
         let b30 = row_get_f64(row, "B31_60");
         let b60 = row_get_f64(row, "B61_90");
         let b90 = row_get_f64(row, "B90Plus");
         let total = row_get_f64(row, "Total");
-        s0 += b0; s30 += b30; s60 += b60; s90 += b90; st += total;
+        s0 += b0;
+        s30 += b30;
+        s60 += b60;
+        s90 += b90;
+        st += total;
         items.push(serde_json::json!({
             "dimId": try_get_value(row, "DimID").as_str().map(|s| s.to_string()).unwrap_or_default(),
             "dimName": try_get_value(row, "DimName").as_str().map(|s| s.to_string()).unwrap_or_default(),
@@ -840,7 +874,9 @@ pub async fn get_stock_turnover(
     let mut conn = get_pool().get().await?;
     let top_n = params.top_n.unwrap_or(50);
     // 默认最近 90 天
-    let end_date = params.end_date.clone()
+    let end_date = params
+        .end_date
+        .clone()
         .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
     let start_date = params.start_date.clone().unwrap_or_else(|| {
         let n = chrono::Local::now() - chrono::Duration::days(90);
@@ -854,9 +890,14 @@ pub async fn get_stock_turnover(
     let end_stock_rows: Vec<Row> = s1.into_first_result().await?;
     let mut end_stock: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
     for r in &end_stock_rows {
-        let gid = try_get_value(r, "GDSID").as_str().map(|s| s.to_string()).unwrap_or_default();
+        let gid = try_get_value(r, "GDSID")
+            .as_str()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
         let q = row_get_f64(r, "EndQty");
-        if !gid.is_empty() { end_stock.insert(gid, q); }
+        if !gid.is_empty() {
+            end_stock.insert(gid, q);
+        }
     }
 
     // 2) 按 GDSID 聚合期间出库量（出库类 Kind: SD/SI/POS/PR/OTO/RI/ADJ/O/REQ/DBO）
@@ -873,9 +914,14 @@ pub async fn get_stock_turnover(
     let out_rows: Vec<Row> = s2.into_first_result().await?;
     let mut out_map: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
     for r in &out_rows {
-        let gid = try_get_value(r, "GDSID").as_str().map(|s| s.to_string()).unwrap_or_default();
+        let gid = try_get_value(r, "GDSID")
+            .as_str()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
         let q = row_get_f64(r, "OutQty");
-        if !gid.is_empty() { out_map.insert(gid, q); }
+        if !gid.is_empty() {
+            out_map.insert(gid, q);
+        }
     }
 
     // 3) 按 GDSID 聚合期间入库量（入库类 Kind: PD/SR/OTI/DBI）
@@ -890,9 +936,14 @@ pub async fn get_stock_turnover(
     let in_rows: Vec<Row> = s3.into_first_result().await?;
     let mut in_map: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
     for r in &in_rows {
-        let gid = try_get_value(r, "GDSID").as_str().map(|s| s.to_string()).unwrap_or_default();
+        let gid = try_get_value(r, "GDSID")
+            .as_str()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
         let q = row_get_f64(r, "InQty");
-        if !gid.is_empty() { in_map.insert(gid, q); }
+        if !gid.is_empty() {
+            in_map.insert(gid, q);
+        }
     }
 
     // 4) 拉取商品基础信息（JOIN 关联表获取 GDSTypeName/BrandName/UnitName）
@@ -912,19 +963,30 @@ pub async fn get_stock_turnover(
     let mut grand_out = 0.0;
     let mut grand_end = 0.0;
     for r in &gds_rows {
-        let gid = try_get_value(r, "GDSID").as_str().map(|s| s.to_string()).unwrap_or_default();
-        if gid.is_empty() { continue; }
+        let gid = try_get_value(r, "GDSID")
+            .as_str()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        if gid.is_empty() {
+            continue;
+        }
         // 只统计有出库或库存的商品
         let out_q = *out_map.get(&gid).unwrap_or(&0.0);
         let in_q = *in_map.get(&gid).unwrap_or(&0.0);
         let end_q = *end_stock.get(&gid).unwrap_or(&0.0);
-        if out_q <= 0.0001 && end_q <= 0.0001 { continue; }
+        if out_q <= 0.0001 && end_q <= 0.0001 {
+            continue;
+        }
         let begin_q = end_q - in_q + out_q;
         let avg = (begin_q + end_q) / 2.0;
         let turnover = if avg > 0.0001 { out_q / avg } else { 0.0 };
         // 期间天数
         let days = days_between(&start_date, &end_date).max(1);
-        let turnover_days = if turnover > 0.0001 { (days as f64) / turnover } else { 0.0 };
+        let turnover_days = if turnover > 0.0001 {
+            (days as f64) / turnover
+        } else {
+            0.0
+        };
         grand_out += out_q;
         grand_end += end_q;
         let s_price = row_get_f64(r, "SPrice");
@@ -986,12 +1048,12 @@ fn days_between(s: &str, e: &str) -> i64 {
 
 #[derive(Deserialize)]
 pub struct AlertCenterParams {
-    pub over_days: Option<i32>,    // 应收/应付超期阈值（默认 30）
-    pub low_stock: Option<bool>,   // 是否包含低库存（默认 true）
-    pub over_recv: Option<bool>,   // 是否包含超期应收
-    pub over_pay: Option<bool>,    // 是否包含超期应付
-    pub zero_price: Option<bool>,  // 是否包含零价格商品
-    pub top_n: Option<i32>,        // 每类 TopN
+    pub over_days: Option<i32>,   // 应收/应付超期阈值（默认 30）
+    pub low_stock: Option<bool>,  // 是否包含低库存（默认 true）
+    pub over_recv: Option<bool>,  // 是否包含超期应收
+    pub over_pay: Option<bool>,   // 是否包含超期应付
+    pub zero_price: Option<bool>, // 是否包含零价格商品
+    pub top_n: Option<i32>,       // 每类 TopN
     // P1-3 修复：统一超期天数口径，与 ReceivableAging/PayableAging 的 as_of_date 对齐
     // 不传时默认今天（GETDATE），保持向后兼容
     pub as_of_date: Option<String>,
@@ -1066,7 +1128,8 @@ pub async fn get_alert_center(
 
     // 2) 超期应收（派生 AR：tStk_IO 销售/退货 + tFin_Receipt 收款，FIFO 冲抵）
     if do_recv {
-        let sql = format!(r#"
+        let sql = format!(
+            r#"
             WITH Sales AS (
                 SELECT io.IOID, io.IONo, io.CustID, io.IoDate, io.SumAmt,
                     ISNULL(c.CustName,'(未填)') AS CustName,
@@ -1094,7 +1157,10 @@ pub async fn get_alert_center(
                         WHEN RunTotal - Amt < ReceivedAmt THEN RunTotal - ReceivedAmt
                         ELSE Amt END) > 0.0001
               AND DATEDIFF(DAY, IoDate, {as_of}) > {od}
-            ORDER BY OverDays DESC"#, as_of = as_of_expr, od = over_days);
+            ORDER BY OverDays DESC"#,
+            as_of = as_of_expr,
+            od = over_days
+        );
         let stream = conn.query(&sql, &[]).await?;
         let rows: Vec<Row> = stream.into_first_result().await?;
         let mut items: Vec<serde_json::Value> = Vec::new();
@@ -1102,7 +1168,13 @@ pub async fn get_alert_center(
             let over_d: i32 = r.get::<i32, _>("OverDays").unwrap_or(0);
             let total = row_get_f64(r, "TotalAmt");
             let remain = row_get_f64(r, "RemainAmt");
-            let level = if over_d > 90 { "critical" } else if over_d > 60 { "danger" } else { "warning" };
+            let level = if over_d > 90 {
+                "critical"
+            } else if over_d > 60 {
+                "danger"
+            } else {
+                "warning"
+            };
             items.push(serde_json::json!({
                 "id": try_get_value(r, "IOID").as_str().map(|s| s.to_string()).unwrap_or_default(),
                 "docNo": r.get::<&str, _>("IONo").unwrap_or(""),
@@ -1126,7 +1198,8 @@ pub async fn get_alert_center(
 
     // 3) 超期应付（派生 AP：tStk_IO 采购/退货 + tFin_Payment 付款，FIFO 冲抵）
     if do_pay {
-        let sql = format!(r#"
+        let sql = format!(
+            r#"
             WITH Purchases AS (
                 SELECT io.IOID, io.IONo, io.SuppID, io.IoDate, io.SumAmt,
                     ISNULL(s.SuppName,'(未填)') AS SuppName,
@@ -1154,7 +1227,10 @@ pub async fn get_alert_center(
                         WHEN RunTotal - Amt < PaidAmt THEN RunTotal - PaidAmt
                         ELSE Amt END) > 0.0001
               AND DATEDIFF(DAY, IoDate, {as_of}) > {od}
-            ORDER BY OverDays DESC"#, as_of = as_of_expr, od = over_days);
+            ORDER BY OverDays DESC"#,
+            as_of = as_of_expr,
+            od = over_days
+        );
         let stream = conn.query(&sql, &[]).await?;
         let rows: Vec<Row> = stream.into_first_result().await?;
         let mut items: Vec<serde_json::Value> = Vec::new();
@@ -1162,7 +1238,13 @@ pub async fn get_alert_center(
             let over_d: i32 = r.get::<i32, _>("OverDays").unwrap_or(0);
             let total = row_get_f64(r, "TotalAmt");
             let remain = row_get_f64(r, "RemainAmt");
-            let level = if over_d > 90 { "critical" } else if over_d > 60 { "danger" } else { "warning" };
+            let level = if over_d > 90 {
+                "critical"
+            } else if over_d > 60 {
+                "danger"
+            } else {
+                "warning"
+            };
             items.push(serde_json::json!({
                 "id": try_get_value(r, "IOID").as_str().map(|s| s.to_string()).unwrap_or_default(),
                 "docNo": r.get::<&str, _>("IONo").unwrap_or(""),
@@ -1197,9 +1279,13 @@ pub async fn get_alert_center(
         for r in rows.iter().take(top_n) {
             let s_price = row_get_f64(r, "SPrice");
             let a_in = row_get_f64(r, "AInPrice");
-            let missing: Vec<&str> = if s_price <= 0.0001 && a_in <= 0.0001 { vec!["SPrice", "AInPrice"] }
-                                       else if s_price <= 0.0001 { vec!["SPrice"] }
-                                       else { vec!["AInPrice"] };
+            let missing: Vec<&str> = if s_price <= 0.0001 && a_in <= 0.0001 {
+                vec!["SPrice", "AInPrice"]
+            } else if s_price <= 0.0001 {
+                vec!["SPrice"]
+            } else {
+                vec!["AInPrice"]
+            };
             items.push(serde_json::json!({
                 "id": try_get_value(r, "GDSID").as_str().map(|s| s.to_string()).unwrap_or_default(),
                 "code": r.get::<&str, _>("GDSNO").unwrap_or(""),
@@ -1237,9 +1323,9 @@ pub async fn get_alert_center(
 /// 同时修复 PValue 解析 bug：旧前端用 parseFloat(整个JSON字符串) 永远返回 NaN，actual 始终为 0。
 #[derive(Deserialize)]
 pub struct SalesTaskSummaryParams {
-    pub month: Option<String>,      // YYYY-MM，按 EndDate 月份筛选
-    pub state: Option<String>,      // 任务状态筛选
-    pub stk_id: Option<String>,     // 仓库筛选（暂未在 SQL 中实现，前端按 PValue.StkID 过滤）
+    pub month: Option<String>,  // YYYY-MM，按 EndDate 月份筛选
+    pub state: Option<String>,  // 任务状态筛选
+    pub stk_id: Option<String>, // 仓库筛选（暂未在 SQL 中实现，前端按 PValue.StkID 过滤）
 }
 
 pub async fn get_sales_task_summary(
@@ -1271,7 +1357,9 @@ pub async fn get_sales_task_summary(
     let mut actual_map: HashMap<String, f64> = HashMap::new();
     for r in rec_rows.iter() {
         let pval: &str = r.get::<&str, _>("PValue").unwrap_or("");
-        if pval.is_empty() { continue; }
+        if pval.is_empty() {
+            continue;
+        }
         // 用 serde_json 解析以正确取值（旧前端 parseFloat 整个 JSON 是 bug）
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(pval) {
             let tid = v.get("TaskID").and_then(|x| x.as_str()).unwrap_or("");
@@ -1299,12 +1387,31 @@ pub async fn get_sales_task_summary(
         let pval: &str = r.get::<&str, _>("PValue").unwrap_or("");
         let parsed: serde_json::Value = serde_json::from_str(pval).unwrap_or(serde_json::json!({}));
 
-        let target = parsed.get("TargetAmt").and_then(|x| x.as_f64()).unwrap_or(0.0);
-        let start_date = parsed.get("StartDate").and_then(|x| x.as_str()).unwrap_or("").to_string();
-        let end_date = parsed.get("EndDate").and_then(|x| x.as_str()).unwrap_or("").to_string();
-        let stk_id = parsed.get("StkID").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let target = parsed
+            .get("TargetAmt")
+            .and_then(|x| x.as_f64())
+            .unwrap_or(0.0);
+        let start_date = parsed
+            .get("StartDate")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        let end_date = parsed
+            .get("EndDate")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        let stk_id = parsed
+            .get("StkID")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
         // 状态从 PValue JSON 中取，默认 'N'（草稿）
-        let state = parsed.get("State").and_then(|x| x.as_str()).unwrap_or("N").to_string();
+        let state = parsed
+            .get("State")
+            .and_then(|x| x.as_str())
+            .unwrap_or("N")
+            .to_string();
 
         // 月份过滤（按 EndDate 月份）
         if let Some(m) = &params.month {
@@ -1326,7 +1433,11 @@ pub async fn get_sales_task_summary(
         }
 
         let actual = *actual_map.get(&pid).unwrap_or(&0.0);
-        let rate = if target > 0.0 { (actual / target) * 100.0 } else { 0.0 };
+        let rate = if target > 0.0 {
+            (actual / target) * 100.0
+        } else {
+            0.0
+        };
 
         tasks.push(serde_json::json!({
             "ParametersID": pid,
@@ -1344,9 +1455,19 @@ pub async fn get_sales_task_summary(
 
     // 5) 计算汇总
     let task_count = tasks.len();
-    let total_target: f64 = tasks.iter().map(|t| t.get("target").and_then(|v| v.as_f64()).unwrap_or(0.0)).sum();
-    let total_actual: f64 = tasks.iter().map(|t| t.get("actual").and_then(|v| v.as_f64()).unwrap_or(0.0)).sum();
-    let avg_rate = if total_target > 0.0 { (total_actual / total_target) * 100.0 } else { 0.0 };
+    let total_target: f64 = tasks
+        .iter()
+        .map(|t| t.get("target").and_then(|v| v.as_f64()).unwrap_or(0.0))
+        .sum();
+    let total_actual: f64 = tasks
+        .iter()
+        .map(|t| t.get("actual").and_then(|v| v.as_f64()).unwrap_or(0.0))
+        .sum();
+    let avg_rate = if total_target > 0.0 {
+        (total_actual / total_target) * 100.0
+    } else {
+        0.0
+    };
 
     let data = serde_json::json!({
         "list": tasks,

@@ -1,15 +1,11 @@
-use axum::{
-    extract::State,
-    Extension,
-    Json,
-};
-use serde::Deserialize;
-use tiberius::Row;
 use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
-use crate::utils::{ApiResponse, row_get_f64};
 use crate::middleware::auth::Claims;
+use crate::utils::{ApiResponse, row_get_f64};
+use axum::{Extension, Json, extract::State};
+use serde::Deserialize;
+use tiberius::Row;
 
 // =====================================================================
 // 提成计算引擎
@@ -29,7 +25,11 @@ fn apply_commission_rate(net_amt: f64, base_rate: f64) -> f64 {
     (net_amt * rate).max(0.0)
 }
 
-fn resolve_period(start_date: Option<&str>, end_date: Option<&str>, period: Option<&str>) -> (String, String) {
+fn resolve_period(
+    start_date: Option<&str>,
+    end_date: Option<&str>,
+    period: Option<&str>,
+) -> (String, String) {
     if let (Some(s), Some(e)) = (start_date, end_date) {
         if !s.is_empty() && !e.is_empty() {
             return (s.to_string(), e.to_string());
@@ -44,15 +44,23 @@ fn resolve_period(start_date: Option<&str>, end_date: Option<&str>, period: Opti
                 let start = format!("{:04}-{:02}-01", year, month);
                 let next_year = if month == 12 { year + 1 } else { year };
                 let next_month = if month == 12 { 1 } else { month + 1 };
-                if let Ok(d) = chrono::NaiveDate::parse_from_str(&format!("{:04}-{:02}-01", next_year, next_month), "%Y-%m-%d") {
-                    let last = (d - chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
+                if let Ok(d) = chrono::NaiveDate::parse_from_str(
+                    &format!("{:04}-{:02}-01", next_year, next_month),
+                    "%Y-%m-%d",
+                ) {
+                    let last = (d - chrono::Duration::days(1))
+                        .format("%Y-%m-%d")
+                        .to_string();
                     return (start, last);
                 }
             }
         }
     }
     let today = chrono::Local::now();
-    (today.format("%Y-%m-01").to_string(), today.format("%Y-%m-%d").to_string())
+    (
+        today.format("%Y-%m-01").to_string(),
+        today.format("%Y-%m-%d").to_string(),
+    )
 }
 
 pub async fn calculate_employee_commission(
@@ -61,7 +69,11 @@ pub async fn calculate_employee_commission(
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
 
-    let (start_date, end_date) = resolve_period(params.start_date.as_deref(), params.end_date.as_deref(), params.period.as_deref());
+    let (start_date, end_date) = resolve_period(
+        params.start_date.as_deref(),
+        params.end_date.as_deref(),
+        params.period.as_deref(),
+    );
 
     let emp_id = params.emp_id.as_deref().unwrap_or("");
     if emp_id.is_empty() {
@@ -94,23 +106,33 @@ pub async fn calculate_employee_commission(
           AND io.IODate >= @p2
           AND io.IODate < DATEADD(day, 1, @p3)
     "#;
-    let sale_stream = conn.query(sale_sql, &[&emp_id, &start_date, &end_date]).await?;
-    let (sale_amt, return_amt, net_amt, net_qty) = if let Some(row) = sale_stream.into_row().await? {
+    let sale_stream = conn
+        .query(sale_sql, &[&emp_id, &start_date, &end_date])
+        .await?;
+    let (sale_amt, return_amt, net_amt, net_qty) = if let Some(row) = sale_stream.into_row().await?
+    {
         (
             row_get_f64(&row, "SaleAmt"),
             row_get_f64(&row, "ReturnAmt"),
             row_get_f64(&row, "NetAmt"),
             row_get_f64(&row, "NetQty") as i32,
         )
-    } else { (0.0, 0.0, 0.0, 0) };
+    } else {
+        (0.0, 0.0, 0.0, 0)
+    };
 
     // 注意：tSys_Parameters 表没有 State 字段，不能用 State <> 'D' 条件
     // PValue 是 nvarchar 类型，需用 TRY_CAST 转换为 FLOAT
     let tpl_sql = "SELECT TOP 1 TRY_CAST(PValue AS FLOAT) AS PValue, PName FROM tSys_Parameters WHERE PKind = 'commission' AND (PTerm = 'ALL' OR PTerm = 'SAL') ORDER BY EDate DESC";
     let tpl_stream = conn.query(tpl_sql, &[]).await?;
     let (tpl_rate, tpl_name) = if let Some(r) = tpl_stream.into_row().await? {
-        (r.get::<f64, _>("PValue").unwrap_or(0.0) / 100.0, r.get::<&str, _>("PName").unwrap_or("").to_string())
-    } else { (0.0, String::new()) };
+        (
+            r.get::<f64, _>("PValue").unwrap_or(0.0) / 100.0,
+            r.get::<&str, _>("PName").unwrap_or("").to_string(),
+        )
+    } else {
+        (0.0, String::new())
+    };
 
     let actual_rate = base_rate.max(tpl_rate);
     let comm_amt = apply_commission_rate(net_amt, actual_rate);
@@ -138,13 +160,21 @@ pub async fn calculate_all_commission(
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
 
-    let (start_date, end_date) = resolve_period(params.start_date.as_deref(), params.end_date.as_deref(), params.period.as_deref());
+    let (start_date, end_date) = resolve_period(
+        params.start_date.as_deref(),
+        params.end_date.as_deref(),
+        params.period.as_deref(),
+    );
 
     // 注意：tSys_Parameters 表没有 State 字段，不能用 State <> 'D' 条件
     // 提成率从 PValue 字段读取（nvarchar 类型，需转换为 float）
     let tpl_sql = "SELECT TOP 1 TRY_CAST(PValue AS FLOAT) AS PValue FROM tSys_Parameters WHERE PKind = 'commission' AND (PTerm = 'ALL' OR PTerm = 'SAL') ORDER BY EDate DESC";
     let tpl_stream = conn.query(tpl_sql, &[]).await?;
-    let tpl_rate: f64 = if let Ok(Some(r)) = tpl_stream.into_row().await { r.get::<f64, _>("PValue").unwrap_or(0.0) / 100.0 } else { 0.0 };
+    let tpl_rate: f64 = if let Ok(Some(r)) = tpl_stream.into_row().await {
+        r.get::<f64, _>("PValue").unwrap_or(0.0) / 100.0
+    } else {
+        0.0
+    };
 
     // 注意：tBas_Emp 表没有 CommRate 字段，提成率统一使用模板提成率 tpl_rate
     // WorkState 在数据库中是 char 类型，'1' 表示在职
@@ -187,20 +217,25 @@ pub async fn calculate_all_commission(
         // tBas_Emp 表没有 CommRate 字段，统一使用模板提成率 tpl_rate 作为 base_rate
         let base_rate: f64 = tpl_rate;
 
-        if eid.is_empty() { continue; }
+        if eid.is_empty() {
+            continue;
+        }
 
         let sale_stream = match conn.query(sale_sql, &[&eid, &start_date, &end_date]).await {
             Ok(s) => s,
             Err(_) => continue,
         };
-        let (sale_amt, return_amt, net_amt, net_qty) = if let Ok(Some(row)) = sale_stream.into_row().await {
-            (
-                row_get_f64(&row, "SaleAmt"),
-                row_get_f64(&row, "ReturnAmt"),
-                row_get_f64(&row, "NetAmt"),
-                row_get_f64(&row, "NetQty") as i32,
-            )
-        } else { (0.0, 0.0, 0.0, 0) };
+        let (sale_amt, return_amt, net_amt, net_qty) =
+            if let Ok(Some(row)) = sale_stream.into_row().await {
+                (
+                    row_get_f64(&row, "SaleAmt"),
+                    row_get_f64(&row, "ReturnAmt"),
+                    row_get_f64(&row, "NetAmt"),
+                    row_get_f64(&row, "NetQty") as i32,
+                )
+            } else {
+                (0.0, 0.0, 0.0, 0)
+            };
 
         if net_amt.abs() < 0.01 && sale_amt.abs() < 0.01 {
             continue;
@@ -244,7 +279,11 @@ pub async fn get_commission_details(
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
 
-    let (start_date, end_date) = resolve_period(params.start_date.as_deref(), params.end_date.as_deref(), params.period.as_deref());
+    let (start_date, end_date) = resolve_period(
+        params.start_date.as_deref(),
+        params.end_date.as_deref(),
+        params.period.as_deref(),
+    );
     let emp_id = params.emp_id.as_deref().unwrap_or("");
     if emp_id.is_empty() {
         return Ok(Json(ApiResponse::err("emp_id 不能为空")));
@@ -341,7 +380,9 @@ pub async fn apply_pricing_for_customer(
             template_id = row.get::<&str, _>("PLID").unwrap_or("").to_string();
             template_name = row.get::<&str, _>("PName").unwrap_or("").to_string();
             rate = row_get_f64(&row, "Rate");
-            if rate == 0.0 { rate = 1.0; }
+            if rate == 0.0 {
+                rate = 1.0;
+            }
         }
     }
 
@@ -386,15 +427,19 @@ pub async fn get_customer_price_list(
     let gds_stream = conn.query(&gds_sql, &[]).await?;
     let gds_rows: Vec<Row> = gds_stream.into_first_result().await?;
 
-    let mut brand_rate: std::collections::HashMap<String, (String, String, f64)> = std::collections::HashMap::new();
+    let mut brand_rate: std::collections::HashMap<String, (String, String, f64)> =
+        std::collections::HashMap::new();
     for r in bind_rows.iter() {
         let bid: String = r.get::<&str, _>("BrandID").unwrap_or("").to_string();
         if !bid.is_empty() {
-            brand_rate.insert(bid, (
-                r.get::<&str, _>("PLID").unwrap_or("").to_string(),
-                r.get::<&str, _>("TemplateName").unwrap_or("").to_string(),
-                r.get::<f64, _>("Rate").unwrap_or(1.0),
-            ));
+            brand_rate.insert(
+                bid,
+                (
+                    r.get::<&str, _>("PLID").unwrap_or("").to_string(),
+                    r.get::<&str, _>("TemplateName").unwrap_or("").to_string(),
+                    r.get::<f64, _>("Rate").unwrap_or(1.0),
+                ),
+            );
         }
     }
 
@@ -404,7 +449,11 @@ pub async fn get_customer_price_list(
     for r in gds_rows.iter() {
         let base_price: f64 = r.get::<f64, _>("BasePrice").unwrap_or(0.0);
         let brand_id: String = r.get::<&str, _>("BrandID").unwrap_or("").to_string();
-        let (tpl_id, tpl_name, rate) = brand_rate.get(&brand_id).cloned().unwrap_or((String::new(), String::new(), 1.0));
+        let (tpl_id, tpl_name, rate) =
+            brand_rate
+                .get(&brand_id)
+                .cloned()
+                .unwrap_or((String::new(), String::new(), 1.0));
         let final_price = base_price * rate;
         total_base += base_price;
         total_final += final_price;
@@ -452,7 +501,9 @@ pub async fn bulk_apply_pricing_template(
     let brand_id = params.brand_id.as_deref().unwrap_or("");
     let cust_ids = params.cust_ids.clone().unwrap_or_default();
     if template_id.is_empty() || brand_id.is_empty() || cust_ids.is_empty() {
-        return Ok(Json(ApiResponse::err("template_id、brand_id、cust_ids 必填")));
+        return Ok(Json(ApiResponse::err(
+            "template_id、brand_id、cust_ids 必填",
+        )));
     }
 
     let overwrite = params.overwrite.unwrap_or(false);
@@ -460,12 +511,17 @@ pub async fn bulk_apply_pricing_template(
     let mut skip = 0_i32;
 
     for cid in &cust_ids {
-        if cid.is_empty() { continue; }
-        let check_sql = "SELECT COUNT(*) AS cnt FROM tBas_CustPriceTac WHERE CustID = @p1 AND BrandID = @p2";
+        if cid.is_empty() {
+            continue;
+        }
+        let check_sql =
+            "SELECT COUNT(*) AS cnt FROM tBas_CustPriceTac WHERE CustID = @p1 AND BrandID = @p2";
         let check_stream = conn.query(check_sql, &[&cid.as_str(), &brand_id]).await?;
         let exists = if let Some(row) = check_stream.into_row().await? {
             row.get::<i32, _>("cnt").unwrap_or(0) > 0
-        } else { false };
+        } else {
+            false
+        };
 
         if exists && !overwrite {
             skip += 1;
@@ -473,11 +529,15 @@ pub async fn bulk_apply_pricing_template(
         }
 
         if exists {
-            let upd_sql = "UPDATE tBas_CustPriceTac SET PLID = @p1 WHERE CustID = @p2 AND BrandID = @p3";
-            conn.execute(upd_sql, &[&template_id, &cid.as_str(), &brand_id]).await?;
+            let upd_sql =
+                "UPDATE tBas_CustPriceTac SET PLID = @p1 WHERE CustID = @p2 AND BrandID = @p3";
+            conn.execute(upd_sql, &[&template_id, &cid.as_str(), &brand_id])
+                .await?;
         } else {
-            let ins_sql = "INSERT INTO tBas_CustPriceTac (CustID, BrandID, PLID) VALUES (@p1, @p2, @p3)";
-            conn.execute(ins_sql, &[&cid.as_str(), &brand_id, &template_id]).await?;
+            let ins_sql =
+                "INSERT INTO tBas_CustPriceTac (CustID, BrandID, PLID) VALUES (@p1, @p2, @p3)";
+            conn.execute(ins_sql, &[&cid.as_str(), &brand_id, &template_id])
+                .await?;
         }
         success += 1;
     }

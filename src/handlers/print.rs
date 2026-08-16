@@ -1,16 +1,12 @@
-use axum::{
-    extract::State,
-    Extension,
-    Json,
-};
-use serde::Deserialize;
-use tiberius::Row;
 use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::{AppError, Result};
-use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
 use crate::handlers::base_data::row_to_json;
 use crate::middleware::auth::Claims;
+use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
+use axum::{Extension, Json, extract::State};
+use serde::Deserialize;
+use tiberius::Row;
 
 /// 零 UUID，用于 EUser 等 uniqueidentifier 字段的默认值
 const ZERO_UUID: &str = "00000000-0000-0000-0000-000000000000";
@@ -47,7 +43,8 @@ pub async fn get_print_templates(
     } else {
         "t.State <> 'D'"
     };
-    let mut base_query = format!("SELECT t.RptID, t.RptTitleID, t.RptDesc AS TemplateName, t.RptCode AS DocType, \
+    let mut base_query = format!(
+        "SELECT t.RptID, t.RptTitleID, t.RptDesc AS TemplateName, t.RptCode AS DocType, \
         t.ToolsType, t.FlgTerm, t.RptFormat AS Content, t.Note AS Remark, t.State, t.Kind, t.ShareAll, t.GridID, t.TermID, \
         t.RptHistory, t.ExecSQL, t.ExecFields, t.SaveTables, t.SaveTableName, t.SaveTableKeyFields, \
         t.AllowAdd, t.DefValueSQL, t.ChangeFrmFlg, t.LUTime, t.EDate, t.EUser, t.AUser, t.ADate, \
@@ -56,13 +53,19 @@ pub async fn get_print_templates(
         LEFT JOIN tBas_Emp eu ON t.[EUser] = eu.[EmpID] \
         LEFT JOIN tBas_Emp au ON t.[AUser] = au.[EmpID] \
         LEFT JOIN tBas_Emp su ON t.[SUser] = su.[EmpID] \
-        WHERE {}", state_filter);
+        WHERE {}",
+        state_filter
+    );
     let mut query_params: Vec<Option<String>> = Vec::new();
     let mut pidx = 1;
 
     if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
-            base_query.push_str(&format!(" AND (t.RptDesc LIKE @p{} OR t.RptCode LIKE @p{})", pidx, pidx + 1));
+            base_query.push_str(&format!(
+                " AND (t.RptDesc LIKE @p{} OR t.RptCode LIKE @p{})",
+                pidx,
+                pidx + 1
+            ));
             pidx += 2;
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
@@ -87,8 +90,17 @@ pub async fn get_print_templates(
     }
 
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
-    let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, params.sort_prop.as_deref(), params.sort_order.as_deref());
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let paginated_sql = build_pagination_sql_with_sort(
+        &base_query,
+        page,
+        page_size,
+        params.sort_prop.as_deref(),
+        params.sort_order.as_deref(),
+    );
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
 
     let mut total: i32 = 0;
     let count_stream = conn.query(&count_sql, &param_refs).await?;
@@ -100,7 +112,12 @@ pub async fn get_print_templates(
     let rows: Vec<Row> = data_stream.into_first_result().await?;
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Ok(Json(ApiResponse::ok_paginated(data, total as u64, page, page_size)))
+    Ok(Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 #[derive(Deserialize)]
@@ -165,7 +182,8 @@ pub async fn create_print_template(
     let mut conn = get_pool().get().await?;
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     // EUser 是 uniqueidentifier，必须用 UUID 字符串，不能用 user_code
-    let user_uuid = crate::handlers::generic::cached_lookup_user_uuid(&claims.user_code).await
+    let user_uuid = crate::handlers::generic::cached_lookup_user_uuid(&claims.user_code)
+        .await
         .unwrap_or_else(|| ZERO_UUID.to_string());
 
     let template_name = body.TemplateName.as_deref().unwrap_or("");
@@ -200,35 +218,51 @@ pub async fn create_print_template(
 
     // uniqueidentifier 字段不允许空字符串，必须传 NULL（None）
     // RptTitleID(@p1)、GridID(@p10)、TermID(@p11)、EUser(@p23) 是 uniqueidentifier
-    let opt_rpt_title_id: Option<&str> = if rpt_title_id.is_empty() { None } else { Some(rpt_title_id) };
-    let opt_grid_id: Option<&str> = if grid_id.is_empty() { None } else { Some(grid_id) };
-    let opt_term_id: Option<&str> = if term_id.is_empty() { None } else { Some(term_id) };
+    let opt_rpt_title_id: Option<&str> = if rpt_title_id.is_empty() {
+        None
+    } else {
+        Some(rpt_title_id)
+    };
+    let opt_grid_id: Option<&str> = if grid_id.is_empty() {
+        None
+    } else {
+        Some(grid_id)
+    };
+    let opt_term_id: Option<&str> = if term_id.is_empty() {
+        None
+    } else {
+        Some(term_id)
+    };
 
-    conn.execute(sql, &[
-        &opt_rpt_title_id,
-        &template_name,
-        &doc_type,
-        &tools_type,
-        &content_bytes,
-        &flg_term,
-        &remark,
-        &kind,
-        &share_all,
-        &opt_grid_id,
-        &opt_term_id,
-        &rpt_history,
-        &exec_sql,
-        &exec_fields,
-        &save_tables,
-        &save_table_name,
-        &save_table_key_fields,
-        &allow_add,
-        &def_value_sql,
-        &change_frm_flg,
-        &now,
-        &now,
-        &user_uuid.as_str(),
-    ]).await?;
+    conn.execute(
+        sql,
+        &[
+            &opt_rpt_title_id,
+            &template_name,
+            &doc_type,
+            &tools_type,
+            &content_bytes,
+            &flg_term,
+            &remark,
+            &kind,
+            &share_all,
+            &opt_grid_id,
+            &opt_term_id,
+            &rpt_history,
+            &exec_sql,
+            &exec_fields,
+            &save_tables,
+            &save_table_name,
+            &save_table_key_fields,
+            &allow_add,
+            &def_value_sql,
+            &change_frm_flg,
+            &now,
+            &now,
+            &user_uuid.as_str(),
+        ],
+    )
+    .await?;
 
     Ok(Json(ApiResponse::msg("打印模板创建成功")))
 }
@@ -266,7 +300,8 @@ pub async fn update_print_template(
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let user_uuid = crate::handlers::generic::cached_lookup_user_uuid(&claims.user_code).await
+    let user_uuid = crate::handlers::generic::cached_lookup_user_uuid(&claims.user_code)
+        .await
         .unwrap_or_else(|| ZERO_UUID.to_string());
 
     let template_name = body.TemplateName.as_deref().unwrap_or("");
@@ -303,37 +338,53 @@ pub async fn update_print_template(
 
     // uniqueidentifier 字段空值传 NULL（None）
     // RptTitleID(@p1)、GridID(@p11)、TermID(@p12)、EUser(@p24) 是 uniqueidentifier
-    let opt_rpt_title_id: Option<&str> = if rpt_title_id.is_empty() { None } else { Some(rpt_title_id) };
-    let opt_grid_id: Option<&str> = if grid_id.is_empty() { None } else { Some(grid_id) };
-    let opt_term_id: Option<&str> = if term_id.is_empty() { None } else { Some(term_id) };
+    let opt_rpt_title_id: Option<&str> = if rpt_title_id.is_empty() {
+        None
+    } else {
+        Some(rpt_title_id)
+    };
+    let opt_grid_id: Option<&str> = if grid_id.is_empty() {
+        None
+    } else {
+        Some(grid_id)
+    };
+    let opt_term_id: Option<&str> = if term_id.is_empty() {
+        None
+    } else {
+        Some(term_id)
+    };
 
-    conn.execute(sql, &[
-        &opt_rpt_title_id,
-        &template_name,
-        &doc_type,
-        &tools_type,
-        &content_bytes,
-        &flg_term,
-        &remark,
-        &state,
-        &kind,
-        &share_all,
-        &opt_grid_id,
-        &opt_term_id,
-        &rpt_history,
-        &exec_sql,
-        &exec_fields,
-        &save_tables,
-        &save_table_name,
-        &save_table_key_fields,
-        &allow_add,
-        &def_value_sql,
-        &change_frm_flg,
-        &now,
-        &now,
-        &user_uuid.as_str(),
-        &body.TemplateID.as_str(),
-    ]).await?;
+    conn.execute(
+        sql,
+        &[
+            &opt_rpt_title_id,
+            &template_name,
+            &doc_type,
+            &tools_type,
+            &content_bytes,
+            &flg_term,
+            &remark,
+            &state,
+            &kind,
+            &share_all,
+            &opt_grid_id,
+            &opt_term_id,
+            &rpt_history,
+            &exec_sql,
+            &exec_fields,
+            &save_tables,
+            &save_table_name,
+            &save_table_key_fields,
+            &allow_add,
+            &def_value_sql,
+            &change_frm_flg,
+            &now,
+            &now,
+            &user_uuid.as_str(),
+            &body.TemplateID.as_str(),
+        ],
+    )
+    .await?;
 
     Ok(Json(ApiResponse::msg("打印模板更新成功")))
 }
@@ -362,14 +413,20 @@ pub async fn delete_print_template(
             let sql = "DELETE FROM tSys_Rpt WHERE RptID = @p1";
             conn.execute(sql, &[&id.as_str()]).await?;
         }
-        Ok(Json(ApiResponse::msg(&format!("成功永久删除{}个模板", body.ids.len()))))
+        Ok(Json(ApiResponse::msg(&format!(
+            "成功永久删除{}个模板",
+            body.ids.len()
+        ))))
     } else {
         // 软删除：UPDATE State='D'
         for id in &body.ids {
             let sql = "UPDATE tSys_Rpt SET State = 'D' WHERE RptID = @p1";
             conn.execute(sql, &[&id.as_str()]).await?;
         }
-        Ok(Json(ApiResponse::msg(&format!("成功删除{}个模板", body.ids.len()))))
+        Ok(Json(ApiResponse::msg(&format!(
+            "成功删除{}个模板",
+            body.ids.len()
+        ))))
     }
 }
 
@@ -394,7 +451,10 @@ pub async fn restore_print_template(
         conn.execute(sql, &[&id.as_str()]).await?;
     }
 
-    Ok(Json(ApiResponse::msg(&format!("成功恢复{}个模板", body.ids.len()))))
+    Ok(Json(ApiResponse::msg(&format!(
+        "成功恢复{}个模板",
+        body.ids.len()
+    ))))
 }
 
 #[derive(Deserialize)]
@@ -425,7 +485,8 @@ pub async fn get_print_logs(
     let page_size = std::cmp::min(params.page_size.unwrap_or(50), 1000);
 
     // JOIN tSys_Rpt 获取模板名/单据类型，JOIN tBas_Emp 获取打印人姓名
-    let mut base_query = r#"SELECT h.DocID, h.PrintDate, h.PrintRptID, h.PrintEmpID, h.PrintComName,
+    let mut base_query =
+        r#"SELECT h.DocID, h.PrintDate, h.PrintRptID, h.PrintEmpID, h.PrintComName,
         r.RptDesc AS TemplateName, r.RptCode AS DocType,
         e.EmpName AS PrintEmpName,
         p.PrintNum, p.LastPrintDate, p.LastPrintEmpID, p.LastPrintComName
@@ -433,7 +494,8 @@ pub async fn get_print_logs(
         LEFT JOIN tSys_Rpt r ON h.PrintRptID = r.RptID
         LEFT JOIN tBas_Emp e ON h.PrintEmpID = e.EmpID
         LEFT JOIN tSys_RptPrintNum p ON h.DocID = p.DocID
-        WHERE 1=1"#.to_string();
+        WHERE 1=1"#
+            .to_string();
     let mut query_params: Vec<Option<String>> = Vec::new();
     let mut pidx = 1;
 
@@ -487,8 +549,17 @@ pub async fn get_print_logs(
     }
 
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
-    let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, params.sort_prop.as_deref(), params.sort_order.as_deref());
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let paginated_sql = build_pagination_sql_with_sort(
+        &base_query,
+        page,
+        page_size,
+        params.sort_prop.as_deref(),
+        params.sort_order.as_deref(),
+    );
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
 
     let mut total: i32 = 0;
     let count_stream = conn.query(&count_sql, &param_refs).await?;
@@ -500,7 +571,12 @@ pub async fn get_print_logs(
     let rows: Vec<Row> = data_stream.into_first_result().await?;
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Ok(Json(ApiResponse::ok_paginated(data, total as u64, page, page_size)))
+    Ok(Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 #[derive(Deserialize)]
@@ -526,29 +602,37 @@ pub async fn write_print_log_internal(
 
     let his_sql = r#"INSERT INTO tSys_RptPrintHis (DocID, PrintDate, PrintRptID, PrintEmpID, PrintComName)
         VALUES (@p1, @p2, @p3, @p4, @p5)"#;
-    conn.execute(his_sql, &[
-        &doc_id,
-        &now,
-        &print_rpt_id,
-        &print_emp_id,
-        &print_com_name,
-    ]).await.map_err(|e| AppError::Internal(format!("写入打印历史失败: {}", e)))?;
+    conn.execute(
+        his_sql,
+        &[&doc_id, &now, &print_rpt_id, &print_emp_id, &print_com_name],
+    )
+    .await
+    .map_err(|e| AppError::Internal(format!("写入打印历史失败: {}", e)))?;
 
     let num_check = "SELECT COUNT(*) as cnt FROM tSys_RptPrintNum WHERE DocID = @p1";
-    let stream = conn.query(num_check, &[&doc_id]).await.map_err(|e| AppError::Internal(format!("查询打印次数失败: {}", e)))?;
+    let stream = conn
+        .query(num_check, &[&doc_id])
+        .await
+        .map_err(|e| AppError::Internal(format!("查询打印次数失败: {}", e)))?;
     let mut exists = false;
-    if let Some(row) = stream.into_row().await.map_err(|e| AppError::Internal(format!("读取打印次数失败: {}", e)))? {
+    if let Some(row) = stream
+        .into_row()
+        .await
+        .map_err(|e| AppError::Internal(format!("读取打印次数失败: {}", e)))?
+    {
         exists = row.get::<i32, _>("cnt").unwrap_or(0) > 0;
     }
 
     if exists {
         let num_sql = "UPDATE tSys_RptPrintNum SET PrintNum = PrintNum + 1, LastPrintDate = @p1, LastPrintEmpID = @p2, LastPrintComName = @p3 WHERE DocID = @p4";
-        conn.execute(num_sql, &[&now, &print_emp_id, &print_com_name, &doc_id]).await
+        conn.execute(num_sql, &[&now, &print_emp_id, &print_com_name, &doc_id])
+            .await
             .map_err(|e| AppError::Internal(format!("更新打印次数失败: {}", e)))?;
     } else {
         let num_sql = r#"INSERT INTO tSys_RptPrintNum (DocID, PrintNum, LastPrintDate, LastPrintEmpID, LastPrintComName)
             VALUES (@p1, 1, @p2, @p3, @p4)"#;
-        conn.execute(num_sql, &[&doc_id, &now, &print_emp_id, &print_com_name]).await
+        conn.execute(num_sql, &[&doc_id, &now, &print_emp_id, &print_com_name])
+            .await
             .map_err(|e| AppError::Internal(format!("创建打印次数记录失败: {}", e)))?;
     }
     Ok(())
@@ -568,18 +652,28 @@ pub async fn create_print_log(
     let print_rpt_id = body.PrintRptID.as_deref().unwrap_or("");
     // 打印人：优先用客户端传入，否则取当前登录用户的 EmpID
     let print_emp_id = if let Some(id) = body.PrintEmpID.as_deref() {
-        if !id.is_empty() { id.to_string() }
-        else {
-            crate::handlers::generic::cached_lookup_user_uuid(&claims.user_code).await
+        if !id.is_empty() {
+            id.to_string()
+        } else {
+            crate::handlers::generic::cached_lookup_user_uuid(&claims.user_code)
+                .await
                 .unwrap_or_else(|| ZERO_UUID.to_string())
         }
     } else {
-        crate::handlers::generic::cached_lookup_user_uuid(&claims.user_code).await
+        crate::handlers::generic::cached_lookup_user_uuid(&claims.user_code)
+            .await
             .unwrap_or_else(|| ZERO_UUID.to_string())
     };
     let print_com_name = body.PrintComName.as_deref().unwrap_or("web");
 
-    write_print_log_internal(&mut conn, &body.DocID, print_rpt_id, &print_emp_id, print_com_name).await?;
+    write_print_log_internal(
+        &mut conn,
+        &body.DocID,
+        print_rpt_id,
+        &print_emp_id,
+        print_com_name,
+    )
+    .await?;
 
     Ok(Json(ApiResponse::msg("打印记录已保存")))
 }
@@ -603,16 +697,20 @@ pub async fn save_print_config(
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let user_uuid = crate::handlers::generic::cached_lookup_user_uuid(&claims.user_code).await
+    let user_uuid = crate::handlers::generic::cached_lookup_user_uuid(&claims.user_code)
+        .await
         .unwrap_or_else(|| ZERO_UUID.to_string());
 
     if let Some(configs) = body.get("configs").and_then(|v| v.as_array()) {
         for cfg in configs {
             let rpt_id = cfg.get("RptID").and_then(|v| v.as_str()).unwrap_or("");
             let state = cfg.get("State").and_then(|v| v.as_str()).unwrap_or("A");
-            if rpt_id.is_empty() { continue; }
+            if rpt_id.is_empty() {
+                continue;
+            }
             let sql = "UPDATE tSys_Rpt SET State = @p1, EDate = @p2, EUser = @p3 WHERE RptID = @p4";
-            conn.execute(sql, &[&state, &now, &user_uuid.as_str(), &rpt_id]).await?;
+            conn.execute(sql, &[&state, &now, &user_uuid.as_str(), &rpt_id])
+                .await?;
         }
     }
 
@@ -624,7 +722,10 @@ pub async fn get_print_versions(
     Json(params): Json<serde_json::Value>,
 ) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>> {
     let mut conn = get_pool().get().await?;
-    let rpt_id = params.get("template_id").and_then(|v| v.as_str()).unwrap_or("");
+    let rpt_id = params
+        .get("template_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     if rpt_id.is_empty() {
         return Ok(Json(ApiResponse::ok(vec![])));
     }
@@ -644,11 +745,18 @@ pub async fn create_print_version(
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let user_uuid = crate::handlers::generic::cached_lookup_user_uuid(&claims.user_code).await
+    let user_uuid = crate::handlers::generic::cached_lookup_user_uuid(&claims.user_code)
+        .await
         .unwrap_or_else(|| ZERO_UUID.to_string());
 
-    let rpt_id = body.get("template_id").and_then(|v| v.as_str()).unwrap_or("");
-    let snapshot_name = body.get("snapshot_name").and_then(|v| v.as_str()).unwrap_or("");
+    let rpt_id = body
+        .get("template_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let snapshot_name = body
+        .get("snapshot_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     if rpt_id.is_empty() {
         return Ok(Json(ApiResponse::err("模板ID不能为空")));
     }
@@ -667,7 +775,8 @@ pub async fn create_print_version(
     let note: Option<&str> = row.try_get("Note").unwrap_or(None);
 
     // Get next version number
-    let ver_sql = "SELECT ISNULL(MAX(VersionNo), 0) + 1 AS NextVer FROM tSys_RptVersion WHERE RptID = @p1";
+    let ver_sql =
+        "SELECT ISNULL(MAX(VersionNo), 0) + 1 AS NextVer FROM tSys_RptVersion WHERE RptID = @p1";
     let ver_stream = conn.query(ver_sql, &[&rpt_id]).await?;
     let next_ver: i32 = match ver_stream.into_row().await? {
         Some(r) => r.get::<i32, _>("NextVer").unwrap_or(1),
@@ -676,19 +785,26 @@ pub async fn create_print_version(
 
     let insert_sql = r#"INSERT INTO tSys_RptVersion (VersionID, RptID, VersionNo, RptDesc, RptCode, RptFormat, Note, EDate, EUser, SnapshotName)
         VALUES (NEWID(), @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9)"#;
-    conn.execute(insert_sql, &[
-        &rpt_id,
-        &next_ver,
-        &rpt_desc,
-        &rpt_code,
-        &rpt_format,
-        &note,
-        &now,
-        &user_uuid.as_str(),
-        &snapshot_name,
-    ]).await?;
+    conn.execute(
+        insert_sql,
+        &[
+            &rpt_id,
+            &next_ver,
+            &rpt_desc,
+            &rpt_code,
+            &rpt_format,
+            &note,
+            &now,
+            &user_uuid.as_str(),
+            &snapshot_name,
+        ],
+    )
+    .await?;
 
-    Ok(Json(ApiResponse::msg(&format!("版本 v{} 已创建", next_ver))))
+    Ok(Json(ApiResponse::msg(&format!(
+        "版本 v{} 已创建",
+        next_ver
+    ))))
 }
 
 pub async fn rollback_print_version(
@@ -698,11 +814,18 @@ pub async fn rollback_print_version(
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let user_uuid = crate::handlers::generic::cached_lookup_user_uuid(&claims.user_code).await
+    let user_uuid = crate::handlers::generic::cached_lookup_user_uuid(&claims.user_code)
+        .await
         .unwrap_or_else(|| ZERO_UUID.to_string());
 
-    let rpt_id = body.get("template_id").and_then(|v| v.as_str()).unwrap_or("");
-    let version_id = body.get("version_id").and_then(|v| v.as_str()).unwrap_or("");
+    let rpt_id = body
+        .get("template_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let version_id = body
+        .get("version_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     if rpt_id.is_empty() || version_id.is_empty() {
         return Ok(Json(ApiResponse::err("参数不完整")));
     }
@@ -721,7 +844,8 @@ pub async fn rollback_print_version(
     let note: Option<&str> = row.try_get("Note").unwrap_or(None);
 
     // Auto-create a version snapshot before rollback
-    let ver_num_sql = "SELECT ISNULL(MAX(VersionNo), 0) + 1 AS NextVer FROM tSys_RptVersion WHERE RptID = @p1";
+    let ver_num_sql =
+        "SELECT ISNULL(MAX(VersionNo), 0) + 1 AS NextVer FROM tSys_RptVersion WHERE RptID = @p1";
     let ver_stream = conn.query(ver_num_sql, &[&rpt_id]).await?;
     let next_ver: i32 = match ver_stream.into_row().await? {
         Some(r) => r.get::<i32, _>("NextVer").unwrap_or(1),
@@ -739,17 +863,39 @@ pub async fn rollback_print_version(
         let backup_name = format!("回滚前自动备份 v{}", next_ver);
         let bak_sql = r#"INSERT INTO tSys_RptVersion (VersionID, RptID, VersionNo, RptDesc, RptCode, RptFormat, Note, EDate, EUser, SnapshotName)
             VALUES (NEWID(), @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9)"#;
-        conn.execute(bak_sql, &[
-            &rpt_id, &next_ver, &cur_desc, &cur_code, &cur_fmt, &cur_note, &now, &user_uuid.as_str(), &backup_name,
-        ]).await?;
+        conn.execute(
+            bak_sql,
+            &[
+                &rpt_id,
+                &next_ver,
+                &cur_desc,
+                &cur_code,
+                &cur_fmt,
+                &cur_note,
+                &now,
+                &user_uuid.as_str(),
+                &backup_name,
+            ],
+        )
+        .await?;
     }
 
     // Restore version to current template
     let update_sql = r#"UPDATE tSys_Rpt SET RptDesc = @p1, RptCode = @p2, RptFormat = @p3, Note = @p4, EDate = @p5, EUser = @p6
         WHERE RptID = @p7"#;
-    conn.execute(update_sql, &[
-        &rpt_desc, &rpt_code, &rpt_format, &note, &now, &user_uuid.as_str(), &rpt_id,
-    ]).await?;
+    conn.execute(
+        update_sql,
+        &[
+            &rpt_desc,
+            &rpt_code,
+            &rpt_format,
+            &note,
+            &now,
+            &user_uuid.as_str(),
+            &rpt_id,
+        ],
+    )
+    .await?;
 
     Ok(Json(ApiResponse::msg("已回滚到指定版本")))
 }

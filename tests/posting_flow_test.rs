@@ -1,24 +1,27 @@
+// 文档中的 SQL 示例保留了多级缩进，属于刻意的代码排版
+#![allow(clippy::doc_overindented_list_items)]
+
 //! 过账/反审流程集成测试
 //!
 //! ⚠️ **需要真实 SQL Server** 才能运行，默认 `#[ignore]`。
 //!
 //! 启用方式：
-//!   1. 设置环境变量：
-//!        setx TEST_DB_HOST 192.168.1.100
-//!        setx TEST_DB_NAME TestERP
-//!        setx TEST_DB_USER sa
-//!        setx TEST_DB_PASSWORD sa123456
-//!   2. 准备测试商品 + 仓库（手工 SQL 一次）：
-//!        -- 测试仓库（State=Y 表示正常）
-//!        IF NOT EXISTS (SELECT 1 FROM tBas_Stock WHERE StkNO='TST_WH_1')
-//!          INSERT INTO tBas_Stock (StkID, StkNO, StkName, Used, State)
-//!            VALUES (NEWID(), 'TST_WH_1', '测试仓1', 'Y', 'Y')
-//!        -- 测试商品
-//!        IF NOT EXISTS (SELECT 1 FROM tBas_Goods WHERE GDSNO='TST_GDS_1')
-//!          INSERT INTO tBas_Goods (GDSID, GDSNO, GDSDesc, State)
-//!            VALUES (NEWID(), 'TST_GDS_1', '测试商品1', 'Y')
-//!   3. 运行：
-//!        cargo test --test posting_flow_test -- --ignored --nocapture
+//! 1. 设置环境变量：
+//!    setx TEST_DB_HOST 192.168.1.100
+//!    setx TEST_DB_NAME TestERP
+//!    setx TEST_DB_USER sa
+//!    setx TEST_DB_PASSWORD sa123456
+//! 2. 准备测试商品 + 仓库（手工 SQL 一次）：
+//!    -- 测试仓库（State=Y 表示正常）
+//!    IF NOT EXISTS (SELECT 1 FROM tBas_Stock WHERE StkNO='TST_WH_1')
+//!      INSERT INTO tBas_Stock (StkID, StkNO, StkName, Used, State)
+//!        VALUES (NEWID(), 'TST_WH_1', '测试仓1', 'Y', 'Y')
+//!    -- 测试商品
+//!    IF NOT EXISTS (SELECT 1 FROM tBas_Goods WHERE GDSNO='TST_GDS_1')
+//!      INSERT INTO tBas_Goods (GDSID, GDSNO, GDSDesc, State)
+//!        VALUES (NEWID(), 'TST_GDS_1', '测试商品1', 'Y')
+//! 3. 运行：
+//!    cargo test --test posting_flow_test -- --ignored --nocapture
 //!
 //! 验证策略：直接调 approval 模块的 pub 业务函数（apply_stock_delta、query_stock_qty、upsert_stock_tran_his），
 //! 不走 HTTP 路由，聚焦业务逻辑正确性。
@@ -28,9 +31,7 @@ mod common;
 use common::db_tests_enabled;
 use erp_server::config::Config;
 use erp_server::db::init_pool;
-use erp_server::services::inventory_ledger::{
-    apply_stock_delta, query_stock_qty, upsert_stock_ym,
-};
+use erp_server::services::inventory_ledger::{apply_stock_delta, query_stock_qty, upsert_stock_ym};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -47,10 +48,7 @@ async fn try_init_pool() -> Option<()> {
 
 /// 获取一个测试连接（每次新建，避免跨测试状态污染）
 async fn get_conn() -> Option<erp_server::handlers::approval::Conn> {
-    erp_server::db::get_pool()
-        .get()
-        .await
-        .ok()
+    erp_server::db::get_pool().get().await.ok()
 }
 
 /// 测试用唯一 GDSID（基于 UUID 避免冲突）
@@ -168,20 +166,24 @@ async fn upsert_stock_ym_creates_monthly_record() {
     let stkid = test_stkid();
 
     // 月度结存：本月 In=20, Out=5
-    let ym = chrono::Local::now().format("%Y%m").to_string().parse::<i32>().unwrap();
+    let ym = chrono::Local::now()
+        .format("%Y%m")
+        .to_string()
+        .parse::<i32>()
+        .unwrap();
     upsert_stock_ym(&mut conn, &gdsid, &stkid, 20.0, 5.0).await;
 
     // 验证
     let sql = "SELECT TOP 1 ISNULL(InQty,0) AS I, ISNULL(OutQty,0) AS O, ISNULL(EndQty,0) AS E \
                FROM tStk_StockYM WHERE AccYM = @p1 AND GDSID = @p2 AND StkID = @p3";
     let params: Vec<&dyn tiberius::ToSql> = vec![&ym, &gdsid, &stkid];
-    if let Ok(stream) = conn.query(sql, &params).await {
-        if let Ok(Some(row)) = stream.into_row().await {
-            let in_q = row_get_f64_pub(&row, "I");
-            let out_q = row_get_f64_pub(&row, "O");
-            assert_eq!(in_q, 20.0, "月度入库应为 20");
-            assert_eq!(out_q, 5.0, "月度出库应为 5");
-        }
+    if let Ok(stream) = conn.query(sql, &params).await
+        && let Ok(Some(row)) = stream.into_row().await
+    {
+        let in_q = row_get_f64_pub(&row, "I");
+        let out_q = row_get_f64_pub(&row, "O");
+        assert_eq!(in_q, 20.0, "月度入库应为 20");
+        assert_eq!(out_q, 5.0, "月度出库应为 5");
     }
 
     // 清理（YM 也要清）
@@ -225,7 +227,6 @@ async fn concurrent_apply_does_not_corrupt() {
 
 /// 公共工具：tiberius Row 读 f64
 fn row_get_f64_pub(row: &tiberius::Row, col: &str) -> f64 {
-    
     // tiberius 的 Row 没有 get(name) 直接读，需通过列下标或用 &str
     // 简化：tiberius::Row::get::<&str, T>("col") 返回 Option<T>，T: FromSql
     let opt: Option<f64> = row.get(col);

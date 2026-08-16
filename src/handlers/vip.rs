@@ -1,14 +1,11 @@
-use axum::{
-    extract::State,
-    Json,
-};
-use serde::Deserialize;
-use tiberius::Row;
+use super::base_data::row_to_json;
 use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
 use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
-use super::base_data::row_to_json;
+use axum::{Json, extract::State};
+use serde::Deserialize;
+use tiberius::Row;
 
 const ZERO_UUID: &str = "00000000-0000-0000-0000-000000000000";
 
@@ -39,7 +36,9 @@ pub async fn list_vip(
             // 对齐 tSal_VIP 实际字段：VIPCode/VIPName/Tel
             base_query.push_str(&format!(
                 " AND (VIPCode LIKE @p{} OR VIPName LIKE @p{} OR Tel LIKE @p{})",
-                pidx, pidx + 1, pidx + 2
+                pidx,
+                pidx + 1,
+                pidx + 2
             ));
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
@@ -70,7 +69,12 @@ pub async fn list_vip(
     let rows: Vec<Row> = data_stream.into_first_result().await?;
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Ok(Json(ApiResponse::ok_paginated(data, total as u64, page, page_size)))
+    Ok(Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 fn json_str(v: &serde_json::Value, key: &str) -> String {
@@ -81,15 +85,11 @@ fn json_str(v: &serde_json::Value, key: &str) -> String {
 }
 
 fn json_f64(v: &serde_json::Value, key: &str) -> f64 {
-    v.get(key)
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.0)
+    v.get(key).and_then(|v| v.as_f64()).unwrap_or(0.0)
 }
 
 fn json_i32(v: &serde_json::Value, key: &str) -> i32 {
-    v.get(key)
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0) as i32
+    v.get(key).and_then(|v| v.as_i64()).unwrap_or(0) as i32
 }
 
 pub async fn create_vip(
@@ -117,18 +117,22 @@ pub async fn create_vip(
         StartDate, State, VIPTypeID, vipsd, StkID, EmpID)
         VALUES (NEWID(), @p1, @p2, @p3, @p4, 0, @p5, 0, @p6, @p7, @p8, 0, @p9, @p10)"#;
 
-    conn.execute(sql, &[
-        &vip_code.as_str(),
-        &vip_name.as_str(),
-        &tel.as_str(),
-        &vip_level,
-        &sum_int,
-        &now,
-        &"S",
-        &ZERO_UUID, // VIPTypeID 默认
-        &ZERO_UUID, // StkID
-        &ZERO_UUID, // EmpID
-    ]).await?;
+    conn.execute(
+        sql,
+        &[
+            &vip_code.as_str(),
+            &vip_name.as_str(),
+            &tel.as_str(),
+            &vip_level,
+            &sum_int,
+            &now,
+            &"S",
+            &ZERO_UUID, // VIPTypeID 默认
+            &ZERO_UUID, // StkID
+            &ZERO_UUID, // EmpID
+        ],
+    )
+    .await?;
 
     Ok(Json(ApiResponse::msg("会员创建成功")))
 }
@@ -173,14 +177,18 @@ async fn update_vip_by_id(
     let sql = r#"UPDATE tSal_VIP SET VIPCode=@p1, VIPName=@p2, Tel=@p3, VIPLevel=@p4,
         SumInt=@p5 WHERE VIPID=@p6"#;
 
-    conn.execute(sql, &[
-        &vip_code.as_str(),
-        &vip_name.as_str(),
-        &tel.as_str(),
-        &vip_level,
-        &sum_int,
-        &vip_id,
-    ]).await?;
+    conn.execute(
+        sql,
+        &[
+            &vip_code.as_str(),
+            &vip_name.as_str(),
+            &tel.as_str(),
+            &vip_level,
+            &sum_int,
+            &vip_id,
+        ],
+    )
+    .await?;
 
     Ok(Json(ApiResponse::msg("会员信息更新成功")))
 }
@@ -207,5 +215,8 @@ pub async fn delete_vip(
         conn.execute(sql, &[&id_str]).await?;
     }
 
-    Ok(Json(ApiResponse::msg(&format!("成功删除{}条会员记录", body.ids.len()))))
+    Ok(Json(ApiResponse::msg(&format!(
+        "成功删除{}条会员记录",
+        body.ids.len()
+    ))))
 }

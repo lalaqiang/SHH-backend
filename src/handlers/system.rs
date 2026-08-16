@@ -1,11 +1,11 @@
-use axum::extract::{State, Json, Extension};
-use serde::Deserialize;
-use tiberius::Row;
 use crate::config::Config;
 use crate::db::get_pool;
-use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
 use crate::handlers::base_data::row_to_json;
 use crate::middleware::auth::Claims;
+use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
+use axum::extract::{Extension, Json, State};
+use serde::Deserialize;
+use tiberius::Row;
 
 /// 判断字符串是否为合法 UUID 格式（用于 uniqueidentifier 列查询前校验）
 fn is_valid_uuid_str(s: &str) -> bool {
@@ -42,8 +42,15 @@ pub async fn save_print_log(
     // PrintHisID/DocType/PrintCount/Remark/PrintTime 字段不存在
     // 将 doc_type/print_count/remark 拼接存入 PrintComName 保留信息
     let zero_uuid = "00000000-0000-0000-0000-000000000000";
-    let doc_id_uuid = if doc_id.len() == 36 { doc_id.as_str() } else { zero_uuid };
-    let print_com_name = format!("type={}, count={}, remark={}", doc_type, print_count, remark);
+    let doc_id_uuid = if doc_id.len() == 36 {
+        doc_id.as_str()
+    } else {
+        zero_uuid
+    };
+    let print_com_name = format!(
+        "type={}, count={}, remark={}",
+        doc_type, print_count, remark
+    );
     let sql = "INSERT INTO tSys_RptPrintHis (DocID, PrintDate, PrintRptID, PrintEmpID, PrintComName) \
                VALUES (@p1, @p2, @p3, @p4, @p5)";
     let v1: &dyn tiberius::ToSql = &doc_id_uuid;
@@ -82,18 +89,26 @@ pub async fn get_role_list(
     };
     let page = params.page.unwrap_or(1);
     let page_size = std::cmp::min(params.page_size.unwrap_or(20), 1000);
-    let mut base_query = "SELECT RuleID, RuleCode, RuleName, Remark, State, EDate FROM tSys_Rule WHERE 1=1".to_string();
+    let mut base_query =
+        "SELECT RuleID, RuleCode, RuleName, Remark, State, EDate FROM tSys_Rule WHERE 1=1"
+            .to_string();
     let mut query_params: Vec<Option<String>> = Vec::new();
     let pidx = 1;
     if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
-            base_query.push_str(&format!(" AND (RuleCode LIKE @p{} OR RuleName LIKE @p{})", pidx, pidx));
+            base_query.push_str(&format!(
+                " AND (RuleCode LIKE @p{} OR RuleName LIKE @p{})",
+                pidx, pidx
+            ));
             query_params.push(Some(format!("%{}%", kw)));
         }
     }
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
     let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, None, None);
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
     let mut total: i32 = 0;
     if let Ok(stream) = conn.query(&count_sql, &param_refs).await {
         if let Ok(Some(row)) = stream.into_row().await {
@@ -109,7 +124,12 @@ pub async fn get_role_list(
         Err(e) => return Json(ApiResponse::err(&format!("读取角色数据失败: {}", e))),
     };
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
-    Json(ApiResponse::ok_paginated(data, total as u64, page, page_size))
+    Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    ))
 }
 
 pub async fn get_menu_list(
@@ -219,7 +239,8 @@ pub async fn create_oper_log(
         remark,
         before_data,
         after_data,
-    ).await;
+    )
+    .await;
     Json(ApiResponse::msg("日志已记录"))
 }
 
@@ -251,7 +272,8 @@ pub async fn get_oper_log_list(
          FROM tSys_OperLog l \
          LEFT JOIN tBas_Emp e ON e.EmpID = l.EmpID \
          WHERE l.KeyValue <> '00000000-0000-0000-0000-000000000000' \
-         AND l.KeyValue <> '' AND l.KeyValue IS NOT NULL".to_string();
+         AND l.KeyValue <> '' AND l.KeyValue IS NOT NULL"
+        .to_string();
     if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
             new_q.push_str(&format!(" AND l.Remark LIKE @p{}", pidx));
@@ -275,7 +297,12 @@ pub async fn get_oper_log_list(
     }
     if let Some(uc) = &params.user_code {
         if !uc.is_empty() {
-            new_q.push_str(&format!(" AND (l.UserCode LIKE @p{} OR l.UserName LIKE @p{} OR e.EmpName LIKE @p{})", pidx, pidx + 1, pidx + 2));
+            new_q.push_str(&format!(
+                " AND (l.UserCode LIKE @p{} OR l.UserName LIKE @p{} OR e.EmpName LIKE @p{})",
+                pidx,
+                pidx + 1,
+                pidx + 2
+            ));
             query_params.push(Some(format!("%{}%", uc)));
             query_params.push(Some(format!("%{}%", uc)));
             query_params.push(Some(format!("%{}%", uc)));
@@ -307,8 +334,16 @@ pub async fn get_oper_log_list(
 
     // === Part 2: tSys_OperHis 旧表查询（历史数据，OpenMsg 管道格式）===
     // 仅在没有 oper_type 精确过滤需求时查旧表（旧表 OpenMsg 可能含历史中文操作词）
-    let has_key_value = params.key_value.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
-    let kv_is_uuid = params.key_value.as_deref().map(is_valid_uuid_str).unwrap_or(false);
+    let has_key_value = params
+        .key_value
+        .as_deref()
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
+    let kv_is_uuid = params
+        .key_value
+        .as_deref()
+        .map(is_valid_uuid_str)
+        .unwrap_or(false);
     // Part 2 与 Part 1 字段对齐：统一返回 OperatorName = e.EmpName
     let mut old_q = "SELECT CAST(h.OperHisID AS NVARCHAR(50)) AS OperLogID, \
          'old' AS LogSource, '' AS OperType, '' AS TableName, \
@@ -333,7 +368,11 @@ pub async fn get_oper_log_list(
     }
     if let Some(tn) = &params.table_name {
         if !tn.is_empty() {
-            old_q.push_str(&format!(" AND (h.OpenMsg LIKE @p{} OR h.OpenMsg LIKE @p{})", pidx, pidx + 1));
+            old_q.push_str(&format!(
+                " AND (h.OpenMsg LIKE @p{} OR h.OpenMsg LIKE @p{})",
+                pidx,
+                pidx + 1
+            ));
             query_params.push(Some(format!("%| {} |%", tn)));
             query_params.push(Some(format!("%| {}", tn)));
             pidx += 2;
@@ -341,7 +380,11 @@ pub async fn get_oper_log_list(
     }
     if let Some(uc) = &params.user_code {
         if !uc.is_empty() {
-            old_q.push_str(&format!(" AND (e.EmpNo LIKE @p{} OR e.EmpName LIKE @p{})", pidx, pidx + 1));
+            old_q.push_str(&format!(
+                " AND (e.EmpNo LIKE @p{} OR e.EmpName LIKE @p{})",
+                pidx,
+                pidx + 1
+            ));
             query_params.push(Some(format!("%{}%", uc)));
             query_params.push(Some(format!("%{}%", uc)));
             pidx += 2;
@@ -356,7 +399,10 @@ pub async fn get_oper_log_list(
         } else {
             // key_value 非 UUID（如数字主键），旧表 DocID 是零 UUID 无法匹配，用 OpenMsg LIKE 过滤
             old_q.push_str(&format!(" AND h.OpenMsg LIKE @p{}", pidx));
-            query_params.push(Some(format!("%{}%", params.key_value.as_deref().unwrap_or(""))));
+            query_params.push(Some(format!(
+                "%{}%",
+                params.key_value.as_deref().unwrap_or("")
+            )));
             pidx += 1;
         }
     }
@@ -381,7 +427,11 @@ pub async fn get_oper_log_list(
     let sort_prop = params.sort_prop.as_deref().unwrap_or("OperDate");
     let sort_order = params.sort_order.as_deref().unwrap_or("desc");
     let is_operdate_sort = sort_prop == "OperDate";
-    let direction = if sort_order.eq_ignore_ascii_case("asc") { "ASC" } else { "DESC" };
+    let direction = if sort_order.eq_ignore_ascii_case("asc") {
+        "ASC"
+    } else {
+        "DESC"
+    };
     let top_n = (page * page_size) as u32;
     // 下推 TOP N + ORDER BY 到子查询（new_q 用 OperDate，old_q 用 h.OperDate）
     let (new_q_final, old_q_final) = if is_operdate_sort {
@@ -404,8 +454,17 @@ pub async fn get_oper_log_list(
     };
 
     // 排序列不加表前缀：分页 SQL 会把 base_query 包成子查询 t，h. 前缀在子查询外不可见
-    let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, Some(&sort_prop), Some(sort_order));
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let paginated_sql = build_pagination_sql_with_sort(
+        &base_query,
+        page,
+        page_size,
+        Some(&sort_prop),
+        Some(sort_order),
+    );
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
     let mut total: i32 = 0;
     if let Ok(stream) = conn.query(&count_sql, &param_refs).await {
         if let Ok(Some(row)) = stream.into_row().await {
@@ -421,7 +480,12 @@ pub async fn get_oper_log_list(
         Err(e) => return Json(ApiResponse::err(&format!("读取日志数据失败: {}", e))),
     };
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
-    Json(ApiResponse::ok_paginated(data, total as u64, page, page_size))
+    Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    ))
 }
 
 /// 删除操作日志（支持 tSys_OperLog 和 tSys_OperHis 两表）
@@ -455,8 +519,12 @@ pub async fn delete_oper_log(
     // 删 tSys_OperLog
     if !new_ids.is_empty() {
         let placeholders: Vec<String> = (1..=new_ids.len()).map(|i| format!("@p{}", i)).collect();
-        let sql = format!("DELETE FROM tSys_OperLog WHERE OperLogID IN ({})", placeholders.join(","));
-        let p: Vec<&dyn tiberius::ToSql> = new_ids.iter().map(|s| s as &dyn tiberius::ToSql).collect();
+        let sql = format!(
+            "DELETE FROM tSys_OperLog WHERE OperLogID IN ({})",
+            placeholders.join(",")
+        );
+        let p: Vec<&dyn tiberius::ToSql> =
+            new_ids.iter().map(|s| s as &dyn tiberius::ToSql).collect();
         if let Ok(result) = conn.execute(&sql, &p).await {
             deleted += result.rows_affected().get(0).copied().unwrap_or(0) as i32;
         }
@@ -464,8 +532,12 @@ pub async fn delete_oper_log(
     // 删 tSys_OperHis
     if !old_ids.is_empty() {
         let placeholders: Vec<String> = (1..=old_ids.len()).map(|i| format!("@p{}", i)).collect();
-        let sql = format!("DELETE FROM tSys_OperHis WHERE OperHisID IN ({})", placeholders.join(","));
-        let p: Vec<&dyn tiberius::ToSql> = old_ids.iter().map(|s| s as &dyn tiberius::ToSql).collect();
+        let sql = format!(
+            "DELETE FROM tSys_OperHis WHERE OperHisID IN ({})",
+            placeholders.join(",")
+        );
+        let p: Vec<&dyn tiberius::ToSql> =
+            old_ids.iter().map(|s| s as &dyn tiberius::ToSql).collect();
         if let Ok(result) = conn.execute(&sql, &p).await {
             deleted += result.rows_affected().get(0).copied().unwrap_or(0) as i32;
         }
@@ -502,10 +574,18 @@ pub async fn cleanup_oper_log(
     }
     // 记录清理操作本身
     let _ = crate::services::inventory_ledger::record_oper(
-        &mut conn, "DELETE", "tSys_OperLog", "", &claims.user_code,
-        None, Some(&format!("清理{}天前操作日志，共{}条", days, deleted)),
-    ).await;
-    Json(ApiResponse::ok(serde_json::json!({ "deleted": deleted, "days": days })))
+        &mut conn,
+        "DELETE",
+        "tSys_OperLog",
+        "",
+        &claims.user_code,
+        None,
+        Some(&format!("清理{}天前操作日志，共{}条", days, deleted)),
+    )
+    .await;
+    Json(ApiResponse::ok(
+        serde_json::json!({ "deleted": deleted, "days": days }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -553,12 +633,18 @@ pub async fn list_system_params(
     }
     if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
-            sql.push_str(&format!(" AND (PCode LIKE @p{} OR PName LIKE @p{})", pidx, pidx));
+            sql.push_str(&format!(
+                " AND (PCode LIKE @p{} OR PName LIKE @p{})",
+                pidx, pidx
+            ));
             query_params.push(Some(format!("%{}%", kw)));
         }
     }
     sql.push_str(" ORDER BY PCode");
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
     let stream = match conn.query(&sql, &param_refs).await {
         Ok(s) => s,
         Err(e) => return Json(ApiResponse::err(&format!("查询系统参数失败: {}", e))),
@@ -673,7 +759,8 @@ pub async fn get_sys_params(
         Err(e) => return Json(ApiResponse::err(&format!("数据库连接失败: {}", e))),
     };
     let key = params.key.unwrap_or_default();
-    let sql = "SELECT PCode, PName, PValue, PKind, PTerm, PHelp FROM tSys_Parameters WHERE PCode = @p1";
+    let sql =
+        "SELECT PCode, PName, PValue, PKind, PTerm, PHelp FROM tSys_Parameters WHERE PCode = @p1";
     let v: &dyn tiberius::ToSql = &key;
     let stream = match conn.query(sql, &[v]).await {
         Ok(s) => s,
@@ -712,8 +799,14 @@ pub async fn save_sys_params(
     let check_sql = "SELECT ParametersID FROM tSys_Parameters WHERE PCode = @p1";
     let cv: &dyn tiberius::ToSql = &body.key;
     let exists = if let Ok(stream) = conn.query(check_sql, &[cv]).await {
-        if let Ok(Some(_)) = stream.into_row().await { true } else { false }
-    } else { false };
+        if let Ok(Some(_)) = stream.into_row().await {
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
     if exists {
         let sql = "UPDATE tSys_Parameters SET PValue=@p1, EDate=@p2 WHERE PCode=@p3";
         let v1: &dyn tiberius::ToSql = &val;
@@ -783,7 +876,8 @@ pub async fn list_acc_per(
 
     let count_sql = format!("SELECT COUNT(*) AS cnt FROM ({}) t", base_query);
     let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, None, None);
-    let param_refs: Vec<&dyn tiberius::ToSql> = qparams.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let param_refs: Vec<&dyn tiberius::ToSql> =
+        qparams.iter().map(|v| v as &dyn tiberius::ToSql).collect();
 
     let mut total: i32 = 0;
     let count_stream = conn.query(&count_sql, &param_refs).await?;
@@ -793,14 +887,19 @@ pub async fn list_acc_per(
     let data_stream = conn.query(&paginated_sql, &param_refs).await?;
     let rows: Vec<Row> = data_stream.into_first_result().await?;
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
-    Ok(Json(ApiResponse::ok_paginated(data, total as u64, page, page_size)))
+    Ok(Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 #[derive(Deserialize)]
 pub struct CreateAccPerParams {
-    pub AccYM: i32,           // YYYYMM
-    pub StartDate: String,    // YYYY-MM-DD
-    pub EndDate: String,      // YYYY-MM-DD
+    pub AccYM: i32,        // YYYYMM
+    pub StartDate: String, // YYYY-MM-DD
+    pub EndDate: String,   // YYYY-MM-DD
 }
 
 pub async fn create_acc_per(
@@ -816,7 +915,10 @@ pub async fn create_acc_per(
     let p1: &dyn tiberius::ToSql = &body.AccYM;
     if let Ok(s) = conn.query(check_sql, &[p1]).await {
         if let Ok(Some(_)) = s.into_row().await {
-            return Ok(Json(ApiResponse::err(&format!("会计期间 {} 已存在", body.AccYM))));
+            return Ok(Json(ApiResponse::err(&format!(
+                "会计期间 {} 已存在",
+                body.AccYM
+            ))));
         }
     }
     let sql = "INSERT INTO tSys_AccPer (AccPerID, AccYM, StartDate, EndDate) VALUES (NEWID(), @p1, @p2, @p3)";
@@ -824,7 +926,10 @@ pub async fn create_acc_per(
     let p_sd: &dyn tiberius::ToSql = &body.StartDate;
     let p_ed: &dyn tiberius::ToSql = &body.EndDate;
     conn.execute(sql, &[p_acc, p_sd, p_ed]).await?;
-    Ok(Json(ApiResponse::msg(&format!("会计期间 {} 创建成功", body.AccYM))))
+    Ok(Json(ApiResponse::msg(&format!(
+        "会计期间 {} 创建成功",
+        body.AccYM
+    ))))
 }
 
 #[derive(Deserialize)]
@@ -870,7 +975,10 @@ pub async fn delete_acc_per(
         let acc_ym: i32 = r.get::<i32, _>("AccYM").unwrap_or(0);
         let closed: i32 = r.get::<i32, _>("ClosedCount").unwrap_or(0);
         if closed > 0 {
-            return Ok(Json(ApiResponse::err(&format!("期间 {} 已结账，请先反结账再删除", acc_ym))));
+            return Ok(Json(ApiResponse::err(&format!(
+                "期间 {} 已结账，请先反结账再删除",
+                acc_ym
+            ))));
         }
         to_delete = Some(acc_ym);
     }
@@ -897,17 +1005,25 @@ pub async fn close_period(
     let p1: &dyn tiberius::ToSql = &body.AccYM;
     let mut exists = false;
     if let Ok(s) = conn.query(check_sql, &[p1]).await {
-        if let Ok(Some(_)) = s.into_row().await { exists = true; }
+        if let Ok(Some(_)) = s.into_row().await {
+            exists = true;
+        }
     }
     if !exists {
-        return Ok(Json(ApiResponse::err(&format!("会计期间 {} 不存在，请先创建", body.AccYM))));
+        return Ok(Json(ApiResponse::err(&format!(
+            "会计期间 {} 不存在，请先创建",
+            body.AccYM
+        ))));
     }
     // 写入 tStk_StockYM 触发月结（InitQty>0 表示已月结）
     // 若已存在 InitQty>0 的该 AccYM 记录则视为已结账，幂等成功
     let dup_sql = "SELECT TOP 1 CAST(GDSID AS varchar(40)) AS GID FROM tStk_StockYM WHERE AccYM = @p1 AND InitQty > 0";
     let dup = conn.query(dup_sql, &[p1]).await?;
     if let Ok(Some(_)) = dup.into_row().await {
-        return Ok(Json(ApiResponse::msg(&format!("期间 {} 已结账，无需重复操作", body.AccYM))));
+        return Ok(Json(ApiResponse::msg(&format!(
+            "期间 {} 已结账，无需重复操作",
+            body.AccYM
+        ))));
     }
     // 写入系统级月结标记：用 GDSID='00000000-0000-0000-0000-000000000000' StkID='00000000-0000-0000-0000-000000000000'
     let zero_uuid = "00000000-0000-0000-0000-000000000000";
@@ -916,7 +1032,10 @@ pub async fn close_period(
     let p_z: &dyn tiberius::ToSql = &zero_uuid;
     let p_ym: &dyn tiberius::ToSql = &body.AccYM;
     conn.execute(ins_sql, &[p_z, p_ym]).await?;
-    Ok(Json(ApiResponse::msg(&format!("期间 {} 结账成功", body.AccYM))))
+    Ok(Json(ApiResponse::msg(&format!(
+        "期间 {} 结账成功",
+        body.AccYM
+    ))))
 }
 
 #[derive(Deserialize)]
@@ -936,7 +1055,13 @@ pub async fn reopen_period(
     let p_z: &dyn tiberius::ToSql = &zero_uuid;
     let n = conn.execute(sql, &[p_ym, p_z]).await?;
     if n.rows_affected().first().copied().unwrap_or(0) == 0 {
-        return Ok(Json(ApiResponse::err(&format!("期间 {} 未结账或月结标记不存在", body.AccYM))));
+        return Ok(Json(ApiResponse::err(&format!(
+            "期间 {} 未结账或月结标记不存在",
+            body.AccYM
+        ))));
     }
-    Ok(Json(ApiResponse::msg(&format!("期间 {} 反结账成功", body.AccYM))))
+    Ok(Json(ApiResponse::msg(&format!(
+        "期间 {} 反结账成功",
+        body.AccYM
+    ))))
 }

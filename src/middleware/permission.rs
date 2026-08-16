@@ -14,6 +14,8 @@
 //!   2. 业务接口（/api/base/*, /api/inventory/*, ...）按 `{module}.{resource}.{action}` 推断
 //!   3. 通用接口（/api/generic/*）暂不校验权限码（由前端按钮控制）
 //!   4. 白名单接口（/api/auth/me 等）直接放行
+//!   5. 写操作动词兜底：未匹配路径若以写动词结尾（approve/save/delete/...），
+//!      要求用户拥有对应动作类的任意权限（见 infer_common_action_permission）
 //!
 //! ## admin 超级权限
 //!   工号 admin 的用户直接放行所有请求，不查 DB。
@@ -23,20 +25,20 @@
 //!   权限变更（角色分配/权限分配）后，前端需重新登录或调用 `/permission/my-permissions` 刷新。
 
 use axum::{
+    Json,
     extract::Request,
     http::StatusCode,
     middleware::Next,
     response::{IntoResponse, Response},
-    Json,
 };
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use once_cell::sync::Lazy;
 use tracing::warn;
 
-use crate::middleware::auth::Claims;
 use crate::db::get_pool;
+use crate::middleware::auth::Claims;
 
 /// 权限缓存条目
 struct CacheEntry {
@@ -92,10 +94,7 @@ fn service_unavailable_response(message: &str) -> Response {
 ///
 /// 执行顺序：auth_middleware → permission_middleware → handler
 /// 此中间件依赖 auth_middleware 已将 Claims 注入到 request extensions 中。
-pub async fn permission_middleware(
-    req: Request,
-    next: Next,
-) -> Response {
+pub async fn permission_middleware(req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
 
     // 1. 推断所需权限码（None 表示白名单/未匹配路径，直接放行）
@@ -126,9 +125,7 @@ pub async fn permission_middleware(
             //   改为 fail-closed 返回 503，让客户端重试，避免越权访问
             //   权限缓存 5 分钟内有效，DB 短时故障期间已有缓存的用户仍可正常使用
             warn!(error = %e, emp_id = %claims.emp_id, "权限查询失败，拒绝访问（fail-closed）");
-            return service_unavailable_response(
-                "权限服务暂时不可用，请稍后重试或联系管理员"
-            );
+            return service_unavailable_response("权限服务暂时不可用，请稍后重试或联系管理员");
         }
     };
 
@@ -146,19 +143,16 @@ pub async fn permission_middleware(
     if perms.iter().any(|p| p == "*") || perms.iter().any(|p| p == &required_perm) {
         return next.run(req).await;
     }
-    // P0-S5：generic.{action} 特殊处理
-    //   有 base.goods.update 等任意 *.update 权限的用户可调用 /api/generic/update
-    //   避免 generic 接口完全锁死非 admin 用户的业务操作
-    if is_generic_permission(&required_perm)
+    // P0-S5：generic.*/common.* 虚拟权限码特殊处理
+    //   有 base.goods.update 等任意 *.update 权限的用户可调用 /api/generic/update；
+    //   有任意 *.audit 权限的用户可调用 /api/doc/approve 等动词兜底路径
+    if is_action_suffixed_permission(&required_perm)
         && has_matching_action_permission(&perms, &required_perm)
     {
         return next.run(req).await;
     }
 
-    forbidden_response(&format!(
-        "无权限访问此功能（需要权限：{}）",
-        required_perm
-    ))
+    forbidden_response(&format!("无权限访问此功能（需要权限：{}）", required_perm))
 }
 
 /// 从 HTTP 路径推断所需权限码
@@ -213,6 +207,12 @@ fn infer_permission_from_path(path: &str) -> Option<String> {
         return Some("system.unknown.deny".to_string());
     }
 
+    // P0 修复：未匹配路径的写操作动词兜底（详见 infer_common_action_permission）
+    //   只有末段命中写动词表的路径才会被收紧，读路径维持原放行策略
+    if let Some(perm) = infer_common_action_permission(path) {
+        return Some(perm);
+    }
+
     // 其他未匹配路径：默认放行（避免锁死未知接口）
     None
 }
@@ -264,6 +264,10 @@ fn is_whitelisted(path: &str) -> bool {
         "/api/inventory/flows",
         "/api/health",
         "/api/metrics",
+        // 登出：仅操作本机会话黑名单，所有登录用户可用
+        "/api/auth/logout",
+        // 打印审计日志：打印是各岗位日常操作，记录日志本身不应受写权限限制
+        "/api/print/log/create",
     ];
     WHITELIST.contains(&path)
 }
@@ -297,30 +301,113 @@ fn infer_generic_permission(path: &str) -> Option<String> {
     Some(format!("generic.{}", action))
 }
 
-/// 判断权限码是否为 generic.* 类型（需特殊处理 action 后缀匹配）
-fn is_generic_permission(perm: &str) -> bool {
-    perm.starts_with("generic.")
+/// 判断权限码是否为虚拟动作类权限（generic.* / common.*，需 action 后缀匹配）
+fn is_action_suffixed_permission(perm: &str) -> bool {
+    perm.starts_with("generic.") || perm.starts_with("common.")
 }
 
-/// 检查用户权限列表中是否包含匹配 generic.{action} 的权限
-/// 规则：用户拥有 ANY `${module}.${resource}.${action}`（action 后缀匹配 generic 的 action）即放行
-/// 例如 generic.update 可由 base.goods.update / purchase.order.update 等任一权限满足
-fn has_matching_action_permission(perms: &[String], generic_perm: &str) -> bool {
-    let action = match generic_perm.strip_prefix("generic.") {
-        Some(a) => a,
-        None => return false,
+/// 检查用户权限列表中是否包含匹配 generic.{action} / common.{action} 的权限
+/// 规则：用户拥有 ANY `${module}.${resource}.${action}`（action 后缀匹配）即放行
+/// 例如 generic.update 可由 base.goods.update / purchase.order.update 等任一权限满足；
+///     common.write 是组合类，满足 .create 或 .update 任一后缀即可。
+fn has_matching_action_permission(perms: &[String], suffixed_perm: &str) -> bool {
+    let Some(action) = suffixed_perm
+        .strip_prefix("generic.")
+        .or_else(|| suffixed_perm.strip_prefix("common."))
+    else {
+        // 不带虚拟前缀的权限码不适用后缀匹配
+        return false;
     };
-    // 用户显式拥有 generic.{action} 权限（如 seed 数据中显式授予）
-    if perms.iter().any(|p| p == generic_perm) {
+    // 用户显式拥有该虚拟权限码（如 seed 数据中显式授予 generic.update）
+    if perms.iter().any(|p| p == suffixed_perm) {
         return true;
     }
-    // 隐式匹配：用户拥有任意 `${module}.${resource}.${action}` 权限
-    //   action 后缀必须严格匹配（避免 generic.delete 被任意 .read 权限满足）
+    // write 为组合类：create / update 任一后缀即可满足
+    let actions: Vec<&str> = match action {
+        "write" => vec!["create", "update"],
+        a => vec![a],
+    };
+    // 隐式匹配：用户拥有任意 `${...}.${action}` 权限
+    //   action 后缀必须严格匹配（避免 common.delete 被任意 .read 权限满足）
     perms.iter().any(|p| {
-        // 权限码格式：module.resource.action（至少 3 段，以 . 分隔）
         let parts: Vec<&str> = p.split('.').collect();
-        parts.len() >= 3 && parts.last() == Some(&action)
+        parts.len() >= 3 && parts.last().is_some_and(|last| actions.contains(last))
     })
+}
+
+/// P0 修复：未映射路径的写操作动词兜底
+///
+/// 背景：原实现对推断不出的路径一律放行，导致 `/api/doc/approve`、`/api/doc/void`、
+/// `/api/vip/delete`、`/api/sales-input/update`、`/api/generic/cleanup-orphan-stock`
+/// 等两段式/未注册模块的写接口仅需登录即可调用——任何用户（含零角色用户）都能
+/// 审核、作废单据或执行破坏性维护操作。
+///
+/// 规则：取路径最后一段，命中写操作动词表则要求用户拥有对应动作类的任意权限码，
+/// 复用 generic.* 的 action 后缀匹配机制：
+///   - audit 类  (approve/void/月结/清理等)  → 需任意 *.audit
+///   - delete 类 (delete/remove)             → 需任意 *.delete
+///   - create 类 (create/add)                → 需任意 *.create
+///   - update 类 (update/restore/edit)       → 需任意 *.update
+///   - write 类  (save/submit/import/...)    → 需任意 *.create 或 *.update
+///   - export 类 (export*/...)               → 需任意 *.export
+///
+/// 读操作与非动词结尾的路径（如 /api/base/goods、/api/finance/ap/supplier、
+/// /api/online/order/my）不受影响，维持原有放行策略；动词表是唯一调参点，
+/// 漏配某个动词只会回到"放行"而不会锁死业务。
+fn infer_common_action_permission(path: &str) -> Option<String> {
+    // 非动词结尾但实为写操作的端点，显式登记
+    if path == "/api/retail/sale" {
+        // 收银开单：零售销售落库 + 库存过账
+        return Some("common.write".to_string());
+    }
+    let rest = path.strip_prefix("/api/")?;
+    let last = rest.rsplit('/').next()?;
+    let class = match last {
+        // 审核/作废/维护类：改单据状态或执行破坏性维护，要求 .audit
+        "approve"
+        | "unapprove"
+        | "void"
+        | "audit"
+        | "close"
+        | "reopen"
+        | "rollback"
+        | "month_settle"
+        | "month_settle_rollback"
+        | "cleanup"
+        | "cleanup-orphan-stock"
+        | "clear"
+        | "recalc"
+        | "recalc-invoice"
+        | "reset" => "audit",
+        // 删除类
+        "delete" | "remove" => "delete",
+        // 新建类
+        "create" | "add" => "create",
+        // 修改类
+        "update" | "batch-update" | "restore" | "edit" => "update",
+        // 通用写入：日常保存/提交/导入等，create 或 update 任一即可
+        "save"
+        | "submit"
+        | "submit-batch"
+        | "import"
+        | "import-excel"
+        | "apply"
+        | "bulk-apply"
+        | "adjust"
+        | "settle"
+        | "confirm"
+        | "cancel"
+        | "ship"
+        | "batch-ship"
+        | "batch-generate-so"
+        | "generate-from-source"
+        | "record" => "write",
+        // 导出类
+        "export" | "export-excel" | "export-brands" | "export-products" | "export-detail"
+        | "export-summary" => "export",
+        _ => return None,
+    };
+    Some(format!("common.{}", class))
 }
 
 /// 高危接口权限码映射
@@ -347,7 +434,10 @@ fn infer_high_risk_permission(path: &str) -> Option<String> {
     }
     // 用户管理路由已废弃：员工即用户，统一由 tBas_Emp 管理（/api/base-data/employee/*）
     // 系统参数（高危）
-    if path == "/api/system/params/save" || path == "/api/system/params/update" || path == "/api/system/params/delete" {
+    if path == "/api/system/params/save"
+        || path == "/api/system/params/update"
+        || path == "/api/system/params/delete"
+    {
         return Some("system.params.update".to_string());
     }
     // 备份（高危）
@@ -399,10 +489,27 @@ fn infer_business_permission(path: &str) -> Option<String> {
         "print" => "print",
         "print-log" => "print",
         // list / get / detail 等读操作不校验（前端菜单权限已控制可见性）
-        "list" | "get" | "detail" | "tree" | "flat" | "categories" | "regions"
-        | "methods" | "configs" | "status" | "proof" | "verify" | "claim"
-        | "default" | "batch-ship" | "batch-generate-so" | "month_settle"
-        | "month_settle_rollback" | "replenish" | "register" | "stores" => return None,
+        "list"
+        | "get"
+        | "detail"
+        | "tree"
+        | "flat"
+        | "categories"
+        | "regions"
+        | "methods"
+        | "configs"
+        | "status"
+        | "proof"
+        | "verify"
+        | "claim"
+        | "default"
+        | "batch-ship"
+        | "batch-generate-so"
+        | "month_settle"
+        | "month_settle_rollback"
+        | "replenish"
+        | "register"
+        | "stores" => return None,
         _ => return None,
     };
 
@@ -412,7 +519,10 @@ fn infer_business_permission(path: &str) -> Option<String> {
 /// 获取用户权限列表（带缓存）
 ///
 /// 优先从内存缓存读取，缓存过期或不存在时查 DB。
-async fn get_user_permissions_cached(emp_id: &str, user_code: &str) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+async fn get_user_permissions_cached(
+    emp_id: &str,
+    user_code: &str,
+) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
     // admin 直接返回 ["*"]
     if user_code.eq_ignore_ascii_case("admin") {
         return Ok(vec!["*".to_string()]);
@@ -454,10 +564,13 @@ async fn get_user_permissions_cached(emp_id: &str, user_code: &str) -> Result<Ve
                 }
             }
         }
-        cache.insert(emp_id.to_string(), CacheEntry {
-            permissions: perms.clone(),
-            cached_at: Instant::now(),
-        });
+        cache.insert(
+            emp_id.to_string(),
+            CacheEntry {
+                permissions: perms.clone(),
+                cached_at: Instant::now(),
+            },
+        );
     }
 
     Ok(perms)
@@ -468,7 +581,9 @@ async fn get_user_permissions_cached(emp_id: &str, user_code: &str) -> Result<Ve
 /// 查询逻辑与 `handlers::permission::get_my_permissions` 一致：
 /// tSys_UserRule → tSys_RuleMenu → tSys_Menus，生成 `${base_code}.${action}` 权限码。
 /// base_code 优先级：PermCode > MDCallName > SYM_NO > SYM_ID
-async fn fetch_user_permissions_from_db(emp_id: &str) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+async fn fetch_user_permissions_from_db(
+    emp_id: &str,
+) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
     let mut conn = get_pool().get().await?;
     let sql = r#"SELECT m.SYM_NO, m.MDCallName, m.SYM_ID, m.PermCode,
                  rm.CanRead, rm.CanCreate, rm.CanUpdate, rm.CanDelete, rm.CanAudit, rm.CanPrint, rm.CanExport
@@ -481,14 +596,30 @@ async fn fetch_user_permissions_from_db(emp_id: &str) -> Result<Vec<String>, Box
 
     let mut perms: Vec<String> = Vec::new();
     for r in &rows {
-        let sym_no: String = r.try_get::<&str, _>("SYM_NO")
-            .ok().flatten().unwrap_or("").to_string();
-        let md_call: String = r.try_get::<&str, _>("MDCallName")
-            .ok().flatten().unwrap_or("").to_string();
-        let sym_id: String = r.try_get::<&str, _>("SYM_ID")
-            .ok().flatten().unwrap_or("").to_string();
-        let perm_code: String = r.try_get::<&str, _>("PermCode")
-            .ok().flatten().unwrap_or("").to_string();
+        let sym_no: String = r
+            .try_get::<&str, _>("SYM_NO")
+            .ok()
+            .flatten()
+            .unwrap_or("")
+            .to_string();
+        let md_call: String = r
+            .try_get::<&str, _>("MDCallName")
+            .ok()
+            .flatten()
+            .unwrap_or("")
+            .to_string();
+        let sym_id: String = r
+            .try_get::<&str, _>("SYM_ID")
+            .ok()
+            .flatten()
+            .unwrap_or("")
+            .to_string();
+        let perm_code: String = r
+            .try_get::<&str, _>("PermCode")
+            .ok()
+            .flatten()
+            .unwrap_or("")
+            .to_string();
 
         // 权限码优先级：PermCode（语义化） > MDCallName > SYM_NO > SYM_ID
         // 与 handlers/permission.rs 的 get_my_permissions 保持一致
@@ -513,13 +644,27 @@ async fn fetch_user_permissions_from_db(emp_id: &str) -> Result<Vec<String>, Box
         let can_print = read_flag(r, "CanPrint");
         let can_export = read_flag(r, "CanExport");
 
-        if can_read { perms.push(format!("{}.read", code)); }
-        if can_create { perms.push(format!("{}.create", code)); }
-        if can_update { perms.push(format!("{}.update", code)); }
-        if can_delete { perms.push(format!("{}.delete", code)); }
-        if can_audit { perms.push(format!("{}.audit", code)); }
-        if can_print { perms.push(format!("{}.print", code)); }
-        if can_export { perms.push(format!("{}.export", code)); }
+        if can_read {
+            perms.push(format!("{}.read", code));
+        }
+        if can_create {
+            perms.push(format!("{}.create", code));
+        }
+        if can_update {
+            perms.push(format!("{}.update", code));
+        }
+        if can_delete {
+            perms.push(format!("{}.delete", code));
+        }
+        if can_audit {
+            perms.push(format!("{}.audit", code));
+        }
+        if can_print {
+            perms.push(format!("{}.print", code));
+        }
+        if can_export {
+            perms.push(format!("{}.export", code));
+        }
     }
 
     Ok(perms)
@@ -548,4 +693,139 @@ pub fn invalidate_user_permission_cache(emp_id: &str) {
 pub fn invalidate_all_permission_cache() {
     let mut cache = PERM_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.clear();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// P0 修复回归：审核/作废/维护类动词必须收紧到 common.audit
+    #[test]
+    fn audit_verbs_require_audit_suffix() {
+        for path in [
+            "/api/doc/approve",
+            "/api/doc/unapprove",
+            "/api/doc/void",
+            "/api/oa/workflow/approve",
+            "/api/finance/receipt/audit",
+            "/api/inventory/month_settle",
+            "/api/inventory/month_settle_rollback",
+            "/api/generic/cleanup-orphan-stock",
+            "/api/print/versions/rollback",
+            "/api/commission/recalc-invoice",
+        ] {
+            assert_eq!(
+                infer_permission_from_path(path),
+                Some("common.audit".to_string()),
+                "{} 应推断为 common.audit",
+                path
+            );
+        }
+    }
+
+    /// P0 修复回归：删除/修改/保存/导出类动词按对应动作类收紧
+    #[test]
+    fn crud_and_write_verbs_infer_common_classes() {
+        assert_eq!(
+            infer_permission_from_path("/api/vip/delete"),
+            Some("common.delete".to_string())
+        );
+        assert_eq!(
+            infer_permission_from_path("/api/sales-input/update"),
+            Some("common.update".to_string())
+        );
+        assert_eq!(
+            infer_permission_from_path("/api/doc/save"),
+            Some("common.write".to_string())
+        );
+        assert_eq!(
+            infer_permission_from_path("/api/doc/generate-from-source"),
+            Some("common.write".to_string())
+        );
+        assert_eq!(
+            infer_permission_from_path("/api/retail/sale"),
+            Some("common.write".to_string())
+        );
+        assert_eq!(
+            infer_permission_from_path("/api/categories/create"),
+            Some("common.create".to_string())
+        );
+        assert_eq!(
+            infer_permission_from_path("/api/report/sales/export-excel"),
+            Some("common.export".to_string())
+        );
+        assert_eq!(
+            infer_permission_from_path("/api/pricing/apply"),
+            Some("common.write".to_string())
+        );
+    }
+
+    /// 读路径与非动词结尾路径必须维持放行（不误伤只读接口）
+    #[test]
+    fn read_and_non_verb_paths_stay_allowed() {
+        for path in [
+            "/api/base/goods",
+            "/api/base/brand",
+            "/api/finance/ap/supplier",
+            "/api/finance/ar/customer/detail",
+            "/api/online/order/my",
+            "/api/online/payment/claim",
+            "/api/doc/graph",
+            "/api/retail/cashier",
+            "/api/inventory/alerts/replenish",
+            "/api/auth/logout",
+            "/api/print/log/create",
+            "/api/mobile/change-password",
+            "/api/mobile/sync-base-data",
+        ] {
+            assert_eq!(
+                infer_permission_from_path(path),
+                None,
+                "{} 应保持放行",
+                path
+            );
+        }
+    }
+
+    /// 已有映射链路保持不变：业务三段式仍要求精确权限码，generic 走 generic.*
+    #[test]
+    fn mapped_business_paths_keep_exact_codes() {
+        assert_eq!(
+            infer_permission_from_path("/api/base/goods/create"),
+            Some("base.goods.create".to_string())
+        );
+        assert_eq!(
+            infer_permission_from_path("/api/purchase/order/approve"),
+            Some("purchase.order.audit".to_string())
+        );
+        assert_eq!(
+            infer_permission_from_path("/api/generic/update"),
+            Some("generic.update".to_string())
+        );
+        // 高危模块未映射路径：默认拒绝
+        assert_eq!(
+            infer_permission_from_path("/api/system/unknown-op"),
+            Some("system.unknown.deny".to_string())
+        );
+    }
+
+    /// write 组合类：.create 或 .update 任一后缀可满足；其他类严格匹配
+    #[test]
+    fn write_class_matches_create_or_update_suffix() {
+        let creator = vec!["sales.order.create".to_string()];
+        assert!(has_matching_action_permission(&creator, "common.write"));
+        assert!(has_matching_action_permission(&creator, "common.create"));
+        assert!(!has_matching_action_permission(&creator, "common.update"));
+        assert!(!has_matching_action_permission(&creator, "common.audit"));
+        assert!(!has_matching_action_permission(&creator, "common.delete"));
+        assert!(!has_matching_action_permission(&creator, "common.export"));
+
+        let auditor = vec!["purchase.order.audit".to_string()];
+        assert!(has_matching_action_permission(&auditor, "common.audit"));
+        assert!(!has_matching_action_permission(&auditor, "common.write"));
+
+        // 显式授予的虚拟权限码同样生效
+        let explicit = vec!["common.audit".to_string()];
+        assert!(has_matching_action_permission(&explicit, "common.audit"));
+    }
 }

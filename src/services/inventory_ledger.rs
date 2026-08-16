@@ -12,10 +12,10 @@
 //! 业务方向：+1 入库 / -1 出库 / 0 调拨（双边）
 //! 安全网：`docs/库存安全网触发器.md` 中的 4 触发器 + 3 CHECK 约束
 
+use crate::utils::row_get_f64;
 use bb8::PooledConnection;
 use bb8_tiberius::ConnectionManager;
 use tiberius::ToSql;
-use crate::utils::row_get_f64;
 
 pub type Conn = PooledConnection<'static, ConnectionManager>;
 
@@ -61,49 +61,150 @@ pub async fn query_qqty(conn: &mut Conn, gdsid: &str, stkid: &str) -> f64 {
 
 /// UPSERT tStk_Stock（只动 Qty，不动 QQty），返回更新后的 Qty
 /// QQty（预占量）只由 apply_qqty_delta 显式调用时才动
-pub async fn apply_stock_delta(
-    conn: &mut Conn,
-    gdsid: &str,
-    stkid: &str,
-    delta: f64,
-) -> f64 {
+///
+/// P0 修复（防超卖竞态）：原实现"先 SELECT 校验、再 UPDATE"，两个并发审核事务
+/// 在 READ COMMITTED 下都能读到同一个旧库存值并双双通过校验，导致超卖/负库存。
+/// 现将充足性校验合并进 UPDATE 谓词（仅当行存在且更新后 Qty >= -0.0001 才生效）：
+/// 数据库对同一行的 UPDATE 串行执行，后到的事务以提交后的最新值重估谓词。
+/// 注意兼容 SQL Server 2005，不使用 MERGE（2008 才引入）。
+/// 返回值约定：成功返回新 Qty；库存不足或 SQL 失败返回 -1.0（调用方按 < -0.5 判失败）。
+pub async fn apply_stock_delta(conn: &mut Conn, gdsid: &str, stkid: &str, delta: f64) -> f64 {
     if gdsid.is_empty() || stkid.is_empty() {
         tracing::debug!("[apply_stock_delta] 跳过: gdsid 或 stkid 为空");
         return 0.0;
     }
-    tracing::debug!("[apply_stock_delta] 执行: gdsid={} stkid={} delta={}", gdsid, stkid, delta);
-    let sql = r#"IF EXISTS (SELECT 1 FROM tStk_Stock WHERE GDSID = @p1 AND StkID = @p2)
-                 UPDATE tStk_Stock SET Qty = ISNULL(Qty,0) + @p3
-                 WHERE GDSID = @p1 AND StkID = @p2
-                 ELSE
-                 INSERT INTO tStk_Stock (GDSStockID, GDSID, StkID, Qty, QQty)
-                 VALUES (NEWID(), @p1, @p2, @p3, 0)"#;
+    tracing::debug!(
+        "[apply_stock_delta] 执行: gdsid={} stkid={} delta={}",
+        gdsid,
+        stkid,
+        delta
+    );
+    let guard_sql = r#"UPDATE tStk_Stock SET Qty = ISNULL(Qty,0) + @p3
+                 WHERE GDSID = @p1 AND StkID = @p2 AND ISNULL(Qty,0) + @p3 >= -0.0001"#;
     let params: Vec<&dyn ToSql> = vec![&gdsid, &stkid, &delta];
-    match conn.execute(sql, &params).await {
+    match conn.execute(guard_sql, &params).await {
         Ok(r) => {
             let ra = r.rows_affected().get(0).copied().unwrap_or(0);
-            tracing::debug!("[apply_stock_delta] SQL 执行成功, rows_affected={}", ra);
+            if ra == 1 {
+                let q = query_stock_qty(conn, gdsid, stkid).await;
+                tracing::debug!(
+                    "[apply_stock_delta] 条件更新成功, rows_affected={}, new_qty={}",
+                    ra,
+                    q
+                );
+                return q;
+            }
+            tracing::debug!(
+                "[apply_stock_delta] 条件更新命中 0 行（行不存在或库存不足），进入插入分支"
+            );
         }
         Err(e) => {
             tracing::error!("[apply_stock_delta] SQL 执行失败: err={}", e);
             return -1.0;
         }
     }
-    let q = query_stock_qty(conn, gdsid, stkid).await;
-    tracing::debug!("[apply_stock_delta] 查询更新后库存: {}", q);
-    q
+    // 0 行更新：行不存在（首笔入库）或库存不足。
+    // 仅当行确实不存在且 delta 非负时插入新行；负数首笔等同于库存不足。
+    let exists_sql = "SELECT 1 FROM tStk_Stock WHERE GDSID = @p1 AND StkID = @p2";
+    match conn.query(exists_sql, &params[..2]).await {
+        Ok(stream) => {
+            if let Ok(Some(_)) = stream.into_row().await {
+                tracing::warn!(
+                    "[apply_stock_delta] 库存不足，拒绝扣减: gdsid={} stkid={} delta={}",
+                    gdsid,
+                    stkid,
+                    delta
+                );
+                return -1.0;
+            }
+        }
+        Err(e) => {
+            tracing::error!("[apply_stock_delta] 探测库存行失败: err={}", e);
+            return -1.0;
+        }
+    }
+    if delta < -0.0001 {
+        tracing::warn!(
+            "[apply_stock_delta] 首笔即负数，拒绝: gdsid={} stkid={} delta={}",
+            gdsid,
+            stkid,
+            delta
+        );
+        return -1.0;
+    }
+    let insert_sql = r#"INSERT INTO tStk_Stock (GDSStockID, GDSID, StkID, Qty, QQty)
+                 VALUES (NEWID(), @p1, @p2, @p3, 0)"#;
+    match conn.execute(insert_sql, &params).await {
+        Ok(_) => {
+            tracing::debug!(
+                "[apply_stock_delta] 插入新库存行: gdsid={} stkid={} qty={}",
+                gdsid,
+                stkid,
+                delta
+            );
+            delta
+        }
+        Err(e) => {
+            // 并发插入撞主键（其他事务已抢先建行）：回退为条件更新重试一次。
+            // delta >= 0 时谓词必然满足，重试等价于把本次增量补上；仍失败则冒泡由业务事务回滚。
+            tracing::warn!("[apply_stock_delta] 插入冲突，回退条件更新: err={}", e);
+            match conn.execute(guard_sql, &params).await {
+                Ok(r) if r.rows_affected().get(0).copied().unwrap_or(0) == 1 => {
+                    query_stock_qty(conn, gdsid, stkid).await
+                }
+                _ => {
+                    tracing::error!(
+                        "[apply_stock_delta] 回退更新仍失败: gdsid={} stkid={} delta={}",
+                        gdsid,
+                        stkid,
+                        delta
+                    );
+                    -1.0
+                }
+            }
+        }
+    }
 }
 
 /// 仅调整 QQty（销售订单预占/释放用，Qty 不变）
+///
+/// P0 修复（防预占竞态）：负向预占（扣减预占量）改为条件更新，
+/// 校验合入 UPDATE 谓词，避免并发下重复预占/预占为负。
 pub async fn apply_qqty_delta(conn: &mut Conn, gdsid: &str, stkid: &str, delta: f64) -> bool {
     if gdsid.is_empty() || stkid.is_empty() {
         return true;
     }
     if delta < 0.0 {
-        let cur_qq = query_qqty(conn, gdsid, stkid).await;
-        if cur_qq + delta < -0.0001 {
-            return false;
-        }
+        let sql = r#"UPDATE tStk_Stock SET QQty = ISNULL(QQty,0) + @p3
+                 WHERE GDSID = @p1 AND StkID = @p2 AND ISNULL(QQty,0) + @p3 >= -0.0001"#;
+        let params: Vec<&dyn ToSql> = vec![&gdsid, &stkid, &delta];
+        return match conn.execute(sql, &params).await {
+            Ok(r) => {
+                let ra = r.rows_affected().get(0).copied().unwrap_or(0);
+                if ra == 1 {
+                    true
+                } else {
+                    // 0 行 = 行不存在（当前预占 0）或预占不足，均为失败
+                    tracing::warn!(
+                        "[apply_qqty_delta] 预占不足，拒绝: gdsid={} stkid={} delta={}",
+                        gdsid,
+                        stkid,
+                        delta
+                    );
+                    false
+                }
+            }
+            Err(e) => {
+                tracing::error!(
+                    "[apply_qqty_delta] SQL 执行失败: gdsid={}, stkid={}, delta={}, err={}",
+                    gdsid,
+                    stkid,
+                    delta,
+                    e
+                );
+                false
+            }
+        };
     }
     let sql = r#"IF EXISTS (SELECT 1 FROM tStk_Stock WHERE GDSID = @p1 AND StkID = @p2)
                  UPDATE tStk_Stock SET QQty = ISNULL(QQty,0) + @p3 WHERE GDSID = @p1 AND StkID = @p2
@@ -113,7 +214,13 @@ pub async fn apply_qqty_delta(conn: &mut Conn, gdsid: &str, stkid: &str, delta: 
     match conn.execute(sql, &params).await {
         Ok(_) => true,
         Err(e) => {
-            tracing::error!("[apply_qqty_delta] SQL 执行失败: gdsid={}, stkid={}, delta={}, err={}", gdsid, stkid, delta, e);
+            tracing::error!(
+                "[apply_qqty_delta] SQL 执行失败: gdsid={}, stkid={}, delta={}, err={}",
+                gdsid,
+                stkid,
+                delta,
+                e
+            );
             false
         }
     }
@@ -151,15 +258,23 @@ pub async fn insert_stock_tran_his(
                  (GDSID, StkID, LastTranDate, Qty, TranID, TranDetailID, InQty, OutQty, EndQty)
                  VALUES (@p1, @p2, GETDATE(), @p7 - @p3 + @p4, @p5, @p6, @p3, @p4, @p7)"#;
     let params: Vec<&dyn ToSql> = vec![
-        &gdsid, &stkid,
-        &in_qty, &out_qty,
-        &tran_id, &tran_detail_id,
+        &gdsid,
+        &stkid,
+        &in_qty,
+        &out_qty,
+        &tran_id,
+        &tran_detail_id,
         &end_qty,
     ];
     match conn.execute(sql, &params).await {
         Ok(_) => true,
         Err(e) => {
-            tracing::warn!("[insert_stock_tran_his] 写入流水失败: gdsid={}, stkid={}, err={}", gdsid, stkid, e);
+            tracing::warn!(
+                "[insert_stock_tran_his] 写入流水失败: gdsid={}, stkid={}, err={}",
+                gdsid,
+                stkid,
+                e
+            );
             false
         }
     }
@@ -176,24 +291,51 @@ pub async fn upsert_stock_tran_his(
     out_qty: f64,
     end_qty: f64,
 ) {
-    insert_stock_tran_his(conn, gdsid, stkid, tran_id, tran_detail_id, in_qty, out_qty, end_qty).await;
+    insert_stock_tran_his(
+        conn,
+        gdsid,
+        stkid,
+        tran_id,
+        tran_detail_id,
+        in_qty,
+        out_qty,
+        end_qty,
+    )
+    .await;
 }
 
 /// 累加 tStk_StockYM（按当前月份 YYYYMM）
-pub async fn upsert_stock_ym(conn: &mut Conn, gdsid: &str, stkid: &str, in_qty: f64, out_qty: f64) -> bool {
+pub async fn upsert_stock_ym(
+    conn: &mut Conn,
+    gdsid: &str,
+    stkid: &str,
+    in_qty: f64,
+    out_qty: f64,
+) -> bool {
     // P3-27 修复：原 fallback 写死 202501（已过期值）
     //   改为：解析失败时用 UTC 当前年月（容器时区错误时仍能写入合理值）
     //   推荐：部署时设置 TZ=Asia/Shanghai（已在 docker-compose.yml 配置）
-    let ym: i32 = chrono::Local::now().format("%Y%m").to_string().parse().unwrap_or_else(|_| {
-        let utc_ym = chrono::Utc::now().format("%Y%m").to_string();
-        tracing::warn!("本地时间月份解析失败，回退到 UTC 年月: {}", utc_ym);
-        utc_ym.parse().unwrap_or(202601)
-    });
+    let ym: i32 = chrono::Local::now()
+        .format("%Y%m")
+        .to_string()
+        .parse()
+        .unwrap_or_else(|_| {
+            let utc_ym = chrono::Utc::now().format("%Y%m").to_string();
+            tracing::warn!("本地时间月份解析失败，回退到 UTC 年月: {}", utc_ym);
+            utc_ym.parse().unwrap_or(202601)
+        });
     upsert_stock_ym_with_period(conn, gdsid, stkid, in_qty, out_qty, ym).await
 }
 
 /// 累加 tStk_StockYM（按指定月份 YYYYMM）
-pub async fn upsert_stock_ym_with_period(conn: &mut Conn, gdsid: &str, stkid: &str, in_qty: f64, out_qty: f64, ym: i32) -> bool {
+pub async fn upsert_stock_ym_with_period(
+    conn: &mut Conn,
+    gdsid: &str,
+    stkid: &str,
+    in_qty: f64,
+    out_qty: f64,
+    ym: i32,
+) -> bool {
     if gdsid.is_empty() || stkid.is_empty() || (in_qty == 0.0 && out_qty == 0.0) {
         return true;
     }
@@ -207,14 +349,17 @@ pub async fn upsert_stock_ym_with_period(conn: &mut Conn, gdsid: &str, stkid: &s
                  ELSE
                  INSERT INTO tStk_StockYM (AccYM, StkID, GDSID, InitQty, inQty, OutQty, EndQty)
                  VALUES (@p1, @p2, @p3, 0, @p4, @p5, @p6)"#;
-    let params: Vec<&dyn ToSql> = vec![
-        &ym, &stkid, &gdsid,
-        &in_qty, &out_qty, &delta,
-    ];
+    let params: Vec<&dyn ToSql> = vec![&ym, &stkid, &gdsid, &in_qty, &out_qty, &delta];
     match conn.execute(sql, &params).await {
         Ok(_) => true,
         Err(e) => {
-            tracing::warn!("[upsert_stock_ym_with_period] 写入月结存失败: ym={}, gdsid={}, stkid={}, err={}", ym, gdsid, stkid, e);
+            tracing::warn!(
+                "[upsert_stock_ym_with_period] 写入月结存失败: ym={}, gdsid={}, stkid={}, err={}",
+                ym,
+                gdsid,
+                stkid,
+                e
+            );
             false
         }
     }
@@ -236,7 +381,12 @@ pub async fn upsert_stock_qty_snapshot(conn: &mut Conn, gdsid: &str, stkid: &str
     match conn.execute(sql, &params).await {
         Ok(_) => true,
         Err(e) => {
-            tracing::warn!("[upsert_stock_qty_snapshot] 写入快照失败: gdsid={}, stkid={}, err={}", gdsid, stkid, e);
+            tracing::warn!(
+                "[upsert_stock_qty_snapshot] 写入快照失败: gdsid={}, stkid={}, err={}",
+                gdsid,
+                stkid,
+                e
+            );
             false
         }
     }
@@ -252,7 +402,11 @@ pub async fn delete_stock_tran_his(conn: &mut Conn, tran_id: &str) -> bool {
     match conn.execute(sql, &params).await {
         Ok(_) => true,
         Err(e) => {
-            tracing::warn!("[delete_stock_tran_his] 删除流水失败: tran_id={}, err={}", tran_id, e);
+            tracing::warn!(
+                "[delete_stock_tran_his] 删除流水失败: tran_id={}, err={}",
+                tran_id,
+                e
+            );
             false
         }
     }
@@ -272,12 +426,26 @@ pub async fn post_ledger(
 ) -> (f64, bool) {
     // 默认用当前月份
     // P3-27 修复：同 upsert_stock_ym，fallback 改为 UTC 年月（不再写死 202501）
-    let ym: i32 = chrono::Local::now().format("%Y%m").to_string().parse().unwrap_or_else(|_| {
-        let utc_ym = chrono::Utc::now().format("%Y%m").to_string();
-        tracing::warn!("本地时间月份解析失败，回退到 UTC 年月: {}", utc_ym);
-        utc_ym.parse().unwrap_or(202601)
-    });
-    post_ledger_with_period(conn, gdsid, stkid, qty, direction, tran_id, tran_detail_id, ym).await
+    let ym: i32 = chrono::Local::now()
+        .format("%Y%m")
+        .to_string()
+        .parse()
+        .unwrap_or_else(|_| {
+            let utc_ym = chrono::Utc::now().format("%Y%m").to_string();
+            tracing::warn!("本地时间月份解析失败，回退到 UTC 年月: {}", utc_ym);
+            utc_ym.parse().unwrap_or(202601)
+        });
+    post_ledger_with_period(
+        conn,
+        gdsid,
+        stkid,
+        qty,
+        direction,
+        tran_id,
+        tran_detail_id,
+        ym,
+    )
+    .await
 }
 
 /// 按指定会计月份过账（支持按单据日期所在月结存）
@@ -291,7 +459,16 @@ pub async fn post_ledger_with_period(
     tran_detail_id: &str,
     ym: i32,
 ) -> (f64, bool) {
-    tracing::debug!("[post_ledger] 入参: gdsid={} stkid={} qty={} direction={} tran_id={} did={} ym={}", gdsid, stkid, qty, direction, tran_id, tran_detail_id, ym);
+    tracing::debug!(
+        "[post_ledger] 入参: gdsid={} stkid={} qty={} direction={} tran_id={} did={} ym={}",
+        gdsid,
+        stkid,
+        qty,
+        direction,
+        tran_id,
+        tran_detail_id,
+        ym
+    );
     if gdsid.is_empty() || stkid.is_empty() || qty == 0.0 {
         tracing::debug!("[post_ledger] 跳过: 空值或 qty=0");
         return (0.0, true);
@@ -299,31 +476,74 @@ pub async fn post_ledger_with_period(
     let delta = direction * qty;
     tracing::debug!("[post_ledger] delta={}", delta);
     if delta < 0.0 {
+        // 预检查仅用于快速失败与友好提示；并发安全的权威校验
+        // 在 apply_stock_delta 的条件 UPDATE 谓词中完成（P0 防超卖修复）
         let cur = query_stock_qty(conn, gdsid, stkid).await;
-        tracing::debug!("[post_ledger] 出库校验: 当前库存={} 需求={} (cur+delta={})", cur, qty, cur + delta);
+        tracing::debug!(
+            "[post_ledger] 出库校验: 当前库存={} 需求={} (cur+delta={})",
+            cur,
+            qty,
+            cur + delta
+        );
         if cur + delta < -0.0001 {
-            tracing::warn!("[post_ledger] 库存不足，返回 false: gdsid={} stkid={} cur={} need={}", gdsid, stkid, cur, qty);
+            tracing::warn!(
+                "[post_ledger] 库存不足，返回 false: gdsid={} stkid={} cur={} need={}",
+                gdsid,
+                stkid,
+                cur,
+                qty
+            );
             return (cur, false);
         }
     }
     let new_qty = apply_stock_delta(conn, gdsid, stkid, delta).await;
     tracing::debug!("[post_ledger] apply_stock_delta 返回 new_qty={}", new_qty);
     if new_qty < -0.5 {
-        tracing::error!("[post_ledger] new_qty < -0.5，返回 false: gdsid={} stkid={} delta={}", gdsid, stkid, delta);
+        tracing::error!(
+            "[post_ledger] new_qty < -0.5，返回 false: gdsid={} stkid={} delta={}",
+            gdsid,
+            stkid,
+            delta
+        );
         return (0.0, false);
     }
     let in_qty = if delta > 0.0 { delta } else { 0.0 };
     let out_qty = if delta < 0.0 { -delta } else { 0.0 };
-    if !insert_stock_tran_his(conn, gdsid, stkid, tran_id, tran_detail_id, in_qty, out_qty, new_qty).await {
-        tracing::error!("[post_ledger] insert_stock_tran_his 失败: gdsid={} stkid={} tran_id={}", gdsid, stkid, tran_id);
+    if !insert_stock_tran_his(
+        conn,
+        gdsid,
+        stkid,
+        tran_id,
+        tran_detail_id,
+        in_qty,
+        out_qty,
+        new_qty,
+    )
+    .await
+    {
+        tracing::error!(
+            "[post_ledger] insert_stock_tran_his 失败: gdsid={} stkid={} tran_id={}",
+            gdsid,
+            stkid,
+            tran_id
+        );
         return (new_qty, false);
     }
     if !upsert_stock_ym_with_period(conn, gdsid, stkid, in_qty, out_qty, ym).await {
-        tracing::error!("[post_ledger] upsert_stock_ym_with_period 失败: gdsid={} stkid={} ym={}", gdsid, stkid, ym);
+        tracing::error!(
+            "[post_ledger] upsert_stock_ym_with_period 失败: gdsid={} stkid={} ym={}",
+            gdsid,
+            stkid,
+            ym
+        );
         return (new_qty, false);
     }
     if !upsert_stock_qty_snapshot(conn, gdsid, stkid).await {
-        tracing::error!("[post_ledger] upsert_stock_qty_snapshot 失败: gdsid={} stkid={}", gdsid, stkid);
+        tracing::error!(
+            "[post_ledger] upsert_stock_qty_snapshot 失败: gdsid={} stkid={}",
+            gdsid,
+            stkid
+        );
         return (new_qty, false);
     }
     tracing::debug!("[post_ledger] 成功: new_qty={}", new_qty);
@@ -340,7 +560,9 @@ pub async fn post_ledger_reverse(
     tran_id: &str,
     tran_detail_id: &str,
 ) -> bool {
-    post_ledger(conn, gdsid, stkid, qty, -direction, tran_id, tran_detail_id).await.1
+    post_ledger(conn, gdsid, stkid, qty, -direction, tran_id, tran_detail_id)
+        .await
+        .1
 }
 
 /// 反审专用：只反向调整 Qty + StockYM + 快照，不写 TranHis
@@ -375,11 +597,7 @@ pub async fn reverse_stock_delta_only(
 /// 月结：把指定月份所有 (StkID, GDSID) 的 EndQty 作为下月 InitQty
 ///
 /// 返回值：>=0 表示成功写入的行数；-1 表示执行失败（详见 tracing 日志）
-pub async fn month_end_settle(
-    conn: &mut Conn,
-    from_ym: i32,
-    to_ym: i32,
-) -> i32 {
+pub async fn month_end_settle(conn: &mut Conn, from_ym: i32, to_ym: i32) -> i32 {
     let sql = r#"
         INSERT INTO tStk_StockYM (AccYM, StkID, GDSID, InitQty, inQty, OutQty, EndQty)
         SELECT @p1, m.StkID, m.GDSID, m.EndQty, 0, 0, m.EndQty
@@ -394,7 +612,12 @@ pub async fn month_end_settle(
     match conn.execute(sql, &params).await {
         Ok(r) => r.rows_affected().iter().sum::<u64>() as i32,
         Err(e) => {
-            tracing::error!("[month_end_settle] 月结失败: from_ym={}, to_ym={}, err={}", from_ym, to_ym, e);
+            tracing::error!(
+                "[month_end_settle] 月结失败: from_ym={}, to_ym={}, err={}",
+                from_ym,
+                to_ym,
+                e
+            );
             -1
         }
     }
@@ -437,7 +660,10 @@ pub async fn fill_detail_stock_snapshot(
             qqty = qq_str.parse().unwrap_or(0.0);
         }
     }
-    let upd = format!("UPDATE [{}] SET StkQty = @p1, AQty = @p2 WHERE {} = @p3", detail_table, detail_pk);
+    let upd = format!(
+        "UPDATE [{}] SET StkQty = @p1, AQty = @p2 WHERE {} = @p3",
+        detail_table, detail_pk
+    );
     let params: Vec<&dyn ToSql> = vec![&qty, &qqty, &detail_id];
     let _ = conn.execute(&upd, &params).await;
 }
@@ -488,7 +714,10 @@ pub async fn query_doc_state(conn: &mut Conn, table: &str, primary_key: &str, id
     if id.is_empty() {
         return String::new();
     }
-    let sql = format!("SELECT ISNULL(State,'') AS S FROM [{}] WHERE [{}] = @p1", table, primary_key);
+    let sql = format!(
+        "SELECT ISNULL(State,'') AS S FROM [{}] WHERE [{}] = @p1",
+        table, primary_key
+    );
     let params: Vec<&dyn ToSql> = vec![&id];
     if let Ok(stream) = conn.query(&sql, &params).await {
         if let Ok(Some(row)) = stream.into_row().await {
@@ -540,12 +769,13 @@ pub async fn update_doc_state_with_cas(
             )
         } else {
             // 构造 IN 子句占位符：@p5, @p6, ...
-            let placeholders: Vec<String> = (0..states.len())
-                .map(|i| format!("@p{}", i + 5))
-                .collect();
+            let placeholders: Vec<String> =
+                (0..states.len()).map(|i| format!("@p{}", i + 5)).collect();
             format!(
                 "UPDATE [{}] SET State = @p1, AUser = @p2, ADate = @p3 WHERE [{}] = @p4 AND State IN ({})",
-                table, primary_key, placeholders.join(", ")
+                table,
+                primary_key,
+                placeholders.join(", ")
             )
         }
     } else {
@@ -592,7 +822,10 @@ pub async fn record_oper(
     doc_no: Option<&str>,
     remark: Option<&str>,
 ) {
-    record_oper_with_data(conn, oper_type, table_name, key_value, user_code, doc_no, remark, None, None).await
+    record_oper_with_data(
+        conn, oper_type, table_name, key_value, user_code, doc_no, remark, None, None,
+    )
+    .await
 }
 
 /// 带数据快照的 record_oper（before_data/after_data 为 JSON 字符串）
@@ -621,8 +854,12 @@ pub async fn record_oper_with_data(
     // --- 1) 写 tSys_OperLog（结构化表，/system/log/list 优先读此表）---
     // Remark 拼接：备注 + 单据号
     let mut log_remark_parts: Vec<String> = Vec::new();
-    if !remark_owned.is_empty() { log_remark_parts.push(remark_owned.clone()); }
-    if !doc_no_owned.is_empty() { log_remark_parts.push(format!("单据号:{}", doc_no_owned)); }
+    if !remark_owned.is_empty() {
+        log_remark_parts.push(remark_owned.clone());
+    }
+    if !doc_no_owned.is_empty() {
+        log_remark_parts.push(format!("单据号:{}", doc_no_owned));
+    }
     let log_remark = log_remark_parts.join(" ");
     // EmpID 是 uniqueidentifier，必须用 Option<&str>（None=NULL，Some=有效 UUID 字符串）
     // 空字符串或非 UUID 字符串会导致类型转换失败
@@ -633,28 +870,53 @@ pub async fn record_oper_with_data(
                    (OperLogID, OperType, TableName, KeyValue, UserCode, EmpID, UserName, ClientIP, OperDate, Remark, OldData, NewData) \
                    VALUES (NEWID(), @p1, @p2, @p3, @p4, @p5, @p6, '', @p7, @p8, @p9, @p10)";
     let p_new: Vec<&dyn ToSql> = vec![
-        &oper_type, &table_name, &key_value,
-        &user_code, &emp_id_param, &emp_name,
-        &now, &log_remark,
-        &before_val, &after_val,
+        &oper_type,
+        &table_name,
+        &key_value,
+        &user_code,
+        &emp_id_param,
+        &emp_name,
+        &now,
+        &log_remark,
+        &before_val,
+        &after_val,
     ];
     if let Err(e) = conn.execute(sql_new, &p_new).await {
-        tracing::error!("[record_oper] 写入 tSys_OperLog 失败: table={}, key={}, user_code={}, emp_id={:?}, err={}", table_name, key_value, user_code, emp_id_param, e);
+        tracing::error!(
+            "[record_oper] 写入 tSys_OperLog 失败: table={}, key={}, user_code={}, emp_id={:?}, err={}",
+            table_name,
+            key_value,
+            user_code,
+            emp_id_param,
+            e
+        );
         // --- 2) 失败时 fallback 写 tSys_OperHis（旧表，OpenMsg 管道格式）---
         let mut parts: Vec<String> = vec![oper_type.to_string(), table_name.to_string()];
-        if !doc_no_owned.is_empty() { parts.push(doc_no_owned.clone()); }
-        if !remark_owned.is_empty() { parts.push(remark_owned.clone()); }
-        if !user_code.is_empty() { parts.push(format!("操作人:{}", user_code)); }
+        if !doc_no_owned.is_empty() {
+            parts.push(doc_no_owned.clone());
+        }
+        if !remark_owned.is_empty() {
+            parts.push(remark_owned.clone());
+        }
+        if !user_code.is_empty() {
+            parts.push(format!("操作人:{}", user_code));
+        }
         let open_msg = parts.join(" | ");
-        let doc_uuid = if is_valid_uuid(key_value) { key_value.to_string() } else { zero_uuid.clone() };
+        let doc_uuid = if is_valid_uuid(key_value) {
+            key_value.to_string()
+        } else {
+            zero_uuid.clone()
+        };
         let sql_old = "INSERT INTO tSys_OperHis (OperHisID, DocID, EmpID, MenusID, OperDate, OpenMsg) \
                        VALUES (NEWID(), @p1, @p2, @p3, @p4, @p5)";
-        let p_old: Vec<&dyn ToSql> = vec![
-            &doc_uuid, &emp_id_param, &zero_uuid,
-            &now, &open_msg,
-        ];
+        let p_old: Vec<&dyn ToSql> = vec![&doc_uuid, &emp_id_param, &zero_uuid, &now, &open_msg];
         if let Err(e2) = conn.execute(sql_old, &p_old).await {
-            tracing::error!("[record_oper] fallback 写入 tSys_OperHis 也失败: table={}, key={}, err={}", table_name, key_value, e2);
+            tracing::error!(
+                "[record_oper] fallback 写入 tSys_OperHis 也失败: table={}, key={}, err={}",
+                table_name,
+                key_value,
+                e2
+            );
         }
     }
 }
@@ -669,7 +931,9 @@ fn is_valid_uuid(s: &str) -> bool {
 ///   - None 表示查不到（写入时为 NULL，避免零 UUID 污染关联查询）
 ///   - Some(uuid) 表示查到有效 EmpID
 async fn lookup_emp_by_code(conn: &mut Conn, user_code: &str) -> (Option<String>, String) {
-    if user_code.is_empty() { return (None, String::new()); }
+    if user_code.is_empty() {
+        return (None, String::new());
+    }
     // 如果已经是 UUID 格式，直接返回（无 EmpName）
     if is_valid_uuid(user_code) {
         return (Some(user_code.to_string()), String::new());
@@ -681,26 +945,41 @@ async fn lookup_emp_by_code(conn: &mut Conn, user_code: &str) -> (Option<String>
             match stream.into_first_result().await {
                 Ok(rows) => {
                     if let Some(row) = rows.into_iter().next() {
-                        let emp_id = row.try_get::<&str, _>("EmpID")
-                            .ok().flatten()
+                        let emp_id = row
+                            .try_get::<&str, _>("EmpID")
+                            .ok()
+                            .flatten()
                             .map(|s| s.trim().to_string())
                             .filter(|s| !s.is_empty() && is_valid_uuid(s));
-                        let emp_name = row.try_get::<&str, _>("EmpName")
-                            .ok().flatten()
+                        let emp_name = row
+                            .try_get::<&str, _>("EmpName")
+                            .ok()
+                            .flatten()
                             .map(|s| s.trim().to_string())
                             .unwrap_or_default();
                         return (emp_id, emp_name);
                     }
                     // 未找到员工记录
-                    tracing::warn!("[lookup_emp_by_code] 未找到员工记录: user_code={}", user_code);
+                    tracing::warn!(
+                        "[lookup_emp_by_code] 未找到员工记录: user_code={}",
+                        user_code
+                    );
                 }
                 Err(e) => {
-                    tracing::error!("[lookup_emp_by_code] into_first_result 失败: user_code={}, err={}", user_code, e);
+                    tracing::error!(
+                        "[lookup_emp_by_code] into_first_result 失败: user_code={}, err={}",
+                        user_code,
+                        e
+                    );
                 }
             }
         }
         Err(e) => {
-            tracing::error!("[lookup_emp_by_code] 查询 tBas_Emp 失败: user_code={}, err={}", user_code, e);
+            tracing::error!(
+                "[lookup_emp_by_code] 查询 tBas_Emp 失败: user_code={}, err={}",
+                user_code,
+                e
+            );
         }
     }
     (None, String::new())
@@ -723,24 +1002,40 @@ pub async fn fill_order_detail_stock_snapshot(conn: &mut Conn, table: &str, mast
 
 /// 反审前置检查：会计期间是否已结账
 /// DB 规则：月初 month_end_settle 后该月视为"已结账"，禁止反审
-pub async fn check_period_closed(conn: &mut Conn, action_date: chrono::NaiveDate) -> Option<String> {
-    let ym: i32 = action_date.format("%Y%m").to_string().parse().unwrap_or(202501);
+pub async fn check_period_closed(
+    conn: &mut Conn,
+    action_date: chrono::NaiveDate,
+) -> Option<String> {
+    let ym: i32 = action_date
+        .format("%Y%m")
+        .to_string()
+        .parse()
+        .unwrap_or(202501);
     let next_ym: i32 = if ym % 100 == 12 {
         (ym / 100 + 1) * 100 + 1
     } else {
         ym + 1
     };
-    let sql = "SELECT TOP 1 ISNULL(InitQty, 0) AS IQ FROM tStk_StockYM WHERE AccYM = @p1 AND InitQty > 0";
+    let sql =
+        "SELECT TOP 1 ISNULL(InitQty, 0) AS IQ FROM tStk_StockYM WHERE AccYM = @p1 AND InitQty > 0";
     let row = match conn.query(sql, &[&next_ym]).await {
         Ok(s) => match s.into_row().await {
             Ok(r) => r,
             Err(e) => {
-                tracing::error!("[check_period_closed] into_row 失败: next_ym={}, err={}", next_ym, e);
+                tracing::error!(
+                    "[check_period_closed] into_row 失败: next_ym={}, err={}",
+                    next_ym,
+                    e
+                );
                 return None;
             }
         },
         Err(e) => {
-            tracing::error!("[check_period_closed] 查询 tStk_StockYM 失败: next_ym={}, err={}", next_ym, e);
+            tracing::error!(
+                "[check_period_closed] 查询 tStk_StockYM 失败: next_ym={}, err={}",
+                next_ym,
+                e
+            );
             return None;
         }
     };

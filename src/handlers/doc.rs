@@ -8,18 +8,21 @@
 //!   - POST /api/doc/generate-from-source 参照生单
 //!   - POST /api/doc/graph               取元数据（含版本号）
 
-use axum::{extract::{State, ConnectInfo}, Extension, Json};
-use serde_json::{json, Value};
+use axum::{
+    Extension, Json,
+    extract::{ConnectInfo, State},
+};
+use serde_json::{Value, json};
 use std::net::SocketAddr;
 
 use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
-use crate::middleware::auth::Claims;
 use crate::metadata::doc_graph;
+use crate::middleware::auth::Claims;
 use crate::services::doc_service::{
-    self, ApproveDocParams, GenerateFromSourceParams, GenerateFromSourceResponse,
-    SaveDocParams, VoidDocParams,
+    self, ApproveDocParams, GenerateFromSourceParams, GenerateFromSourceResponse, SaveDocParams,
+    VoidDocParams,
 };
 use crate::utils::ApiResponse;
 
@@ -33,16 +36,12 @@ pub async fn doc_save(
     match doc_service::save_doc(&mut conn, &claims.user_code, &claims.user_name, params).await {
         Ok(resp) => Ok(Json(ApiResponse::ok(json!(resp)))),
         Err(err) => match err {
-            doc_service::ApproveError::Shortage(items) => {
-                Ok(Json(ApiResponse::err_with_data(
-                    "库存不足，无法保存",
-                    "STOCK_INSUFFICIENT",
-                    json!({ "shortage_list": items }),
-                )))
-            }
-            doc_service::ApproveError::Msg(msg) => {
-                Ok(Json(ApiResponse::err(&msg)))
-            }
+            doc_service::ApproveError::Shortage(items) => Ok(Json(ApiResponse::err_with_data(
+                "库存不足，无法保存",
+                "STOCK_INSUFFICIENT",
+                json!({ "shortage_list": items }),
+            ))),
+            doc_service::ApproveError::Msg(msg) => Ok(Json(ApiResponse::err(&msg))),
         },
     }
 }
@@ -57,16 +56,12 @@ pub async fn doc_approve(
     match doc_service::approve_doc(&mut conn, &claims.user_code, &claims.user_name, params).await {
         Ok(msg) => Ok(Json(ApiResponse::msg(&msg))),
         Err(err) => match err {
-            doc_service::ApproveError::Shortage(items) => {
-                Ok(Json(ApiResponse::err_with_data(
-                    "库存不足，无法审核",
-                    "STOCK_INSUFFICIENT",
-                    json!({ "shortage_list": items }),
-                )))
-            }
-            doc_service::ApproveError::Msg(msg) => {
-                Ok(Json(ApiResponse::err(&msg)))
-            }
+            doc_service::ApproveError::Shortage(items) => Ok(Json(ApiResponse::err_with_data(
+                "库存不足，无法审核",
+                "STOCK_INSUFFICIENT",
+                json!({ "shortage_list": items }),
+            ))),
+            doc_service::ApproveError::Msg(msg) => Ok(Json(ApiResponse::err(&msg))),
         },
     }
 }
@@ -78,7 +73,8 @@ pub async fn doc_unapprove(
     Json(params): Json<ApproveDocParams>,
 ) -> Result<Json<ApiResponse<String>>> {
     let mut conn = get_pool().get().await?;
-    match doc_service::unapprove_doc(&mut conn, &claims.user_code, &claims.user_name, params).await {
+    match doc_service::unapprove_doc(&mut conn, &claims.user_code, &claims.user_name, params).await
+    {
         Ok(msg) => Ok(Json(ApiResponse::msg(&msg))),
         Err(msg) => Ok(Json(ApiResponse::err(&msg))),
     }

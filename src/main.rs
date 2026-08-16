@@ -1,8 +1,8 @@
 use axum::{
+    Router,
     extract::DefaultBodyLimit,
     middleware as axum_mw,
     routing::{get, post},
-    Router,
 };
 use erp_server::config::Config;
 use erp_server::db::pool::init_pool;
@@ -12,7 +12,7 @@ use erp_server::middleware::rate_limit::RateLimitState;
 use std::net::SocketAddr;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
-use tracing_subscriber::{prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, prelude::*};
 
 /// 初始化日志系统：支持 stdout 与文件轮转两种模式。
 ///
@@ -22,8 +22,7 @@ use tracing_subscriber::{prelude::*, EnvFilter};
 ///
 /// 返回的 `WorkerGuard` 必须在 main 中持有到程序结束，确保所有日志被刷新。
 fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     let log_dir = std::env::var("LOG_DIR").ok().filter(|s| !s.is_empty());
 
@@ -73,7 +72,9 @@ async fn main() {
 
     let config = Config::from_env();
     let config_clone = config.clone();
-    let rate_limit_state = RateLimitState { trust_proxy: config.trust_proxy };
+    let rate_limit_state = RateLimitState {
+        trust_proxy: config.trust_proxy,
+    };
     init_pool(&config).await;
     erp_server::db::migrate::run_migrations().await;
 
@@ -99,7 +100,9 @@ async fn main() {
                 axum::http::HeaderName::from_static("x-csrf-token"),
             ])
     } else {
-        let origins: Vec<axum::http::HeaderValue> = config.cors_origins.iter()
+        let origins: Vec<axum::http::HeaderValue> = config
+            .cors_origins
+            .iter()
             .filter_map(|o| o.parse().ok())
             .collect();
         tracing::info!("CORS 白名单: {:?}", config.cors_origins);
@@ -126,7 +129,7 @@ async fn main() {
     // health/metrics/stores/register 等公开端点不限流
     let login_routes = Router::new()
         .route("/api/auth/login", post(auth::login))
-        .route("/api/login", post(auth::login))   // ★ 兑容前端 /api/login 路径
+        .route("/api/login", post(auth::login)) // ★ 兑容前端 /api/login 路径
         .route("/api/mobile/login", post(mobile::mobile_login))
         .route_layer(axum_mw::from_fn_with_state(
             rate_limit_state.clone(),
@@ -149,55 +152,127 @@ async fn main() {
         .route("/api/auth/logout", post(auth::logout))
         .route("/api/auth/change-password", post(auth::change_password))
         // ===== User Preferences (跨设备同步：主题、布局等) =====
-        .route("/api/user/pref", get(auth::get_user_prefs).put(auth::set_user_pref))
+        .route(
+            "/api/user/pref",
+            get(auth::get_user_prefs).put(auth::set_user_pref),
+        )
         // ===== Generic CRUD =====
         .route("/api/generic/query", post(generic::generic_query))
         .route("/api/generic/create", post(generic::generic_create))
         .route("/api/generic/update", post(generic::generic_update))
         .route("/api/generic/delete", post(generic::generic_delete))
-        .route("/api/generic/cleanup-orphan-stock", post(generic::generic_cleanup_orphan_stock))
+        .route(
+            "/api/generic/cleanup-orphan-stock",
+            post(generic::generic_cleanup_orphan_stock),
+        )
         .route("/api/generic/export", post(generic::generic_export))
-        .route("/api/generic/batch-update", post(generic::generic_batch_update))
+        .route(
+            "/api/generic/batch-update",
+            post(generic::generic_batch_update),
+        )
         .route("/api/generic/restore", post(generic::generic_restore))
         .route("/api/generic/tree", post(generic::generic_tree))
         .route("/api/generic/import", post(generic::generic_import))
-        .route("/api/generic/import-excel", post(generic::generic_import_excel))
-        .route("/api/generic/export-excel", post(generic::generic_export_excel))
+        .route(
+            "/api/generic/import-excel",
+            post(generic::generic_import_excel),
+        )
+        .route(
+            "/api/generic/export-excel",
+            post(generic::generic_export_excel),
+        )
         // /api/generic/oper-log 已移除（使用 /system/log/list 替代）
         // ★ 表结构元数据接口（基于 INFORMATION_SCHEMA.COLUMNS）
         .route("/api/generic/schema", post(generic::generic_table_schema))
-        .route("/api/doc_no/generate", post(erp_server::utils::doc_no::generate_doc_no))
-        .route("/api/doc_no/list-types", get(erp_server::utils::doc_no::list_doc_types))
-        .route("/api/doc_no/reset-seq", post(erp_server::utils::doc_no::reset_doc_seq))
-        .route("/api/generic/docno/generate", post(erp_server::utils::doc_no::generate_doc_no))
+        .route(
+            "/api/doc_no/generate",
+            post(erp_server::utils::doc_no::generate_doc_no),
+        )
+        .route(
+            "/api/doc_no/list-types",
+            get(erp_server::utils::doc_no::list_doc_types),
+        )
+        .route(
+            "/api/doc_no/reset-seq",
+            post(erp_server::utils::doc_no::reset_doc_seq),
+        )
+        .route(
+            "/api/generic/docno/generate",
+            post(erp_server::utils::doc_no::generate_doc_no),
+        )
         // ===== Base Data =====
         .route("/api/base/goods", post(base_data::get_goods))
         .route("/api/base/goods/create", post(base_data::create_goods))
         .route("/api/base/goods/update", post(base_data::update_goods))
         .route("/api/base/goods/delete", post(base_data::delete_goods))
         .route("/api/base/customer", post(base_data::get_customers))
-        .route("/api/base/customer/create", post(base_data::create_customer))
-        .route("/api/base/customer/update", post(base_data::update_customer))
-        .route("/api/base/customer/delete", post(base_data::delete_customer))
+        .route(
+            "/api/base/customer/create",
+            post(base_data::create_customer),
+        )
+        .route(
+            "/api/base/customer/update",
+            post(base_data::update_customer),
+        )
+        .route(
+            "/api/base/customer/delete",
+            post(base_data::delete_customer),
+        )
         .route("/api/base/supplier", post(base_data::get_suppliers))
-        .route("/api/base/supplier/create", post(base_data::create_supplier))
-        .route("/api/base/supplier/update", post(base_data::update_supplier))
-        .route("/api/base/supplier/delete", post(base_data::delete_supplier))
+        .route(
+            "/api/base/supplier/create",
+            post(base_data::create_supplier),
+        )
+        .route(
+            "/api/base/supplier/update",
+            post(base_data::update_supplier),
+        )
+        .route(
+            "/api/base/supplier/delete",
+            post(base_data::delete_supplier),
+        )
         .route("/api/base/warehouse", post(base_data::get_warehouses))
-        .route("/api/base/warehouse/create", post(base_data::create_warehouse))
-        .route("/api/base/warehouse/update", post(base_data::update_warehouse))
-        .route("/api/base/warehouse/delete", post(base_data::delete_warehouse))
+        .route(
+            "/api/base/warehouse/create",
+            post(base_data::create_warehouse),
+        )
+        .route(
+            "/api/base/warehouse/update",
+            post(base_data::update_warehouse),
+        )
+        .route(
+            "/api/base/warehouse/delete",
+            post(base_data::delete_warehouse),
+        )
         .route("/api/base/brand", post(base_data::get_brands))
         .route("/api/base/brand/create", post(base_data::create_brand))
         .route("/api/base/brand/update", post(base_data::update_brand))
         .route("/api/base/employee", post(base_data::get_employees))
-        .route("/api/base/employee/create", post(base_data::create_employee))
-        .route("/api/base/employee/update", post(base_data::update_employee))
-        .route("/api/base/stock-query", post(base_data::get_inventory_stock))
-        .route("/api/base/dashboard-stats", post(base_data::get_dashboard_stats))
+        .route(
+            "/api/base/employee/create",
+            post(base_data::create_employee),
+        )
+        .route(
+            "/api/base/employee/update",
+            post(base_data::update_employee),
+        )
+        .route(
+            "/api/base/stock-query",
+            post(base_data::get_inventory_stock),
+        )
+        .route(
+            "/api/base/dashboard-stats",
+            post(base_data::get_dashboard_stats),
+        )
         .route("/api/dashboard/stats", post(base_data::get_dashboard_stats))
-        .route("/api/base/retail-goods-search", post(base_data::retail_goods_search))
-        .route("/api/base/retail-sales-settle", post(base_data::retail_sales_settle))
+        .route(
+            "/api/base/retail-goods-search",
+            post(base_data::retail_goods_search),
+        )
+        .route(
+            "/api/base/retail-sales-settle",
+            post(base_data::retail_sales_settle),
+        )
         .route("/api/base/versions", post(base_data::get_base_versions))
         // ===== Categories =====
         .route("/api/categories", post(categories::get_categories))
@@ -216,53 +291,131 @@ async fn main() {
         .route("/api/inventory/move/create", post(inventory::create_move))
         .route("/api/inventory/move/update", post(inventory::update_move))
         .route("/api/inventory/move/delete", post(inventory::delete_move))
-        .route("/api/inventory/move/detail", post(inventory::get_move_detail))
+        .route(
+            "/api/inventory/move/detail",
+            post(inventory::get_move_detail),
+        )
         .route("/api/inventory/check/list", post(inventory::get_check_list))
         .route("/api/inventory/check/create", post(inventory::create_check))
         .route("/api/inventory/check/update", post(inventory::update_check))
         .route("/api/inventory/check/delete", post(inventory::delete_check))
-        .route("/api/inventory/check/detail", post(inventory::get_check_detail))
-        .route("/api/inventory/replenish/list", post(inventory::get_replenish_list))
-        .route("/api/inventory/replenish/create", post(inventory::create_replenish))
+        .route(
+            "/api/inventory/check/detail",
+            post(inventory::get_check_detail),
+        )
+        .route(
+            "/api/inventory/replenish/list",
+            post(inventory::get_replenish_list),
+        )
+        .route(
+            "/api/inventory/replenish/create",
+            post(inventory::create_replenish),
+        )
         .route("/api/inventory/month_settle", post(inventory::month_settle))
-        .route("/api/inventory/month_settle_rollback", post(inventory::month_settle_rollback))
-        .route("/api/inventory/stock-query", post(base_data::get_inventory_stock))
+        .route(
+            "/api/inventory/month_settle_rollback",
+            post(inventory::month_settle_rollback),
+        )
+        .route(
+            "/api/inventory/stock-query",
+            post(base_data::get_inventory_stock),
+        )
         .route("/api/inventory/flows", post(inventory::get_stock_flow))
         .route("/api/inventory/doc-flows", post(inventory::get_doc_flows))
         .route("/api/inventory/alerts", post(inventory::low_stock_alert))
-        .route("/api/inventory/alerts/replenish", post(inventory::replenish_from_alert))
-        .route("/api/inventory/replenish-suggestions", post(inventory::get_replenish_suggestions))
+        .route(
+            "/api/inventory/alerts/replenish",
+            post(inventory::replenish_from_alert),
+        )
+        .route(
+            "/api/inventory/replenish-suggestions",
+            post(inventory::get_replenish_suggestions),
+        )
         .route("/api/inventory/adjust", post(inventory::inventory_adjust))
         // ===== Purchase =====
-        .route("/api/purchase/order/list", post(purchase::get_purchase_orders))
-        .route("/api/purchase/order/create", post(purchase::create_purchase_order))
-        .route("/api/purchase/order/update", post(purchase::update_purchase_order))
-        .route("/api/purchase/inbound/list", post(purchase::get_purchase_inbound))
-        .route("/api/purchase/inbound/create", post(purchase::create_purchase_inbound))
-        .route("/api/purchase/return/list", post(purchase::get_purchase_return))
-        .route("/api/purchase/return/create", post(purchase::create_purchase_return))
-        .route("/api/purchase/quote/list", post(purchase::get_purchase_quotes))
-        .route("/api/purchase/quote/create", post(purchase::create_purchase_quote))
-        .route("/api/purchase/quote/update", post(purchase::update_purchase_quote))
-        .route("/api/purchase/adjprice/list", post(purchase::get_purchase_adjprice))
-        .route("/api/purchase/adjprice/create", post(purchase::create_purchase_adjprice))
+        .route(
+            "/api/purchase/order/list",
+            post(purchase::get_purchase_orders),
+        )
+        .route(
+            "/api/purchase/order/create",
+            post(purchase::create_purchase_order),
+        )
+        .route(
+            "/api/purchase/order/update",
+            post(purchase::update_purchase_order),
+        )
+        .route(
+            "/api/purchase/inbound/list",
+            post(purchase::get_purchase_inbound),
+        )
+        .route(
+            "/api/purchase/inbound/create",
+            post(purchase::create_purchase_inbound),
+        )
+        .route(
+            "/api/purchase/return/list",
+            post(purchase::get_purchase_return),
+        )
+        .route(
+            "/api/purchase/return/create",
+            post(purchase::create_purchase_return),
+        )
+        .route(
+            "/api/purchase/quote/list",
+            post(purchase::get_purchase_quotes),
+        )
+        .route(
+            "/api/purchase/quote/create",
+            post(purchase::create_purchase_quote),
+        )
+        .route(
+            "/api/purchase/quote/update",
+            post(purchase::update_purchase_quote),
+        )
+        .route(
+            "/api/purchase/adjprice/list",
+            post(purchase::get_purchase_adjprice),
+        )
+        .route(
+            "/api/purchase/adjprice/create",
+            post(purchase::create_purchase_adjprice),
+        )
         .route("/api/purchase/query", post(purchase::get_purchase_query))
         // ===== Sales =====
         .route("/api/sales/order/list", post(sales::get_sales_orders))
         .route("/api/sales/order/create", post(sales::create_sales_order))
         .route("/api/sales/order/update", post(sales::update_sales_order))
         .route("/api/sales/outbound/list", post(sales::get_sales_outbound))
-        .route("/api/sales/outbound/create", post(sales::create_sales_outbound))
-        .route("/api/sales/outbound/update", post(sales::update_sales_outbound))
+        .route(
+            "/api/sales/outbound/create",
+            post(sales::create_sales_outbound),
+        )
+        .route(
+            "/api/sales/outbound/update",
+            post(sales::update_sales_outbound),
+        )
         .route("/api/sales/quote/list", post(sales::get_sales_quotes))
         .route("/api/sales/quote/create", post(sales::create_sales_quote))
         .route("/api/sales/quote/update", post(sales::update_sales_quote))
         .route("/api/sales/adjprice/list", post(sales::get_sales_adjprice))
-        .route("/api/sales/adjprice/create", post(sales::create_sales_adjprice))
+        .route(
+            "/api/sales/adjprice/create",
+            post(sales::create_sales_adjprice),
+        )
         // ===== Sales Return =====
-        .route("/api/sales/return/list", post(sales_return::list_sales_return))
-        .route("/api/sales/return/create", post(sales_return::create_sales_return))
-        .route("/api/sales/return/update", post(sales_return::update_sales_return))
+        .route(
+            "/api/sales/return/list",
+            post(sales_return::list_sales_return),
+        )
+        .route(
+            "/api/sales/return/create",
+            post(sales_return::create_sales_return),
+        )
+        .route(
+            "/api/sales/return/update",
+            post(sales_return::update_sales_return),
+        )
         // ===== Approval =====
         .route("/api/approval/print-log", post(approval::print_log))
         // ===== 统一单据服务（doc_service） =====
@@ -270,17 +423,32 @@ async fn main() {
         .route("/api/doc/approve", post(doc::doc_approve))
         .route("/api/doc/unapprove", post(doc::doc_unapprove))
         .route("/api/doc/void", post(doc::doc_void))
-        .route("/api/doc/generate-from-source", post(doc::doc_generate_from_source))
+        .route(
+            "/api/doc/generate-from-source",
+            post(doc::doc_generate_from_source),
+        )
         .route("/api/doc/graph", post(doc::doc_graph))
         // ===== Order Flow =====
-        .route("/api/order-flow/available-qty", post(order_flow::query_available))
-        .route("/api/order-flow/source-detail", post(order_flow::query_source_detail))
+        .route(
+            "/api/order-flow/available-qty",
+            post(order_flow::query_available),
+        )
+        .route(
+            "/api/order-flow/source-detail",
+            post(order_flow::query_source_detail),
+        )
         // ===== Finance =====
         // AR/AP 派生查询（已实现，前端 FinanceReceivable/FinancePayable 使用）
         .route("/api/finance/ar/customer", post(finance::get_customer_ar))
-        .route("/api/finance/ar/customer/detail", post(finance::get_customer_ar_detail))
+        .route(
+            "/api/finance/ar/customer/detail",
+            post(finance::get_customer_ar_detail),
+        )
         .route("/api/finance/ap/supplier", post(finance::get_supplier_ap))
-        .route("/api/finance/ap/supplier/detail", post(finance::get_supplier_ap_detail))
+        .route(
+            "/api/finance/ap/supplier/detail",
+            post(finance::get_supplier_ap_detail),
+        )
         // 收款单专用接口（已实现，前端实际走通用 /doc/*，这里作为备用保留）
         .route("/api/finance/receipt/list", post(finance::get_receipt_list))
         .route("/api/finance/receipt/create", post(finance::create_receipt))
@@ -290,10 +458,19 @@ async fn main() {
         // 超期账户查询（已实现，前端报表中心调用）
         .route("/api/finance/overdue", post(finance::get_overdue_accounts))
         // 核销明细查询（编辑模式回显用，已实现）
-        .route("/api/finance/writeoff/list", post(finance::get_writeoff_details))
+        .route(
+            "/api/finance/writeoff/list",
+            post(finance::get_writeoff_details),
+        )
         // 对账单（P1 即将实现）
-        .route("/api/finance/statement/customer", post(finance::get_customer_statement))
-        .route("/api/finance/statement/supplier", post(finance::get_supplier_statement))
+        .route(
+            "/api/finance/statement/customer",
+            post(finance::get_customer_statement),
+        )
+        .route(
+            "/api/finance/statement/supplier",
+            post(finance::get_supplier_statement),
+        )
         // 说明：以下接口已废弃，原为 stub 返回"暂未实现"
         //   - payment/list/create/update/delete/audit（前端走通用 /doc/*）
         //   - cashflow/list/create/update/delete/audit（前端走通用 /doc/*）
@@ -302,57 +479,153 @@ async fn main() {
         // ===== End Finance =====
         // ===== Commission & Pricing =====
         // 注：提成模板 CRUD 已统一改用 /generic/* 接口操作 tSys_Parameters 表
-        .route("/api/pricing/template/list", post(commission_pricing::get_pricing_templates))
-        .route("/api/pricing/template/create", post(commission_pricing::create_pricing_template))
-        .route("/api/pricing/template/update", post(commission_pricing::update_pricing_template))
-        .route("/api/pricing/template/delete", post(commission_pricing::delete_pricing_template))
-        .route("/api/pricing/rules", post(commission_pricing::get_pricing_rules))
-        .route("/api/pricing/customer-prices", post(commission_pricing::get_customer_prices))
-        .route("/api/pricing/customer-prices/save", post(commission_pricing::save_customer_price))
+        .route(
+            "/api/pricing/template/list",
+            post(commission_pricing::get_pricing_templates),
+        )
+        .route(
+            "/api/pricing/template/create",
+            post(commission_pricing::create_pricing_template),
+        )
+        .route(
+            "/api/pricing/template/update",
+            post(commission_pricing::update_pricing_template),
+        )
+        .route(
+            "/api/pricing/template/delete",
+            post(commission_pricing::delete_pricing_template),
+        )
+        .route(
+            "/api/pricing/rules",
+            post(commission_pricing::get_pricing_rules),
+        )
+        .route(
+            "/api/pricing/customer-prices",
+            post(commission_pricing::get_customer_prices),
+        )
+        .route(
+            "/api/pricing/customer-prices/save",
+            post(commission_pricing::save_customer_price),
+        )
         // ===== Tier 8: 提成计算引擎 =====
-        .route("/api/commission/calc/employee", post(commission_pricing_tier8::calculate_employee_commission))
-        .route("/api/commission/calc/all", post(commission_pricing_tier8::calculate_all_commission))
-        .route("/api/commission/details", post(commission_pricing_tier8::get_commission_details))
+        .route(
+            "/api/commission/calc/employee",
+            post(commission_pricing_tier8::calculate_employee_commission),
+        )
+        .route(
+            "/api/commission/calc/all",
+            post(commission_pricing_tier8::calculate_all_commission),
+        )
+        .route(
+            "/api/commission/details",
+            post(commission_pricing_tier8::get_commission_details),
+        )
         // ===== 提成重算（销售单保存后调用，写入明细 Commission 字段）=====
-        .route("/api/commission/recalc-invoice", post(commission::recalc_invoice))
+        .route(
+            "/api/commission/recalc-invoice",
+            post(commission::recalc_invoice),
+        )
         // ===== 提成报表（汇总 + 明细，从 tSal_InvDetail.Commission 聚合）=====
-        .route("/api/report/commission-summary", post(commission::get_commission_summary))
-        .route("/api/report/commission-detail", post(commission::get_commission_detail))
-        .route("/api/report/commission-unified", post(commission::get_commission_unified))
+        .route(
+            "/api/report/commission-summary",
+            post(commission::get_commission_summary),
+        )
+        .route(
+            "/api/report/commission-detail",
+            post(commission::get_commission_detail),
+        )
+        .route(
+            "/api/report/commission-unified",
+            post(commission::get_commission_unified),
+        )
         // ===== 提成 Excel 导出（对齐 88 项目，rust_xlsxwriter 生成 xlsx）=====
-        .route("/api/report/commission-unified/export-summary", post(commission::export_commission_unified_summary))
-        .route("/api/report/commission-unified/export-detail", post(commission::export_commission_unified_detail))
-        .route("/api/report/commission/export-excel", post(commission::export_commission_report_excel))
-        .route("/api/report/commission-detail/export-excel", post(commission::export_commission_detail_excel))
-        .route("/api/commission-template/export-products", post(commission::export_product_rules))
-        .route("/api/commission-template/export-brands", post(commission::export_brand_rules))
+        .route(
+            "/api/report/commission-unified/export-summary",
+            post(commission::export_commission_unified_summary),
+        )
+        .route(
+            "/api/report/commission-unified/export-detail",
+            post(commission::export_commission_unified_detail),
+        )
+        .route(
+            "/api/report/commission/export-excel",
+            post(commission::export_commission_report_excel),
+        )
+        .route(
+            "/api/report/commission-detail/export-excel",
+            post(commission::export_commission_detail_excel),
+        )
+        .route(
+            "/api/commission-template/export-products",
+            post(commission::export_product_rules),
+        )
+        .route(
+            "/api/commission-template/export-brands",
+            post(commission::export_brand_rules),
+        )
         // ===== Tier 8: 价格模板应用引擎 =====
-        .route("/api/pricing/apply", post(commission_pricing_tier8::apply_pricing_for_customer))
-        .route("/api/pricing/customer-list", post(commission_pricing_tier8::get_customer_price_list))
-        .route("/api/pricing/bulk-apply", post(commission_pricing_tier8::bulk_apply_pricing_template))
+        .route(
+            "/api/pricing/apply",
+            post(commission_pricing_tier8::apply_pricing_for_customer),
+        )
+        .route(
+            "/api/pricing/customer-list",
+            post(commission_pricing_tier8::get_customer_price_list),
+        )
+        .route(
+            "/api/pricing/bulk-apply",
+            post(commission_pricing_tier8::bulk_apply_pricing_template),
+        )
         // ===== 客户定价批量计算（销售单选商品时按客户定价填充价格）=====
         .route("/api/pricing/calc-batch", post(pricing_calc::calc_batch))
         // ===== Print =====
         .route("/api/print/template/list", post(print::get_print_templates))
         .route("/api/print/template/get", post(print::get_print_template))
-        .route("/api/print/template/create", post(print::create_print_template))
-        .route("/api/print/template/update", post(print::update_print_template))
-        .route("/api/print/template/delete", post(print::delete_print_template))
-        .route("/api/print/template/restore", post(print::restore_print_template))
+        .route(
+            "/api/print/template/create",
+            post(print::create_print_template),
+        )
+        .route(
+            "/api/print/template/update",
+            post(print::update_print_template),
+        )
+        .route(
+            "/api/print/template/delete",
+            post(print::delete_print_template),
+        )
+        .route(
+            "/api/print/template/restore",
+            post(print::restore_print_template),
+        )
         .route("/api/print/log/list", post(print::get_print_logs))
         .route("/api/print/log/create", post(print::create_print_log))
         .route("/api/print/config", post(print::get_print_config))
         .route("/api/print/config/save", post(print::save_print_config))
         // ===== 会计期间管理 (Tier 5) =====
         .route("/api/system/acc-period/list", post(system::list_acc_per))
-        .route("/api/system/acc-period/create", post(system::create_acc_per))
-        .route("/api/system/acc-period/update", post(system::update_acc_per))
-        .route("/api/system/acc-period/delete", post(system::delete_acc_per))
+        .route(
+            "/api/system/acc-period/create",
+            post(system::create_acc_per),
+        )
+        .route(
+            "/api/system/acc-period/update",
+            post(system::update_acc_per),
+        )
+        .route(
+            "/api/system/acc-period/delete",
+            post(system::delete_acc_per),
+        )
         .route("/api/system/acc-period/close", post(system::close_period))
         .route("/api/system/acc-period/reopen", post(system::reopen_period))
         .route("/api/print/versions", post(print::get_print_versions))
-        .route("/api/print/versions/create", post(print::create_print_version))
-        .route("/api/print/versions/rollback", post(print::rollback_print_version))
+        .route(
+            "/api/print/versions/create",
+            post(print::create_print_version),
+        )
+        .route(
+            "/api/print/versions/rollback",
+            post(print::rollback_print_version),
+        )
         // ===== OA =====
         .route("/api/oa/workflow/list", post(oa::get_workflow_list))
         .route("/api/oa/workflow/approve", post(oa::approve_workflow))
@@ -364,114 +637,324 @@ async fn main() {
         .route("/api/report/inventory", post(report::get_stock_report))
         .route("/api/report/business", post(report::get_business_report))
         .route("/api/report/profit", post(report::get_profit_analysis))
-        .route("/api/report/aging/receivable", post(report::get_receivable_aging))
+        .route(
+            "/api/report/aging/receivable",
+            post(report::get_receivable_aging),
+        )
         .route("/api/report/aging/payable", post(report::get_payable_aging))
-        .route("/api/report/stock-turnover", post(report::get_stock_turnover))
+        .route(
+            "/api/report/stock-turnover",
+            post(report::get_stock_turnover),
+        )
         .route("/api/report/alert-center", post(report::get_alert_center))
-        .route("/api/report/sales-task-summary", post(report::get_sales_task_summary))
+        .route(
+            "/api/report/sales-task-summary",
+            post(report::get_sales_task_summary),
+        )
         // ===== Retail =====
         .route("/api/retail/sale", post(retail::retail_sale))
         .route("/api/retail/cashier", post(retail::get_cashier_info))
         // ===== Sales Input =====
         .route("/api/sales-input/list", post(sales_input::list_emp_sales))
-        .route("/api/sales-input/create", post(sales_input::create_emp_sales))
-        .route("/api/sales-input/update", post(sales_input::update_emp_sales))
+        .route(
+            "/api/sales-input/create",
+            post(sales_input::create_emp_sales),
+        )
+        .route(
+            "/api/sales-input/update",
+            post(sales_input::update_emp_sales),
+        )
         // ===== VIP =====
         .route("/api/vip/list", post(vip::list_vip))
         .route("/api/vip/create", post(vip::create_vip))
         .route("/api/vip/update", post(vip::update_vip))
         .route("/api/vip/delete", post(vip::delete_vip))
         // ===== Mobile =====
-        .route("/api/mobile/change-password", post(mobile::mobile_change_password))
+        .route(
+            "/api/mobile/change-password",
+            post(mobile::mobile_change_password),
+        )
         .route("/api/mobile/sync-base-data", post(mobile::sync_base_data))
-        .route("/api/mobile/replenishment/submit", post(mobile::submit_replenishment))
-        .route("/api/mobile/replenishment/list", post(mobile::get_replenishment_history))
-        .route("/api/mobile/replenishment/detail", post(mobile::get_replenishment_detail))
-        .route("/api/mobile/replenishment/for-transfer", post(mobile::get_replenishment_for_transfer))
-        .route("/api/mobile/replenishment/for-sales", post(mobile::get_replenishment_for_sales))
-        .route("/api/mobile/stock-check/submit", post(mobile::submit_stock_check))
-        .route("/api/mobile/stock-check/list", post(mobile::get_stock_check_history))
-        .route("/api/mobile/stock-check/detail", post(mobile::get_stock_check_detail))
-        .route("/api/mobile/stock-query", post(mobile::get_mobile_stock_query))
-        .route("/api/mobile/special-price/submit", post(mobile::submit_special_price))
-        .route("/api/mobile/special-price/list", post(mobile::get_special_price_history))
-        .route("/api/mobile/reward/submit", post(mobile::submit_reward_product))
-        .route("/api/mobile/reward/list", post(mobile::get_reward_product_history))
+        .route(
+            "/api/mobile/replenishment/submit",
+            post(mobile::submit_replenishment),
+        )
+        .route(
+            "/api/mobile/replenishment/list",
+            post(mobile::get_replenishment_history),
+        )
+        .route(
+            "/api/mobile/replenishment/detail",
+            post(mobile::get_replenishment_detail),
+        )
+        .route(
+            "/api/mobile/replenishment/for-transfer",
+            post(mobile::get_replenishment_for_transfer),
+        )
+        .route(
+            "/api/mobile/replenishment/for-sales",
+            post(mobile::get_replenishment_for_sales),
+        )
+        .route(
+            "/api/mobile/stock-check/submit",
+            post(mobile::submit_stock_check),
+        )
+        .route(
+            "/api/mobile/stock-check/list",
+            post(mobile::get_stock_check_history),
+        )
+        .route(
+            "/api/mobile/stock-check/detail",
+            post(mobile::get_stock_check_detail),
+        )
+        .route(
+            "/api/mobile/stock-query",
+            post(mobile::get_mobile_stock_query),
+        )
+        .route(
+            "/api/mobile/special-price/submit",
+            post(mobile::submit_special_price),
+        )
+        .route(
+            "/api/mobile/special-price/list",
+            post(mobile::get_special_price_history),
+        )
+        .route(
+            "/api/mobile/reward/submit",
+            post(mobile::submit_reward_product),
+        )
+        .route(
+            "/api/mobile/reward/list",
+            post(mobile::get_reward_product_history),
+        )
         .route("/api/mobile/gift/submit", post(mobile::submit_gift_giving))
-        .route("/api/mobile/gift/list", post(mobile::get_gift_giving_history))
+        .route(
+            "/api/mobile/gift/list",
+            post(mobile::get_gift_giving_history),
+        )
         .route("/api/mobile/submit-batch", post(mobile::submit_batch))
         .route("/api/mobile/shortages", post(mobile::get_mobile_shortages))
         .route("/api/mobile/shortage/submit", post(mobile::submit_shortage))
-        .route("/api/mobile/shortage/list", post(mobile::get_shortage_report_history))
-        .route("/api/mobile/commission", post(mobile::get_mobile_commission))
-        .route("/api/mobile/sales-task/current", post(mobile::get_current_sales_task))
-        .route("/api/mobile/sales-task/list", post(mobile::get_sales_task_list))
-        .route("/api/mobile/sales-task/create", post(mobile::create_sales_task))
-        .route("/api/mobile/sales-task/update", post(mobile::update_sales_task))
-        .route("/api/mobile/sales-task/delete", post(mobile::delete_sales_task))
-        .route("/api/mobile/sales-task/record", post(mobile::submit_daily_sales_record))
-        .route("/api/mobile/sales-task/records", post(mobile::get_sales_task_records))
-        .route("/api/mobile/home/stats", post(mobile::get_mobile_home_stats))
+        .route(
+            "/api/mobile/shortage/list",
+            post(mobile::get_shortage_report_history),
+        )
+        .route(
+            "/api/mobile/commission",
+            post(mobile::get_mobile_commission),
+        )
+        .route(
+            "/api/mobile/sales-task/current",
+            post(mobile::get_current_sales_task),
+        )
+        .route(
+            "/api/mobile/sales-task/list",
+            post(mobile::get_sales_task_list),
+        )
+        .route(
+            "/api/mobile/sales-task/create",
+            post(mobile::create_sales_task),
+        )
+        .route(
+            "/api/mobile/sales-task/update",
+            post(mobile::update_sales_task),
+        )
+        .route(
+            "/api/mobile/sales-task/delete",
+            post(mobile::delete_sales_task),
+        )
+        .route(
+            "/api/mobile/sales-task/record",
+            post(mobile::submit_daily_sales_record),
+        )
+        .route(
+            "/api/mobile/sales-task/records",
+            post(mobile::get_sales_task_records),
+        )
+        .route(
+            "/api/mobile/home/stats",
+            post(mobile::get_mobile_home_stats),
+        )
         // ===== PC 端「手机数据」管理 =====
         .route("/api/mobile-data/list", post(mobile_data::list_mobile_data))
-        .route("/api/mobile-data/create", post(mobile_data::create_mobile_data))
-        .route("/api/mobile-data/update", post(mobile_data::update_mobile_data))
-        .route("/api/mobile-data/delete", post(mobile_data::delete_mobile_data))
-        .route("/api/mobile-data/detail", post(mobile_data::get_mobile_data_detail))
+        .route(
+            "/api/mobile-data/create",
+            post(mobile_data::create_mobile_data),
+        )
+        .route(
+            "/api/mobile-data/update",
+            post(mobile_data::update_mobile_data),
+        )
+        .route(
+            "/api/mobile-data/delete",
+            post(mobile_data::delete_mobile_data),
+        )
+        .route(
+            "/api/mobile-data/detail",
+            post(mobile_data::get_mobile_data_detail),
+        )
         // ===== Online =====
         .route("/api/online/products", post(online::get_online_products))
-        .route("/api/online/products/create", post(online::create_online_product))
-        .route("/api/online/products/update", post(online::update_online_product))
-        .route("/api/online/products/delete", post(online::delete_online_product))
-        .route("/api/online/products/browse", post(online::browse_online_products))
-        .route("/api/online/products/browse/detail", post(online::browse_online_product))
+        .route(
+            "/api/online/products/create",
+            post(online::create_online_product),
+        )
+        .route(
+            "/api/online/products/update",
+            post(online::update_online_product),
+        )
+        .route(
+            "/api/online/products/delete",
+            post(online::delete_online_product),
+        )
+        .route(
+            "/api/online/products/browse",
+            post(online::browse_online_products),
+        )
+        .route(
+            "/api/online/products/browse/detail",
+            post(online::browse_online_product),
+        )
         .route("/api/online/order/create", post(online::place_online_order))
         .route("/api/online/order/list", post(online::get_online_orders))
         .route("/api/online/order/my", post(online::get_my_online_orders))
         .route("/api/online/order/detail", post(online::get_online_order))
-        .route("/api/online/order/confirm", post(online::confirm_online_order))
-        .route("/api/online/order/cancel", post(online::cancel_online_order))
-        .route("/api/online/order/ship", post(online::update_online_order_ship_info))
-        .route("/api/online/order/batch-ship", post(online::batch_update_online_order_ship_info))
-        .route("/api/online/order/batch-generate-so", post(online::batch_generate_sales_orders))
-        .route("/api/online/payment/configs", post(online::get_payment_configs))
-        .route("/api/online/payment/config/create", post(online::create_payment_config))
-        .route("/api/online/payment/config/update", post(online::update_payment_config))
-        .route("/api/online/payment/config/delete", post(online::delete_payment_config))
-        .route("/api/online/payment/methods", post(online::get_available_payment_methods))
-        .route("/api/online/payment/create", post(online::create_online_order_payment))
-        .route("/api/online/payment/status", post(online::query_payment_status))
-        .route("/api/online/payment/proof", post(online::upload_payment_proof))
+        .route(
+            "/api/online/order/confirm",
+            post(online::confirm_online_order),
+        )
+        .route(
+            "/api/online/order/cancel",
+            post(online::cancel_online_order),
+        )
+        .route(
+            "/api/online/order/ship",
+            post(online::update_online_order_ship_info),
+        )
+        .route(
+            "/api/online/order/batch-ship",
+            post(online::batch_update_online_order_ship_info),
+        )
+        .route(
+            "/api/online/order/batch-generate-so",
+            post(online::batch_generate_sales_orders),
+        )
+        .route(
+            "/api/online/payment/configs",
+            post(online::get_payment_configs),
+        )
+        .route(
+            "/api/online/payment/config/create",
+            post(online::create_payment_config),
+        )
+        .route(
+            "/api/online/payment/config/update",
+            post(online::update_payment_config),
+        )
+        .route(
+            "/api/online/payment/config/delete",
+            post(online::delete_payment_config),
+        )
+        .route(
+            "/api/online/payment/methods",
+            post(online::get_available_payment_methods),
+        )
+        .route(
+            "/api/online/payment/create",
+            post(online::create_online_order_payment),
+        )
+        .route(
+            "/api/online/payment/status",
+            post(online::query_payment_status),
+        )
+        .route(
+            "/api/online/payment/proof",
+            post(online::upload_payment_proof),
+        )
         .route("/api/online/payment/verify", post(online::verify_payment))
-        .route("/api/online/payment/claim", post(online::claim_personal_payment))
+        .route(
+            "/api/online/payment/claim",
+            post(online::claim_personal_payment),
+        )
         .route("/api/online/address/list", post(online::get_addresses))
         .route("/api/online/address/create", post(online::create_address))
         .route("/api/online/address/update", post(online::update_address))
         .route("/api/online/address/delete", post(online::delete_address))
-        .route("/api/online/address/default", post(online::set_default_address))
+        .route(
+            "/api/online/address/default",
+            post(online::set_default_address),
+        )
         .route("/api/online/regions", post(online::get_regions))
         // ===== Permission =====
         .route("/api/permission/roles", post(permission::get_roles))
         .route("/api/permission/role/create", post(permission::create_role))
         .route("/api/permission/role/update", post(permission::update_role))
         .route("/api/permission/role/delete", post(permission::delete_role))
-        .route("/api/permission/role-permissions", post(permission::get_role_permissions))
-        .route("/api/permission/assign", post(permission::assign_role_permissions))
-        .route("/api/permission/assign-user-roles", post(permission::assign_user_roles))
-        .route("/api/permission/user-permissions", post(permission::get_user_permissions))
-        .route("/api/permission/my-permissions", get(permission::get_my_permissions))
+        .route(
+            "/api/permission/role-permissions",
+            post(permission::get_role_permissions),
+        )
+        .route(
+            "/api/permission/assign",
+            post(permission::assign_role_permissions),
+        )
+        .route(
+            "/api/permission/assign-user-roles",
+            post(permission::assign_user_roles),
+        )
+        .route(
+            "/api/permission/user-permissions",
+            post(permission::get_user_permissions),
+        )
+        .route(
+            "/api/permission/my-permissions",
+            get(permission::get_my_permissions),
+        )
         .route("/api/permission/menus", get(permission::get_permissions))
-        .route("/api/permission/overview", post(permission::get_system_overview))
-        .route("/api/permission/company-name", post(permission::get_public_company_name))
-        .route("/api/permission/warehouses", post(permission::get_public_warehouses))
-        .route("/api/permission/table-column-config/get", post(permission::get_table_column_config))
-        .route("/api/permission/table-column-config/save", post(permission::save_table_column_config))
-        .route("/api/permission/table-column-config/delete", post(permission::delete_table_column_config))
-        .route("/api/permission/column-preset/save", post(permission::save_column_preset))
-        .route("/api/permission/column-preset/list", post(permission::list_column_presets))
-        .route("/api/permission/column-preset/delete", post(permission::delete_column_preset))
-        .route("/api/permission/column-preset/apply", post(permission::apply_column_preset))
-        .route("/api/permission/column-preset/set-default", post(permission::set_default_preset))
+        .route(
+            "/api/permission/overview",
+            post(permission::get_system_overview),
+        )
+        .route(
+            "/api/permission/company-name",
+            post(permission::get_public_company_name),
+        )
+        .route(
+            "/api/permission/warehouses",
+            post(permission::get_public_warehouses),
+        )
+        .route(
+            "/api/permission/table-column-config/get",
+            post(permission::get_table_column_config),
+        )
+        .route(
+            "/api/permission/table-column-config/save",
+            post(permission::save_table_column_config),
+        )
+        .route(
+            "/api/permission/table-column-config/delete",
+            post(permission::delete_table_column_config),
+        )
+        .route(
+            "/api/permission/column-preset/save",
+            post(permission::save_column_preset),
+        )
+        .route(
+            "/api/permission/column-preset/list",
+            post(permission::list_column_presets),
+        )
+        .route(
+            "/api/permission/column-preset/delete",
+            post(permission::delete_column_preset),
+        )
+        .route(
+            "/api/permission/column-preset/apply",
+            post(permission::apply_column_preset),
+        )
+        .route(
+            "/api/permission/column-preset/set-default",
+            post(permission::set_default_preset),
+        )
         // ===== Workspace =====
         .route("/api/workspace/todo", post(workspace::get_todo_list))
         .route("/api/workspace/doing", post(workspace::get_doing_list))
@@ -488,25 +971,66 @@ async fn main() {
         .route("/api/system/params", post(system::get_sys_params))
         .route("/api/system/params/save", post(system::save_sys_params))
         .route("/api/system/params/list", post(system::list_system_params))
-        .route("/api/system/params/dict", post(system::get_system_params_dict))
+        .route(
+            "/api/system/params/dict",
+            post(system::get_system_params_dict),
+        )
         .route("/api/system/params/update", post(system::save_system_param))
-        .route("/api/system/params/delete", post(system::delete_system_param))
+        .route(
+            "/api/system/params/delete",
+            post(system::delete_system_param),
+        )
         // ===== Notification & Backup =====
-        .route("/api/notification/list", post(notification_backup::get_notifications))
-        .route("/api/notification/create", post(notification_backup::create_notification))
-        .route("/api/notification/read", post(notification_backup::mark_notification_read))
-        .route("/api/notification/unread-count", post(notification_backup::get_unread_count))
+        .route(
+            "/api/notification/list",
+            post(notification_backup::get_notifications),
+        )
+        .route(
+            "/api/notification/create",
+            post(notification_backup::create_notification),
+        )
+        .route(
+            "/api/notification/read",
+            post(notification_backup::mark_notification_read),
+        )
+        .route(
+            "/api/notification/unread-count",
+            post(notification_backup::get_unread_count),
+        )
         .route("/api/backup/list", post(notification_backup::get_backups))
-        .route("/api/backup/create", post(notification_backup::create_backup))
-        .route("/api/backup/delete", post(notification_backup::delete_backup))
-        .route("/api/system-config", post(notification_backup::get_system_config))
-        .route("/api/system-config/save", post(notification_backup::save_system_config))
+        .route(
+            "/api/backup/create",
+            post(notification_backup::create_backup),
+        )
+        .route(
+            "/api/backup/delete",
+            post(notification_backup::delete_backup),
+        )
+        .route(
+            "/api/system-config",
+            post(notification_backup::get_system_config),
+        )
+        .route(
+            "/api/system-config/save",
+            post(notification_backup::save_system_config),
+        )
         // ===== Admin =====
         .route("/api/admin/check_triggers", post(admin::check_triggers))
-        .route("/api/admin/dashboard-stats", post(notification_backup::get_dashboard_stats))
-        .route("/api/admin/reset-password", post(auth::admin_reset_password))
-        .layer(axum_mw::from_fn(erp_server::middleware::permission::permission_middleware))
-        .layer(axum_mw::from_fn_with_state(config_clone.clone(), auth_middleware))
+        .route(
+            "/api/admin/dashboard-stats",
+            post(notification_backup::get_dashboard_stats),
+        )
+        .route(
+            "/api/admin/reset-password",
+            post(auth::admin_reset_password),
+        )
+        .layer(axum_mw::from_fn(
+            erp_server::middleware::permission::permission_middleware,
+        ))
+        .layer(axum_mw::from_fn_with_state(
+            config_clone.clone(),
+            auth_middleware,
+        ))
         .layer(axum_mw::from_fn_with_state(
             rate_limit_state,
             erp_server::middleware::rate_limit::smart_rate_limit,
@@ -532,14 +1056,20 @@ async fn main() {
                     );
                     span
                 })
-                .on_response(|response: &axum::http::Response<_>, latency: std::time::Duration, span: &tracing::Span| {
-                    span.record("status", tracing::field::display(response.status()));
-                    span.record("latency", latency.as_millis() as u64);
-                    tracing::info!("HTTP {} {}ms", response.status(), latency.as_millis());
-                })
-                .on_failure(|error, _latency: std::time::Duration, _span: &tracing::Span| {
-                    tracing::error!("HTTP request failed: {}", error);
-                }),
+                .on_response(
+                    |response: &axum::http::Response<_>,
+                     latency: std::time::Duration,
+                     span: &tracing::Span| {
+                        span.record("status", tracing::field::display(response.status()));
+                        span.record("latency", latency.as_millis() as u64);
+                        tracing::info!("HTTP {} {}ms", response.status(), latency.as_millis());
+                    },
+                )
+                .on_failure(
+                    |error, _latency: std::time::Duration, _span: &tracing::Span| {
+                        tracing::error!("HTTP request failed: {}", error);
+                    },
+                ),
         );
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
@@ -549,12 +1079,21 @@ async fn main() {
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(l) => l,
         Err(e) => {
-            tracing::error!("绑定端口 {} 失败: {}（可能端口被占用或权限不足）", config.port, e);
+            tracing::error!(
+                "绑定端口 {} 失败: {}（可能端口被占用或权限不足）",
+                config.port,
+                e
+            );
             std::process::exit(1);
         }
     };
     // P1-10: 启用 ConnectInfo，让 handler 可通过 ConnectInfo<SocketAddr> 获取客户端真实 IP
-    if let Err(e) = axum::serve(listener, api.into_make_service_with_connect_info::<SocketAddr>()).await {
+    if let Err(e) = axum::serve(
+        listener,
+        api.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    {
         tracing::error!("HTTP 服务异常退出: {}", e);
         std::process::exit(1);
     }

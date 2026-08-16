@@ -18,6 +18,10 @@ pub struct Config {
     /// 是否信任反向代理（nginx 等）设置的 X-Forwarded-For / X-Real-IP。
     /// 仅当服务只经受信代理暴露时设为 true；否则攻击者可伪造转发头绕过限流。
     pub trust_proxy: bool,
+    /// 是否开放移动端自助注册（默认关闭）。
+    /// /api/mobile/register 是公开端点，开启意味着任何人可匿名创建可登录账号，
+    /// 仅在确有业务需要（如门店导购自助开通）且配合验证码/限流时才设为 true。
+    pub allow_mobile_register: bool,
 }
 
 impl Config {
@@ -77,6 +81,9 @@ impl Config {
             db_pool_max_size,
             rust_env,
             trust_proxy: std::env::var("TRUST_PROXY")
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(false),
+            allow_mobile_register: std::env::var("ALLOW_MOBILE_REGISTER")
                 .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
                 .unwrap_or(false),
         }

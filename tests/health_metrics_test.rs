@@ -8,9 +8,9 @@ use erp_server::handlers::health::inc_request;
 #[test]
 fn inc_request_success_increments_total() {
     // 多次调用 inc_request(true) 应单调增加
-    let _ = inc_request(true);
-    let _ = inc_request(true);
-    let _ = inc_request(true);
+    inc_request(true);
+    inc_request(true);
+    inc_request(true);
     // 验证 metrics 端点能返回非空字段（间接通过 inc_request 不 panic）
 }
 

@@ -1,16 +1,16 @@
-use axum::{
-    extract::{Extension, Multipart, State},
-    Json,
-};
-use serde::Deserialize;
-use uuid::Uuid;
-use tiberius::Row;
 use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
-use crate::utils::ApiResponse;
-use crate::handlers::base_data::{try_get_value, row_to_json};
+use crate::handlers::base_data::{row_to_json, try_get_value};
 use crate::middleware::auth::Claims;
+use crate::utils::ApiResponse;
+use axum::{
+    Json,
+    extract::{Extension, Multipart, State},
+};
+use serde::Deserialize;
+use tiberius::Row;
+use uuid::Uuid;
 
 #[derive(Deserialize)]
 pub struct RoleIdParams {
@@ -130,7 +130,8 @@ pub async fn assign_role_permissions(
         &params.RuleID,
         &claims,
         &audit_remark,
-    ).await;
+    )
+    .await;
 
     Ok(Json(ApiResponse::msg("权限分配成功")))
 }
@@ -396,7 +397,11 @@ fn build_menu_tree(flat: &[serde_json::Value]) -> Vec<serde_json::Value> {
     let mut roots: Vec<serde_json::Value> = Vec::new();
 
     for m in flat {
-        let pid = m.get("pid").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let pid = m
+            .get("pid")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let is_root = pid.is_empty()
             || pid == "0"
             || pid == "00000000-0000-0000-0000-000000000000"
@@ -414,7 +419,11 @@ fn build_menu_tree(flat: &[serde_json::Value]) -> Vec<serde_json::Value> {
         children_map: &HashMap<String, Vec<serde_json::Value>>,
     ) {
         if let Some(obj) = node.as_object_mut() {
-            let id = obj.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let id = obj
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             if let Some(mut children) = children_map.get(&id).cloned() {
                 for child in children.iter_mut() {
                     attach_children(child, children_map);
@@ -472,7 +481,8 @@ pub async fn get_roles(
         if !kw.is_empty() {
             base_query.push_str(&format!(
                 " AND (r.RuleName LIKE @p{} OR r.Note LIKE @p{})",
-                pidx, pidx + 1
+                pidx,
+                pidx + 1
             ));
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
@@ -484,7 +494,9 @@ pub async fn get_roles(
     let top = offset + page_size;
     let paginated_sql = format!(
         "SELECT * FROM (SELECT TOP ({top}) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) as _rn, * FROM ({base_query}) t) p WHERE _rn > {offset}",
-        top = top, base_query = base_query, offset = offset
+        top = top,
+        base_query = base_query,
+        offset = offset
     );
 
     let param_refs: Vec<&dyn tiberius::ToSql> = query_params
@@ -530,7 +542,8 @@ pub async fn create_role(
 
     let sql = r#"INSERT INTO tSys_Rule (RuleID, RuleName, Note, Flg, State)
                  VALUES (NEWID(), @p1, @p2, @p3, @p4)"#;
-    conn.execute(sql, &[&body.RuleName, &note, &flg, &state]).await?;
+    conn.execute(sql, &[&body.RuleName, &note, &flg, &state])
+        .await?;
 
     // 审计日志
     let audit_remark = format!("新建角色：{}", body.RuleName);
@@ -541,7 +554,8 @@ pub async fn create_role(
         "",
         &claims,
         &audit_remark,
-    ).await;
+    )
+    .await;
 
     Ok(Json(ApiResponse::msg("角色创建成功")))
 }
@@ -568,7 +582,8 @@ pub async fn update_role(
 
     let sql = r#"UPDATE tSys_Rule SET RuleName = @p1, Note = @p2, Flg = @p3, State = @p4
                  WHERE RuleID = @p5"#;
-    conn.execute(sql, &[&rule_name, &note, &flg, &state, &body.RuleID]).await?;
+    conn.execute(sql, &[&rule_name, &note, &flg, &state, &body.RuleID])
+        .await?;
 
     // 角色状态/信息变更可能影响所有关联该角色的用户，清除全部权限缓存
     crate::middleware::permission::invalidate_all_permission_cache();
@@ -582,7 +597,8 @@ pub async fn update_role(
         &body.RuleID,
         &claims,
         &audit_remark,
-    ).await;
+    )
+    .await;
 
     Ok(Json(ApiResponse::msg("角色更新成功")))
 }
@@ -602,20 +618,31 @@ pub async fn delete_role(
     // 事务包裹：删除角色关联的菜单权限 + 用户角色关联 + 角色本身 原子化
     // 任何一步失败都回滚，避免部分删除造成数据不一致
     let tx_result: std::result::Result<(), String> = async {
-        crate::services::inventory_ledger::begin_tran(&mut conn).await.map_err(|e| e.to_string())?;
+        crate::services::inventory_ledger::begin_tran(&mut conn)
+            .await
+            .map_err(|e| e.to_string())?;
 
         let del_rule_menu = "DELETE FROM tSys_RuleMenu WHERE RuleID = @p1";
-        conn.execute(del_rule_menu, &[&body.RuleID]).await.map_err(|e| e.to_string())?;
+        conn.execute(del_rule_menu, &[&body.RuleID])
+            .await
+            .map_err(|e| e.to_string())?;
 
         let del_user_rule = "DELETE FROM tSys_UserRule WHERE RuleID = @p1";
-        conn.execute(del_user_rule, &[&body.RuleID]).await.map_err(|e| e.to_string())?;
+        conn.execute(del_user_rule, &[&body.RuleID])
+            .await
+            .map_err(|e| e.to_string())?;
 
         let del_role = "DELETE FROM tSys_Rule WHERE RuleID = @p1";
-        conn.execute(del_role, &[&body.RuleID]).await.map_err(|e| e.to_string())?;
+        conn.execute(del_role, &[&body.RuleID])
+            .await
+            .map_err(|e| e.to_string())?;
 
-        crate::services::inventory_ledger::commit_tran(&mut conn).await.map_err(|e| e.to_string())?;
+        crate::services::inventory_ledger::commit_tran(&mut conn)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
-    }.await;
+    }
+    .await;
     if let Err(e) = tx_result {
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
         return Ok(Json(ApiResponse::err(&format!("角色删除失败: {}", e))));
@@ -634,7 +661,8 @@ pub async fn delete_role(
         &body.RuleID,
         &claims,
         &audit_remark,
-    ).await;
+    )
+    .await;
 
     Ok(Json(ApiResponse::msg("角色删除成功")))
 }
@@ -655,20 +683,29 @@ pub async fn assign_user_roles(
 
     // 事务包裹：DELETE 旧用户角色 + INSERT 新用户角色 原子化
     let tx_result: std::result::Result<(), String> = async {
-        crate::services::inventory_ledger::begin_tran(&mut conn).await.map_err(|e| e.to_string())?;
+        crate::services::inventory_ledger::begin_tran(&mut conn)
+            .await
+            .map_err(|e| e.to_string())?;
 
         let del_sql = "DELETE FROM tSys_UserRule WHERE EmpID = @p1";
-        conn.execute(del_sql, &[&params.EmpID]).await.map_err(|e| e.to_string())?;
+        conn.execute(del_sql, &[&params.EmpID])
+            .await
+            .map_err(|e| e.to_string())?;
 
         for rule_id in &params.RuleIDs {
             let ins_sql = r#"INSERT INTO tSys_UserRule (UserRuleID, EmpID, RuleID, LUTime)
                              VALUES (NEWID(), @p1, @p2, @p3)"#;
-            conn.execute(ins_sql, &[&params.EmpID, rule_id, &now]).await.map_err(|e| e.to_string())?;
+            conn.execute(ins_sql, &[&params.EmpID, rule_id, &now])
+                .await
+                .map_err(|e| e.to_string())?;
         }
 
-        crate::services::inventory_ledger::commit_tran(&mut conn).await.map_err(|e| e.to_string())?;
+        crate::services::inventory_ledger::commit_tran(&mut conn)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
-    }.await;
+    }
+    .await;
     if let Err(e) = tx_result {
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
         return Ok(Json(ApiResponse::err(&format!("用户角色分配失败: {}", e))));
@@ -686,7 +723,8 @@ pub async fn assign_user_roles(
         &params.EmpID,
         &claims,
         &audit_remark,
-    ).await;
+    )
+    .await;
 
     Ok(Json(ApiResponse::msg("用户角色分配成功")))
 }
@@ -702,8 +740,12 @@ pub async fn save_table_column_config(
     State(_config): State<Config>,
     Json(params): Json<SaveTableColumnConfigParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
-    tracing::debug!("[save_table_column_config] 进入 EmpID={:?} TableName={:?} ConfigData.len={}",
-        params.EmpID, params.TableName, params.ConfigData.len());
+    tracing::debug!(
+        "[save_table_column_config] 进入 EmpID={:?} TableName={:?} ConfigData.len={}",
+        params.EmpID,
+        params.TableName,
+        params.ConfigData.len()
+    );
 
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
@@ -721,13 +763,19 @@ pub async fn save_table_column_config(
         Ok(u) => u.to_string(),
         Err(e) => {
             tracing::warn!("[save_table_column_config] UUID 解析失败: {}", e);
-            return Ok(Json(ApiResponse::err(&format!("EmpID 不是有效 UUID: {}", e))));
+            return Ok(Json(ApiResponse::err(&format!(
+                "EmpID 不是有效 UUID: {}",
+                e
+            ))));
         }
     };
     tracing::debug!("[save_table_column_config] emp_uuid_str={}", emp_uuid_str);
 
     let check_sql = "SELECT ColumnConfigID FROM tSys_TableColumnConfig WHERE EmpID = CAST(@p1 AS uniqueidentifier) AND TableName = @p2";
-    let stream = match conn.query(check_sql, &[&emp_uuid_str, &params.TableName]).await {
+    let stream = match conn
+        .query(check_sql, &[&emp_uuid_str, &params.TableName])
+        .await
+    {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!("[save_table_column_config] check 查询失败: {}", e);
@@ -747,9 +795,18 @@ pub async fn save_table_column_config(
         let upd_sql = r#"UPDATE tSys_TableColumnConfig
                          SET ConfigData = @p1, LUTime = @p2
                          WHERE EmpID = CAST(@p3 AS uniqueidentifier) AND TableName = @p4"#;
-        match conn.execute(upd_sql, &[&params.ConfigData, &now, &emp_uuid_str, &params.TableName]).await {
+        match conn
+            .execute(
+                upd_sql,
+                &[&params.ConfigData, &now, &emp_uuid_str, &params.TableName],
+            )
+            .await
+        {
             Ok(_) => {
-                tracing::debug!("[save_table_column_config] UPDATE 成功 TableName={}", params.TableName);
+                tracing::debug!(
+                    "[save_table_column_config] UPDATE 成功 TableName={}",
+                    params.TableName
+                );
             }
             Err(e) => {
                 tracing::warn!("[save_table_column_config] UPDATE 失败: {}", e);
@@ -759,9 +816,18 @@ pub async fn save_table_column_config(
     } else {
         let ins_sql = r#"INSERT INTO tSys_TableColumnConfig (ColumnConfigID, EmpID, TableName, ConfigData, LUTime)
                          VALUES (NEWID(), CAST(@p1 AS uniqueidentifier), @p2, @p3, @p4)"#;
-        match conn.execute(ins_sql, &[&emp_uuid_str, &params.TableName, &params.ConfigData, &now]).await {
+        match conn
+            .execute(
+                ins_sql,
+                &[&emp_uuid_str, &params.TableName, &params.ConfigData, &now],
+            )
+            .await
+        {
             Ok(_) => {
-                tracing::debug!("[save_table_column_config] INSERT 成功 TableName={}", params.TableName);
+                tracing::debug!(
+                    "[save_table_column_config] INSERT 成功 TableName={}",
+                    params.TableName
+                );
             }
             Err(e) => {
                 tracing::warn!("[save_table_column_config] INSERT 失败: {}", e);
@@ -783,7 +849,11 @@ pub async fn get_table_column_config(
     State(_config): State<Config>,
     Json(params): Json<GetTableColumnConfigParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
-    tracing::debug!("[get_table_column_config] 进入 EmpID={:?} TableName={:?}", params.EmpID, params.TableName);
+    tracing::debug!(
+        "[get_table_column_config] 进入 EmpID={:?} TableName={:?}",
+        params.EmpID,
+        params.TableName
+    );
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
         Err(e) => {
@@ -796,10 +866,16 @@ pub async fn get_table_column_config(
         Ok(u) => u.to_string(),
         Err(e) => {
             tracing::warn!("[get_table_column_config] EmpID UUID 解析失败: {}", e);
-            return Ok(Json(ApiResponse::err(&format!("EmpID 不是有效 UUID: {}", e))));
+            return Ok(Json(ApiResponse::err(&format!(
+                "EmpID 不是有效 UUID: {}",
+                e
+            ))));
         }
     };
-    tracing::debug!("[get_table_column_config] 准备执行 SQL emp_uuid_str={}", emp_uuid_str);
+    tracing::debug!(
+        "[get_table_column_config] 准备执行 SQL emp_uuid_str={}",
+        emp_uuid_str
+    );
     let sql = "SELECT ColumnConfigID, EmpID, TableName, ConfigData, LUTime FROM tSys_TableColumnConfig WHERE EmpID = CAST(@p1 AS uniqueidentifier) AND TableName = @p2";
     let stream = match conn.query(sql, &[&emp_uuid_str, &params.TableName]).await {
         Ok(s) => s,
@@ -826,7 +902,10 @@ pub async fn get_table_column_config(
             return Ok(Json(ApiResponse::err(&format!("取行失败: {}", e))));
         }
     };
-    tracing::debug!("[get_table_column_config] 收集完成, 共 {} 条", rows_json.len());
+    tracing::debug!(
+        "[get_table_column_config] 收集完成, 共 {} 条",
+        rows_json.len()
+    );
 
     Ok(Json(ApiResponse::ok(serde_json::Value::Array(rows_json))))
 }
@@ -866,35 +945,46 @@ pub async fn save_column_preset(
     let emp_uuid_str = match Uuid::parse_str(params.EmpID.trim()) {
         Ok(u) => u.to_string(),
         Err(e) => {
-            return Ok(Json(ApiResponse::err(&format!("EmpID 不是有效 UUID: {}", e))));
+            return Ok(Json(ApiResponse::err(&format!(
+                "EmpID 不是有效 UUID: {}",
+                e
+            ))));
         }
     };
 
     if is_default {
         let reset_sql = r#"UPDATE tSys_ColumnPreset SET IsDefault = 0
                           WHERE EmpID = CAST(@p1 AS uniqueidentifier) AND TableName = @p2 AND IsDefault = 1"#;
-        conn.execute(reset_sql, &[&emp_uuid_str, &params.TableName]).await?;
+        conn.execute(reset_sql, &[&emp_uuid_str, &params.TableName])
+            .await?;
     }
 
     let ins_sql = r#"INSERT INTO tSys_ColumnPreset (PresetID, EmpID, TableName, PresetName, ConfigData, IsDefault, LUTime)
                      OUTPUT INSERTED.PresetID
                      VALUES (NEWID(), CAST(@p1 AS uniqueidentifier), @p2, @p3, @p4, @p5, @p6)"#;
-    let stream = conn.query(ins_sql, &[
-        &emp_uuid_str,
-        &params.TableName,
-        &params.PresetName,
-        &params.ConfigData,
-        &is_default,
-        &now,
-    ]).await?;
+    let stream = conn
+        .query(
+            ins_sql,
+            &[
+                &emp_uuid_str,
+                &params.TableName,
+                &params.PresetName,
+                &params.ConfigData,
+                &is_default,
+                &now,
+            ],
+        )
+        .await?;
 
     let row = stream.into_row().await?;
-    let preset_id = row.and_then(|r| {
-        r.try_get::<uuid::Uuid, _>("PresetID")
-            .ok()
-            .flatten()
-            .map(|u| u.to_string())
-    }).unwrap_or_default();
+    let preset_id = row
+        .and_then(|r| {
+            r.try_get::<uuid::Uuid, _>("PresetID")
+                .ok()
+                .flatten()
+                .map(|u| u.to_string())
+        })
+        .unwrap_or_default();
 
     Ok(Json(ApiResponse::ok(serde_json::json!({
         "PresetID": preset_id
@@ -915,7 +1005,10 @@ pub async fn list_column_presets(
     let emp_uuid_str = match Uuid::parse_str(params.EmpID.trim()) {
         Ok(u) => u.to_string(),
         Err(e) => {
-            return Ok(Json(ApiResponse::err(&format!("EmpID 不是有效 UUID: {}", e))));
+            return Ok(Json(ApiResponse::err(&format!(
+                "EmpID 不是有效 UUID: {}",
+                e
+            ))));
         }
     };
 
@@ -988,7 +1081,10 @@ pub async fn set_default_preset(
     let preset_uuid_str = match Uuid::parse_str(params.PresetID.trim()) {
         Ok(u) => u.to_string(),
         Err(e) => {
-            return Ok(Json(ApiResponse::err(&format!("PresetID 不是有效 UUID: {}", e))));
+            return Ok(Json(ApiResponse::err(&format!(
+                "PresetID 不是有效 UUID: {}",
+                e
+            ))));
         }
     };
 
@@ -1010,13 +1106,16 @@ pub async fn set_default_preset(
         // 取消同 EmpID + TableName 下的其他默认预设
         let reset_sql = r#"UPDATE tSys_ColumnPreset SET IsDefault = 0, LUTime = @p1
                           WHERE EmpID = CAST(@p2 AS uniqueidentifier) AND TableName = @p3 AND IsDefault = 1"#;
-        conn.execute(reset_sql, &[&now, &emp_uuid_str, &table_name]).await?;
+        conn.execute(reset_sql, &[&now, &emp_uuid_str, &table_name])
+            .await?;
         // 将目标预设设为默认
-        let set_sql = r#"UPDATE tSys_ColumnPreset SET IsDefault = 1, LUTime = @p1 WHERE PresetID = @p2"#;
+        let set_sql =
+            r#"UPDATE tSys_ColumnPreset SET IsDefault = 1, LUTime = @p1 WHERE PresetID = @p2"#;
         conn.execute(set_sql, &[&now, &preset_uuid_str]).await?;
     } else {
         // 取消默认
-        let clear_sql = r#"UPDATE tSys_ColumnPreset SET IsDefault = 0, LUTime = @p1 WHERE PresetID = @p2"#;
+        let clear_sql =
+            r#"UPDATE tSys_ColumnPreset SET IsDefault = 0, LUTime = @p1 WHERE PresetID = @p2"#;
         conn.execute(clear_sql, &[&now, &preset_uuid_str]).await?;
     }
 
@@ -1034,9 +1133,11 @@ pub async fn upload_file(
     let mut original_name = String::new();
     let mut file_size: i64 = 0;
 
-    while let Some(field) = multipart.next_field().await.map_err(|e| {
-        crate::error::AppError::BadRequest(format!("读取上传字段失败: {}", e))
-    })? {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| crate::error::AppError::BadRequest(format!("读取上传字段失败: {}", e)))?
+    {
         let field_name = field.name().unwrap_or("").to_string();
 
         match field_name.as_str() {
@@ -1059,7 +1160,11 @@ pub async fn upload_file(
 
                 file_id = format!("{}", uuid::Uuid::new_v4());
 
-                let dir_name = if biz_type.is_empty() { "default".to_string() } else { biz_type.clone() };
+                let dir_name = if biz_type.is_empty() {
+                    "default".to_string()
+                } else {
+                    biz_type.clone()
+                };
                 let dir_path = format!("./uploads/{}", dir_name);
                 std::fs::create_dir_all(&dir_path).map_err(|e| {
                     crate::error::AppError::Internal(format!("创建上传目录失败: {}", e))
@@ -1093,16 +1198,20 @@ pub async fn upload_file(
     // UploadUser/UploadTime 不存在，改用 EUser/EDate；State 默认 'A'，LUTime 由数据库默认值填充
     let sql = r#"INSERT INTO tSys_UploadFile (FileID, BizType, BizID, FileName, FilePath, FileSize, State, EUser, EDate)
                  VALUES (@p1, @p2, @p3, @p4, @p5, @p6, 'A', @p7, @p8)"#;
-    conn.execute(sql, &[
-        &file_id,
-        &biz_type,
-        &biz_id,
-        &original_name,
-        &relative_path,
-        &file_size,
-        &claims.user_code.as_str(),
-        &now,
-    ]).await?;
+    conn.execute(
+        sql,
+        &[
+            &file_id,
+            &biz_type,
+            &biz_id,
+            &original_name,
+            &relative_path,
+            &file_size,
+            &claims.user_code.as_str(),
+            &now,
+        ],
+    )
+    .await?;
 
     Ok(Json(ApiResponse::ok(serde_json::json!({
         "FileID": file_id,

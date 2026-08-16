@@ -12,7 +12,7 @@
 //!  - 零额外依赖（不引入 utoipa-axum）
 
 use axum::{
-    http::{header, HeaderValue, StatusCode},
+    http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Redirect, Response},
 };
 

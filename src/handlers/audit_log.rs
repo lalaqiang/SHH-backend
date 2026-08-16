@@ -62,13 +62,12 @@ pub async fn write_audit_log(
     let emp_id_str = claims.emp_id.clone();
 
     // EmpID 是 uniqueidentifier，需要 Option<&str>，空字符串转 NULL
-    let emp_id_opt: Option<&str> = if emp_id_str.len() == 36
-        && emp_id_str.chars().filter(|c| *c == '-').count() == 4
-    {
-        Some(emp_id_str.as_str())
-    } else {
-        None
-    };
+    let emp_id_opt: Option<&str> =
+        if emp_id_str.len() == 36 && emp_id_str.chars().filter(|c| *c == '-').count() == 4 {
+            Some(emp_id_str.as_str())
+        } else {
+            None
+        };
 
     let ip_val: Option<&str> = client_ip.filter(|s| !s.is_empty());
     let new_data_val: Option<&str> = new_data.filter(|s| !s.is_empty());
@@ -99,8 +98,12 @@ pub async fn write_audit_log(
         // 失败时 fallback 到旧表 tSys_OperHis（OpenMsg 格式与 record_oper 一致）
         // 格式：操作类型 | 表名 | 备注 | 操作人:工号
         let mut parts: Vec<String> = vec![oper_type.to_string(), table_name.to_string()];
-        if !remark.is_empty() { parts.push(remark.to_string()); }
-        if !user_code.is_empty() { parts.push(format!("操作人:{}", user_code)); }
+        if !remark.is_empty() {
+            parts.push(remark.to_string());
+        }
+        if !user_code.is_empty() {
+            parts.push(format!("操作人:{}", user_code));
+        }
         let open_msg = parts.join(" | ");
         let zero_uuid = "00000000-0000-0000-0000-000000000000".to_string();
         let fallback_sql = "INSERT INTO tSys_OperHis (OperHisID, DocID, EmpID, MenusID, OperDate, OpenMsg) \
@@ -121,5 +124,8 @@ pub async fn log_perm_action(
     claims: &Claims,
     remark: &str,
 ) {
-    write_audit_log(conn, oper_type, table_name, key_value, claims, None, None, remark).await;
+    write_audit_log(
+        conn, oper_type, table_name, key_value, claims, None, None, remark,
+    )
+    .await;
 }

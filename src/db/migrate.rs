@@ -266,12 +266,10 @@ pub async fn run_migrations() {
                 "IF NOT EXISTS (SELECT 1 FROM [tSys_Rule] WHERE [RuleID] = '10000000-0000-1000-0000-000000000001') ",
                 "INSERT INTO [tSys_Rule] ([RuleID], [RuleName], [Note], [Flg], [State]) ",
                 "VALUES ('10000000-0000-1000-0000-000000000001', N'系统管理员', N'系统初始化角色，拥有所有菜单的所有权限', N'admin', N'Y'); ",
-
                 // 2. 创建"普通用户"角色
                 "IF NOT EXISTS (SELECT 1 FROM [tSys_Rule] WHERE [RuleID] = '10000000-0000-1000-0000-000000000002') ",
                 "INSERT INTO [tSys_Rule] ([RuleID], [RuleName], [Note], [Flg], [State]) ",
                 "VALUES ('10000000-0000-1000-0000-000000000002', N'普通用户', N'系统初始化角色，仅对所有菜单有只读权限', N'user', N'Y'); ",
-
                 // 3. 系统管理员：分配所有菜单的全部权限（仅插入不存在的）
                 "INSERT INTO [tSys_RuleMenu] ",
                 "  ([RuleMenuID], [RuleID], [MenuID], [CanRead], [CanCreate], [CanUpdate], [CanDelete], [CanAudit], [CanPrint], [CanExport], [LUTime]) ",
@@ -279,7 +277,6 @@ pub async fn run_migrations() {
                 "FROM [tSys_Menus] m ",
                 "WHERE ISNULL(m.[Used], 'Y') = 'Y' AND m.[SYM_ID] IS NOT NULL ",
                 "  AND NOT EXISTS (SELECT 1 FROM [tSys_RuleMenu] rm WHERE rm.[RuleID] = '10000000-0000-1000-0000-000000000001' AND rm.[MenuID] = m.[SYM_ID]); ",
-
                 // 4. 普通用户：分配所有菜单的只读权限
                 "INSERT INTO [tSys_RuleMenu] ",
                 "  ([RuleMenuID], [RuleID], [MenuID], [CanRead], [CanCreate], [CanUpdate], [CanDelete], [CanAudit], [CanPrint], [CanExport], [LUTime]) ",
@@ -287,7 +284,6 @@ pub async fn run_migrations() {
                 "FROM [tSys_Menus] m ",
                 "WHERE ISNULL(m.[Used], 'Y') = 'Y' AND m.[SYM_ID] IS NOT NULL ",
                 "  AND NOT EXISTS (SELECT 1 FROM [tSys_RuleMenu] rm WHERE rm.[RuleID] = '10000000-0000-1000-0000-000000000002' AND rm.[MenuID] = m.[SYM_ID]); ",
-
                 // 5. 将 admin 用户分配到"系统管理员"角色
                 "IF NOT EXISTS (",
                 "  SELECT 1 FROM [tSys_UserRule] ur ",
@@ -473,8 +469,7 @@ pub async fn run_migrations() {
 
     for m in migrations {
         // 用 EXISTS 替代 COUNT，更高效
-        let check_sql =
-            "SELECT CASE WHEN EXISTS (SELECT 1 FROM tSys_Migration WHERE Name = @p1) \
+        let check_sql = "SELECT CASE WHEN EXISTS (SELECT 1 FROM tSys_Migration WHERE Name = @p1) \
              THEN 1 ELSE 0 END";
         let exists: i32 = match conn.query(check_sql, &[&m.name.to_string()]).await {
             Ok(stream) => stream
@@ -516,17 +511,15 @@ pub async fn run_migrations() {
 
         // 先把查询结果提取到栈上（Option<(ok, msg)>），stream 随即 drop，
         // 释放对 conn 的借用，之后才能再次借用 conn 做"补写记录"。
-        let result: Option<(i32, Option<String>)> = match conn
-            .query(&wrapped, &[&m.name.to_string()])
-            .await
-        {
-            Ok(stream) => stream.into_row().await.ok().flatten().map(|row| {
-                let ok: i32 = row.get::<i32, _>("ok").unwrap_or(0);
-                let msg: Option<String> = row.get::<&str, _>("msg").map(|s| s.to_string());
-                (ok, msg)
-            }),
-            Err(e) => Some((0, Some(e.to_string()))),
-        };
+        let result: Option<(i32, Option<String>)> =
+            match conn.query(&wrapped, &[&m.name.to_string()]).await {
+                Ok(stream) => stream.into_row().await.ok().flatten().map(|row| {
+                    let ok: i32 = row.get::<i32, _>("ok").unwrap_or(0);
+                    let msg: Option<String> = row.get::<&str, _>("msg").map(|s| s.to_string());
+                    (ok, msg)
+                }),
+                Err(e) => Some((0, Some(e.to_string()))),
+            };
 
         match result {
             Some((1, _)) => {

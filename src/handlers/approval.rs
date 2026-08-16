@@ -1,13 +1,13 @@
-use axum::{extract::State, Extension, Json};
-use serde::Deserialize;
-use bb8::PooledConnection;
-use bb8_tiberius::ConnectionManager;
 use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
-use crate::utils::ApiResponse;
 use crate::middleware::auth::Claims;
 use crate::services::inventory_ledger as ledger;
+use crate::utils::ApiResponse;
+use axum::{Extension, Json, extract::State};
+use bb8::PooledConnection;
+use bb8_tiberius::ConnectionManager;
+use serde::Deserialize;
 
 pub type Conn = PooledConnection<'static, ConnectionManager>;
 
@@ -23,8 +23,8 @@ pub struct PrintLogParams {
 /// DB 规则：月初把上月 EndQty 复制为 InitQty
 pub async fn month_end_settle(
     conn: &mut Conn,
-    from_ym: i32,  // 来源月份 YYYYMM
-    to_ym: i32,    // 目标月份 YYYYMM
+    from_ym: i32, // 来源月份 YYYYMM
+    to_ym: i32,   // 目标月份 YYYYMM
 ) -> i32 {
     // 1) 检查目标月份是否已结存（如果 InitQty 已经从历史继承则跳过，避免重复累加）
     let sql = r#"
@@ -44,7 +44,12 @@ pub async fn month_end_settle(
         // P2-6 修复：Err 静默吞掉改为 tracing::error，便于排查月结失败原因
         // 返回 -1 表示失败，调用方据此判断（inventory.rs::month_settle 已检查 rows < 0）
         Err(e) => {
-            tracing::error!("[month_end_settle] 月结失败: from_ym={} to_ym={} err={}", from_ym, to_ym, e);
+            tracing::error!(
+                "[month_end_settle] 月结失败: from_ym={} to_ym={} err={}",
+                from_ym,
+                to_ym,
+                e
+            );
             -1
         }
     }
@@ -110,7 +115,12 @@ pub async fn month_rollback(conn: &mut Conn, to_ym: i32, force: i32) -> i32 {
     match conn.execute(del_sql, &del_params).await {
         Ok(r) => r.rows_affected().iter().sum::<u64>() as i32,
         Err(e) => {
-            tracing::error!("[month_rollback] 回滚失败: to_ym={} force={} err={}", to_ym, force, e);
+            tracing::error!(
+                "[month_rollback] 回滚失败: to_ym={} force={} err={}",
+                to_ym,
+                force,
+                e
+            );
             -1
         }
     }
@@ -131,7 +141,11 @@ pub async fn fill_detail_stock_snapshot(
     }
     // P2-3: identifier 校验（深度防御，调用方通常传字面量，但仍校验）
     if !is_valid_identifier(detail_table) || !is_valid_identifier(detail_pk) {
-        tracing::warn!("[fill_detail_stock_snapshot] 非法标识符: table={} pk={}", detail_table, detail_pk);
+        tracing::warn!(
+            "[fill_detail_stock_snapshot] 非法标识符: table={} pk={}",
+            detail_table,
+            detail_pk
+        );
         return;
     }
     // 1. 取这个 detail 的 GDSID, StkID
@@ -148,7 +162,12 @@ pub async fn fill_detail_stock_snapshot(
             stkid = row.get::<&str, _>("StkID").unwrap_or("").to_string();
         }
     } else {
-        tracing::warn!("[fill_detail_stock_snapshot] 查询 GDSID/StkID 失败: table={} pk={} id={}", detail_table, detail_pk, detail_id);
+        tracing::warn!(
+            "[fill_detail_stock_snapshot] 查询 GDSID/StkID 失败: table={} pk={} id={}",
+            detail_table,
+            detail_pk,
+            detail_id
+        );
     }
     if gdsid.is_empty() || stkid.is_empty() {
         return;
@@ -166,11 +185,20 @@ pub async fn fill_detail_stock_snapshot(
         }
     }
     // 3. 回填
-    let upd = format!("UPDATE [{}] SET StkQty = @p1, AQty = @p2 WHERE {} = @p3", detail_table, detail_pk);
+    let upd = format!(
+        "UPDATE [{}] SET StkQty = @p1, AQty = @p2 WHERE {} = @p3",
+        detail_table, detail_pk
+    );
     let params: Vec<&dyn tiberius::ToSql> = vec![&qty, &qqty, &detail_id];
     // P2-7: 静默 execute 改为记录 warn 日志
     if let Err(e) = conn.execute(&upd, &params).await {
-        tracing::warn!("[fill_detail_stock_snapshot] 回填 StkQty/AQty 失败: table={} pk={} id={} err={}", detail_table, detail_pk, detail_id, e);
+        tracing::warn!(
+            "[fill_detail_stock_snapshot] 回填 StkQty/AQty 失败: table={} pk={} id={} err={}",
+            detail_table,
+            detail_pk,
+            detail_id,
+            e
+        );
     }
 }
 
@@ -197,7 +225,11 @@ pub async fn fill_io_detail_stock_snapshot(conn: &mut Conn, ioid: &str) {
                WHERE d.IOID = @p1";
     let params: Vec<&dyn tiberius::ToSql> = vec![&ioid];
     if let Err(e) = conn.execute(sql, &params).await {
-        tracing::warn!("[fill_io_detail_stock_snapshot] 回填失败: IOID={} err={}", ioid, e);
+        tracing::warn!(
+            "[fill_io_detail_stock_snapshot] 回填失败: IOID={} err={}",
+            ioid,
+            e
+        );
     }
 }
 
@@ -212,7 +244,11 @@ pub async fn fill_move_detail_stock_snapshot(conn: &mut Conn, move_id: &str) {
                WHERE d.MoveID = @p1";
     let params: Vec<&dyn tiberius::ToSql> = vec![&move_id];
     if let Err(e) = conn.execute(sql, &params).await {
-        tracing::warn!("[fill_move_detail_stock_snapshot] 回填失败: MoveID={} err={}", move_id, e);
+        tracing::warn!(
+            "[fill_move_detail_stock_snapshot] 回填失败: MoveID={} err={}",
+            move_id,
+            e
+        );
     }
 }
 
@@ -227,7 +263,11 @@ pub async fn fill_tran_detail_stock_snapshot(conn: &mut Conn, tran_id: &str) {
                WHERE d.TranID = @p1";
     let params: Vec<&dyn tiberius::ToSql> = vec![&tran_id];
     if let Err(e) = conn.execute(sql, &params).await {
-        tracing::warn!("[fill_tran_detail_stock_snapshot] 回填失败: TranID={} err={}", tran_id, e);
+        tracing::warn!(
+            "[fill_tran_detail_stock_snapshot] 回填失败: TranID={} err={}",
+            tran_id,
+            e
+        );
     }
 }
 
@@ -244,7 +284,17 @@ pub async fn post_ledger(
     tran_detail_id: &str,
     ym: i32,
 ) -> (f64, bool) {
-    ledger::post_ledger_with_period(conn, gdsid, stkid, qty, direction, tran_id, tran_detail_id, ym).await
+    ledger::post_ledger_with_period(
+        conn,
+        gdsid,
+        stkid,
+        qty,
+        direction,
+        tran_id,
+        tran_detail_id,
+        ym,
+    )
+    .await
 }
 
 pub async fn print_log(
@@ -255,7 +305,16 @@ pub async fn print_log(
     let mut conn = get_pool().get().await?;
     let copies = params.copies.unwrap_or(1);
     let remark = format!("打印{}份", copies);
-    ledger::record_oper(&mut conn, "PRINT", &params.table, &params.id, &claims.user_code, None, Some(&remark)).await;
+    ledger::record_oper(
+        &mut conn,
+        "PRINT",
+        &params.table,
+        &params.id,
+        &claims.user_code,
+        None,
+        Some(&remark),
+    )
+    .await;
 
     Ok(Json(ApiResponse::msg("打印记录已保存")))
 }

@@ -1,11 +1,11 @@
-use axum::extract::{Json, State};
-use serde::Deserialize;
-use tiberius::Row;
 use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
+use crate::handlers::base_data::{row_to_json, try_get_value};
 use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
-use crate::handlers::base_data::{try_get_value, row_to_json};
+use axum::extract::{Json, State};
+use serde::Deserialize;
+use tiberius::Row;
 
 #[derive(Deserialize)]
 pub struct CategoryListParams {
@@ -230,10 +230,7 @@ pub async fn get_category_tree(
         if flg_val.is_empty() || flg_val == "0" || !id_map.contains_key(flg_val) {
             root_indices.push(i);
         } else {
-            children_map
-                .entry(flg_val.to_string())
-                .or_default()
-                .push(i);
+            children_map.entry(flg_val.to_string()).or_default().push(i);
         }
     }
 
@@ -258,8 +255,7 @@ pub async fn get_category_tree(
                 };
                 let mut obj = item.clone();
                 if children.is_empty() {
-                    obj.as_object_mut()
-                        .map(|m| m.remove("children"));
+                    obj.as_object_mut().map(|m| m.remove("children"));
                 } else {
                     obj.as_object_mut().map(|m| {
                         m.insert("children".to_string(), serde_json::Value::Array(children));
@@ -314,7 +310,11 @@ pub async fn create_category(
 
     let sql = format!(
         "INSERT INTO [{}] ([{}], [{}], [{}], [Flg], [Note], [Used], [LUTime], [{}]) VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)",
-        table, pk, resolve_code_col(table), resolve_name_col(table), resolve_sd_col(table)
+        table,
+        pk,
+        resolve_code_col(table),
+        resolve_name_col(table),
+        resolve_sd_col(table)
     );
 
     conn.execute(
@@ -347,7 +347,11 @@ pub async fn update_category(
 
     let sql = format!(
         "UPDATE [{}] SET [{}] = @p1, [{}] = @p2, [Flg] = @p3, [Note] = @p4, [Used] = @p5, [LUTime] = @p6, [{}] = @p7 WHERE [{}] = @p8",
-        table, code_col, name_col, resolve_sd_col(table), pk
+        table,
+        code_col,
+        name_col,
+        resolve_sd_col(table),
+        pk
     );
 
     let code = params.GDSTypeCode.as_deref().unwrap_or("");
@@ -414,10 +418,7 @@ pub async fn restore_category(
     }
 
     for id in &params.ids {
-        let sql = format!(
-            "UPDATE [{}] SET [Used] = 'Y' WHERE [{}] = @p1",
-            table, pk
-        );
+        let sql = format!("UPDATE [{}] SET [Used] = 'Y' WHERE [{}] = @p1", table, pk);
         let id_str = id.as_str();
         conn.execute(&sql, &[&id_str]).await?;
     }
@@ -453,7 +454,10 @@ pub async fn import_categories(
             values.push(Some(uuid::Uuid::new_v4().to_string()));
         }
 
-        let now_str = chrono::Local::now().naive_local().format("%Y-%m-%d %H:%M:%S").to_string();
+        let now_str = chrono::Local::now()
+            .naive_local()
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string();
         let has_lutime = row.keys().any(|k| k.eq_ignore_ascii_case("LUTime"));
         if !has_lutime {
             columns.push("[LUTime]".to_string());
@@ -477,10 +481,8 @@ pub async fn import_categories(
             placeholders.join(", ")
         );
 
-        let param_refs: Vec<&dyn tiberius::ToSql> = values
-            .iter()
-            .map(|v| v as &dyn tiberius::ToSql)
-            .collect();
+        let param_refs: Vec<&dyn tiberius::ToSql> =
+            values.iter().map(|v| v as &dyn tiberius::ToSql).collect();
 
         match conn.execute(&sql, &param_refs).await {
             Ok(_) => success_count += 1,
@@ -501,11 +503,7 @@ fn json_to_sql_value(v: &serde_json::Value) -> Option<String> {
         serde_json::Value::Null => None,
         serde_json::Value::String(s) => Some(s.clone()),
         serde_json::Value::Number(n) => Some(n.to_string()),
-        serde_json::Value::Bool(b) => Some(if *b {
-            "1".to_string()
-        } else {
-            "0".to_string()
-        }),
+        serde_json::Value::Bool(b) => Some(if *b { "1".to_string() } else { "0".to_string() }),
         _ => Some(v.to_string()),
     }
 }

@@ -1,11 +1,11 @@
-use axum::extract::{State, Json};
-use serde::Deserialize;
-use tiberius::Row;
 use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
-use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
 use crate::handlers::base_data::row_to_json;
+use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
+use axum::extract::{Json, State};
+use serde::Deserialize;
+use tiberius::Row;
 
 #[derive(Deserialize)]
 pub struct PaginationParams {
@@ -33,7 +33,8 @@ pub async fn get_workflow_list(
             // 实际字段：WorkFlowNO / WorkFlowDesc（不是 FlowNo / FlowName）
             base_query.push_str(&format!(
                 " AND (WorkFlowNO LIKE @p{} OR WorkFlowDesc LIKE @p{})",
-                pidx, pidx + 1
+                pidx,
+                pidx + 1
             ));
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
@@ -73,7 +74,7 @@ pub async fn get_workflow_list(
 
 #[derive(Deserialize)]
 pub struct WorkflowApproveRequest {
-    pub WorkFlowID: String,  // 实际 PK 是 WorkFlowID，不是 FlowID
+    pub WorkFlowID: String, // 实际 PK 是 WorkFlowID，不是 FlowID
     pub Approved: bool,
     pub Remark: Option<String>,
 }
@@ -95,7 +96,11 @@ pub async fn approve_workflow(
 
     let _ = remark; // 当前模板表无 Remark 字段，预留
 
-    Ok(Json(ApiResponse::msg(if params.Approved { "工作流启用" } else { "工作流停用" })))
+    Ok(Json(ApiResponse::msg(if params.Approved {
+        "工作流启用"
+    } else {
+        "工作流停用"
+    })))
 }
 
 pub async fn get_notice_list(
@@ -114,7 +119,8 @@ pub async fn get_notice_list(
         if !kw.is_empty() {
             base_query.push_str(&format!(
                 " AND (Title LIKE @p{} OR InfoType LIKE @p{})",
-                pidx, pidx + 1
+                pidx,
+                pidx + 1
             ));
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
@@ -168,7 +174,8 @@ pub async fn get_email_list(
         if !kw.is_empty() {
             base_query.push_str(&format!(
                 " AND (Subject LIKE @p{} OR Sender LIKE @p{})",
-                pidx, pidx + 1
+                pidx,
+                pidx + 1
             ));
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));

@@ -1,12 +1,12 @@
-use axum::extract::{State, Json, Extension};
-use serde::Deserialize;
-use tiberius::ToSql;
 use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
-use crate::utils::{ApiResponse, row_get_f64};
 use crate::middleware::auth::Claims;
 use crate::services::inventory_ledger;
+use crate::utils::{ApiResponse, row_get_f64};
+use axum::extract::{Extension, Json, State};
+use serde::Deserialize;
+use tiberius::ToSql;
 
 #[derive(Deserialize)]
 pub struct RetailSaleRequest {
@@ -91,7 +91,7 @@ async fn generate_retail_no(conn: &mut inventory_ledger::Conn) -> Result<String>
     }
 
     Err(crate::error::AppError::Internal(
-        "零售单据号生成失败：连续 5 次重试均失败".to_string()
+        "零售单据号生成失败：连续 5 次重试均失败".to_string(),
     ))
 }
 
@@ -114,7 +114,11 @@ pub async fn retail_sale(
     let si_id = format!("{}", uuid::Uuid::new_v4());
     let now_str = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let cust_id = body.CustID.as_deref().unwrap_or(ZERO_UUID);
-    let emp_id = if claims.emp_id.is_empty() { ZERO_UUID.to_string() } else { claims.emp_id.clone() };
+    let emp_id = if claims.emp_id.is_empty() {
+        ZERO_UUID.to_string()
+    } else {
+        claims.emp_id.clone()
+    };
     let remark = body.Remark.as_deref().unwrap_or("");
 
     // 2. 主事务包裹：主表+明细+库存过账，任一失败回滚
@@ -177,8 +181,14 @@ pub async fn retail_sale(
 
     // ★ POS 零售保存成功后自动重算提成（对齐 88 项目，不依赖前端调用）
     // 提成计算失败不影响销售主流程，仅记录 warn 日志
-    if let Err(e) = crate::services::commission_service::recalc_invoice_commission(&mut conn, &si_id).await {
-        tracing::warn!("[retail_sale] POS 零售 {} 提成重算失败（不影响销售）: {}", si_id, e);
+    if let Err(e) =
+        crate::services::commission_service::recalc_invoice_commission(&mut conn, &si_id).await
+    {
+        tracing::warn!(
+            "[retail_sale] POS 零售 {} 提成重算失败（不影响销售）: {}",
+            si_id,
+            e
+        );
     }
 
     Ok(Json(ApiResponse::ok(serde_json::json!({
@@ -218,13 +228,17 @@ pub async fn get_cashier_info(
         let summary_with_stk_sql = r#"SELECT COUNT(*) as todaySalesCount, ISNULL(SUM([SumAmt]), 0) as todaySalesAmt
             FROM [tSal_Inv]
             WHERE [State] <> 'D' AND [StkID] = @p1 AND CONVERT(varchar(10), [SIDate], 120) = @p2"#;
-        let summary_stream = conn.query(summary_with_stk_sql, &[&stk_id.as_str(), &today.as_str()]).await?;
+        let summary_stream = conn
+            .query(summary_with_stk_sql, &[&stk_id.as_str(), &today.as_str()])
+            .await?;
         if let Some(row) = summary_stream.into_row().await? {
             today_sales_count = row.get::<i32, _>("todaySalesCount").unwrap_or(0);
             today_sales_amt = row_get_f64(&row, "todaySalesAmt");
         }
     } else {
-        let summary_stream = conn.query(summary_sql, &[&claims.user_code.as_str(), &today.as_str()]).await?;
+        let summary_stream = conn
+            .query(summary_sql, &[&claims.user_code.as_str(), &today.as_str()])
+            .await?;
         if let Some(row) = summary_stream.into_row().await? {
             today_sales_count = row.get::<i32, _>("todaySalesCount").unwrap_or(0);
             today_sales_amt = row_get_f64(&row, "todaySalesAmt");

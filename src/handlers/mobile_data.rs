@@ -4,19 +4,19 @@
 //! 补货走 tStk_ReplenishApply，盘点走 tStk_Move。
 //! 本模块为 PC 端 DataPage 提供统一查询接口，自动解析 PValue JSON 并平铺到顶层字段。
 
-use axum::{extract::State, Json, Extension};
+use crate::config::Config;
+use crate::db::get_pool;
+use crate::error::Result;
+use crate::handlers::base_data::row_to_json;
+use crate::handlers::mobile::get_str;
+use crate::middleware::auth::Claims;
+use crate::services::inventory_ledger;
+use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
+use axum::{Extension, Json, extract::State};
 use bb8::PooledConnection;
 use bb8_tiberius::ConnectionManager;
 use serde::Deserialize;
 use tiberius::{Row, ToSql};
-use crate::config::Config;
-use crate::db::get_pool;
-use crate::error::Result;
-use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
-use crate::handlers::base_data::row_to_json;
-use crate::middleware::auth::Claims;
-use crate::handlers::mobile::get_str;
-use crate::services::inventory_ledger;
 
 type Conn = PooledConnection<'static, ConnectionManager>;
 
@@ -45,8 +45,14 @@ pub struct MobileDataListParams {
 /// - 解析失败时保留原 PValue 字段，不影响其他字段
 fn flatten_pvalue(mut item: serde_json::Value) -> serde_json::Value {
     if let Some(obj) = item.as_object_mut() {
-        if let Some(pvalue) = obj.get("PValue").and_then(|v| v.as_str()).map(|s| s.to_string()) {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&pvalue) {
+        if let Some(pvalue) = obj
+            .get("PValue")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+        {
+            if let Ok(parsed) =
+                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&pvalue)
+            {
                 for (k, v) in parsed {
                     // 不覆盖已有字段（如 ParametersID/EUser/EDate/PKind/PHelp）
                     obj.entry(k).or_insert(v);
@@ -75,7 +81,9 @@ async fn enrich_with_names(
     let mut cust_ids: HashSet<String> = HashSet::new();
     for item in &items {
         if let Some(pvalue) = item.get("PValue").and_then(|v| v.as_str()) {
-            if let Ok(map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(pvalue) {
+            if let Ok(map) =
+                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(pvalue)
+            {
                 if let Some(g) = map.get("GDSID").and_then(|v| v.as_str()) {
                     gds_ids.insert(g.to_lowercase());
                 }
@@ -87,27 +95,38 @@ async fn enrich_with_names(
     }
 
     // 2. 批量查询 tBas_Goods → (GDSID, GDSNO, GDSDesc)
-    let mut gds_map: std::collections::HashMap<String, (String, String)> = std::collections::HashMap::new();
+    let mut gds_map: std::collections::HashMap<String, (String, String)> =
+        std::collections::HashMap::new();
     if !gds_ids.is_empty() {
         // 修复 SQL 注入：参数化 IN 列表，避免字符串拼接
-        let placeholders: Vec<String> = (1..=gds_ids.len())
-            .map(|i| format!("@p{}", i))
-            .collect();
+        let placeholders: Vec<String> = (1..=gds_ids.len()).map(|i| format!("@p{}", i)).collect();
         let sql = format!(
             "SELECT [GDSID], [GDSNO], [GDSDesc] FROM [tBas_Goods] WHERE [GDSID] IN ({})",
             placeholders.join(",")
         );
         let gds_params: Vec<Option<String>> = gds_ids.iter().map(|s| Some(s.clone())).collect();
-        let gds_param_refs: Vec<&dyn ToSql> = gds_params
-            .iter()
-            .map(|v| v as &dyn ToSql)
-            .collect();
+        let gds_param_refs: Vec<&dyn ToSql> = gds_params.iter().map(|v| v as &dyn ToSql).collect();
         if let Ok(stream) = conn.query(&sql, &gds_param_refs).await {
             if let Ok(rows) = stream.into_first_result().await {
                 for row in &rows {
-                    let id = row.try_get::<uuid::Uuid, _>("GDSID").ok().flatten().map(|u| u.to_string()).unwrap_or_default();
-                    let no = row.try_get::<&str, _>("GDSNO").ok().flatten().unwrap_or("").to_string();
-                    let desc = row.try_get::<&str, _>("GDSDesc").ok().flatten().unwrap_or("").to_string();
+                    let id = row
+                        .try_get::<uuid::Uuid, _>("GDSID")
+                        .ok()
+                        .flatten()
+                        .map(|u| u.to_string())
+                        .unwrap_or_default();
+                    let no = row
+                        .try_get::<&str, _>("GDSNO")
+                        .ok()
+                        .flatten()
+                        .unwrap_or("")
+                        .to_string();
+                    let desc = row
+                        .try_get::<&str, _>("GDSDesc")
+                        .ok()
+                        .flatten()
+                        .unwrap_or("")
+                        .to_string();
                     if !id.is_empty() {
                         gds_map.insert(id.to_lowercase(), (no, desc));
                     }
@@ -120,23 +139,29 @@ async fn enrich_with_names(
     let mut cust_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     if !cust_ids.is_empty() {
         // 修复 SQL 注入：参数化 IN 列表，避免字符串拼接
-        let placeholders: Vec<String> = (1..=cust_ids.len())
-            .map(|i| format!("@p{}", i))
-            .collect();
+        let placeholders: Vec<String> = (1..=cust_ids.len()).map(|i| format!("@p{}", i)).collect();
         let sql = format!(
             "SELECT [CustID], [CustName] FROM [tBas_Cust] WHERE [CustID] IN ({})",
             placeholders.join(",")
         );
         let cust_params: Vec<Option<String>> = cust_ids.iter().map(|s| Some(s.clone())).collect();
-        let cust_param_refs: Vec<&dyn ToSql> = cust_params
-            .iter()
-            .map(|v| v as &dyn ToSql)
-            .collect();
+        let cust_param_refs: Vec<&dyn ToSql> =
+            cust_params.iter().map(|v| v as &dyn ToSql).collect();
         if let Ok(stream) = conn.query(&sql, &cust_param_refs).await {
             if let Ok(rows) = stream.into_first_result().await {
                 for row in &rows {
-                    let id = row.try_get::<uuid::Uuid, _>("CustID").ok().flatten().map(|u| u.to_string()).unwrap_or_default();
-                    let name = row.try_get::<&str, _>("CustName").ok().flatten().unwrap_or("").to_string();
+                    let id = row
+                        .try_get::<uuid::Uuid, _>("CustID")
+                        .ok()
+                        .flatten()
+                        .map(|u| u.to_string())
+                        .unwrap_or_default();
+                    let name = row
+                        .try_get::<&str, _>("CustName")
+                        .ok()
+                        .flatten()
+                        .unwrap_or("")
+                        .to_string();
                     if !id.is_empty() {
                         cust_map.insert(id.to_lowercase(), name);
                     }
@@ -150,17 +175,32 @@ async fn enrich_with_names(
         .into_iter()
         .map(|mut item| {
             if let Some(obj) = item.as_object_mut() {
-                if let Some(pvalue) = obj.get("PValue").and_then(|v| v.as_str()).map(|s| s.to_string()) {
-                    if let Ok(map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&pvalue) {
+                if let Some(pvalue) = obj
+                    .get("PValue")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                {
+                    if let Ok(map) =
+                        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&pvalue)
+                    {
                         if let Some(g) = map.get("GDSID").and_then(|v| v.as_str()) {
                             if let Some((no, desc)) = gds_map.get(&g.to_lowercase()) {
-                                obj.insert("GDSNO".to_string(), serde_json::Value::String(no.clone()));
-                                obj.insert("GDSDesc".to_string(), serde_json::Value::String(desc.clone()));
+                                obj.insert(
+                                    "GDSNO".to_string(),
+                                    serde_json::Value::String(no.clone()),
+                                );
+                                obj.insert(
+                                    "GDSDesc".to_string(),
+                                    serde_json::Value::String(desc.clone()),
+                                );
                             }
                         }
                         if let Some(c) = map.get("CustID").and_then(|v| v.as_str()) {
                             if let Some(name) = cust_map.get(&c.to_lowercase()) {
-                                obj.insert("CustName".to_string(), serde_json::Value::String(name.clone()));
+                                obj.insert(
+                                    "CustName".to_string(),
+                                    serde_json::Value::String(name.clone()),
+                                );
                             }
                         }
                     }
@@ -284,22 +324,39 @@ pub async fn list_mobile_data(
     // ★ 日期范围优先处理（对 replenishment 下推到内层子查询，避免对 278 万行全表 GROUP BY）
     let mut replenishment_inner_where = String::new();
     // replenishment 无日期范围时默认最近 30 天，避免全表扫描
-    let effective_date_range: Option<(String, String)> = if params.kind == "replenishment" && params.date_range.is_none() {
-        let end = chrono::Local::now().format("%Y-%m-%d").to_string();
-        let start = (chrono::Local::now() - chrono::Duration::days(30)).format("%Y-%m-%d").to_string();
-        Some((start, end))
-    } else {
-        params.date_range.clone()
-    };
+    let effective_date_range: Option<(String, String)> =
+        if params.kind == "replenishment" && params.date_range.is_none() {
+            let end = chrono::Local::now().format("%Y-%m-%d").to_string();
+            let start = (chrono::Local::now() - chrono::Duration::days(30))
+                .format("%Y-%m-%d")
+                .to_string();
+            Some((start, end))
+        } else {
+            params.date_range.clone()
+        };
     if let Some((start, end)) = &effective_date_range {
         if !start.is_empty() && !end.is_empty() {
             if params.kind == "replenishment" {
                 // 下推到内层子查询：WHERE a.[EDate] >= @p1 AND a.[EDate] <= @p2
                 // 让 GROUP BY 只处理过滤后的数据
-                replenishment_inner_where = format!(" WHERE a.[{}] >= @p{} AND a.[{}] <= @p{}", date_field, pidx, date_field, pidx + 1);
+                replenishment_inner_where = format!(
+                    " WHERE a.[{}] >= @p{} AND a.[{}] <= @p{}",
+                    date_field,
+                    pidx,
+                    date_field,
+                    pidx + 1
+                );
             } else {
                 let date_prefix = if is_params_table { "t" } else { "m" };
-                where_clauses.push(format!("{}.[{}] >= @p{} AND {}.[{}] <= @p{}", date_prefix, date_field, pidx, date_prefix, date_field, pidx + 1));
+                where_clauses.push(format!(
+                    "{}.[{}] >= @p{} AND {}.[{}] <= @p{}",
+                    date_prefix,
+                    date_field,
+                    pidx,
+                    date_prefix,
+                    date_field,
+                    pidx + 1
+                ));
             }
             query_params.push(Some(format!("{} 00:00:00", start)));
             query_params.push(Some(format!("{} 23:59:59", end)));
@@ -313,7 +370,11 @@ pub async fn list_mobile_data(
             let kw_pattern = format!("%{}%", kw);
             if is_params_table {
                 // 搜 PCode 单号和 PHelp 备注（分组后用 t. 前缀）
-                where_clauses.push(format!("(t.[PCode] LIKE @p{} OR t.[PHelp] LIKE @p{})", pidx, pidx + 1));
+                where_clauses.push(format!(
+                    "(t.[PCode] LIKE @p{} OR t.[PHelp] LIKE @p{})",
+                    pidx,
+                    pidx + 1
+                ));
                 query_params.push(Some(kw_pattern.clone()));
                 query_params.push(Some(kw_pattern));
                 pidx += 2;
@@ -323,7 +384,12 @@ pub async fn list_mobile_data(
                 pidx += 1;
             } else {
                 // stock_check: 搜 MoveNO 单号、Note 备注、StkName 仓库名
-                where_clauses.push(format!("(m.[MoveNO] LIKE @p{} OR m.[Note] LIKE @p{} OR sk.[StkName] LIKE @p{})", pidx, pidx + 1, pidx + 2));
+                where_clauses.push(format!(
+                    "(m.[MoveNO] LIKE @p{} OR m.[Note] LIKE @p{} OR sk.[StkName] LIKE @p{})",
+                    pidx,
+                    pidx + 1,
+                    pidx + 2
+                ));
                 query_params.push(Some(kw_pattern.clone()));
                 query_params.push(Some(kw_pattern.clone()));
                 query_params.push(Some(kw_pattern));
@@ -370,11 +436,15 @@ pub async fn list_mobile_data(
     };
 
     // 对 replenishment，把日期条件下推注入到内层子查询占位符
-    let final_query = final_query.replace("{REPLENISHMENT_INNER_WHERE}", &replenishment_inner_where);
+    let final_query =
+        final_query.replace("{REPLENISHMENT_INNER_WHERE}", &replenishment_inner_where);
 
     // 计算总数
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", final_query);
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
 
     let mut total: i32 = 0;
     let count_stream = conn.query(&count_sql, &param_refs).await?;
@@ -386,7 +456,13 @@ pub async fn list_mobile_data(
     let sort_prop = params.sort_prop.unwrap_or_else(|| date_field.to_string());
     let sort_order = params.sort_order.unwrap_or_else(|| "desc".to_string());
 
-    let paginated_sql = build_pagination_sql_with_sort(&final_query, page, page_size, Some(&sort_prop), Some(&sort_order));
+    let paginated_sql = build_pagination_sql_with_sort(
+        &final_query,
+        page,
+        page_size,
+        Some(&sort_prop),
+        Some(&sort_order),
+    );
     let data_stream = conn.query(&paginated_sql, &param_refs).await?;
     let rows: Vec<Row> = data_stream.into_first_result().await?;
     let mut data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
@@ -413,7 +489,12 @@ pub async fn list_mobile_data(
         data = data.into_iter().map(flatten_pvalue).collect();
     }
 
-    Ok(Json(ApiResponse::ok_paginated(data, total as u64, page, page_size)))
+    Ok(Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 // ==================== 增删改接口 ====================
@@ -443,7 +524,10 @@ pub struct MobileDataDeleteParams {
 
 /// 读取 JSON Value 中的字符串字段
 fn jstr(v: &serde_json::Value, key: &str) -> String {
-    v.get(key).and_then(|x| x.as_str()).unwrap_or("").to_string()
+    v.get(key)
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string()
 }
 
 /// 读取 JSON Value 中的 f64 字段
@@ -475,7 +559,11 @@ pub async fn create_mobile_data(
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let emp_id = if claims.emp_id.is_empty() { ZERO_UUID.to_string() } else { claims.emp_id.clone() };
+    let emp_id = if claims.emp_id.is_empty() {
+        ZERO_UUID.to_string()
+    } else {
+        claims.emp_id.clone()
+    };
 
     if let Some((p_kind, p_name, p_code_prefix)) = kind_to_pkind(&params.kind) {
         // ===== tSys_Parameters 批次模式（特价/奖励/赠品）=====
@@ -483,7 +571,11 @@ pub async fn create_mobile_data(
         if params.details.is_empty() {
             return Ok(Json(ApiResponse::err("明细不能为空")));
         }
-        let p_code = format!("{}{}", p_code_prefix, chrono::Local::now().format("%Y%m%d%H%M%S"));
+        let p_code = format!(
+            "{}{}",
+            p_code_prefix,
+            chrono::Local::now().format("%Y%m%d%H%M%S")
+        );
         let cust_id = jstr(&params.data, "CustID");
         let remark = jstr(&params.data, "Remark");
         let reason = jstr(&params.data, "Reason");
@@ -512,11 +604,20 @@ pub async fn create_mobile_data(
             };
             let p_value_str = p_value.to_string();
             let params_vec: Vec<&dyn tiberius::ToSql> = vec![
-                &p_code, &p_term, &p_name, &p_kind, &remark, &p_value_str, &emp_id, &now,
+                &p_code,
+                &p_term,
+                &p_name,
+                &p_kind,
+                &remark,
+                &p_value_str,
+                &emp_id,
+                &now,
             ];
             conn.execute(sql, &params_vec).await?;
         }
-        return Ok(Json(ApiResponse::ok(serde_json::json!({ "PCode": p_code, "count": params.details.len() }))));
+        return Ok(Json(ApiResponse::ok(
+            serde_json::json!({ "PCode": p_code, "count": params.details.len() }),
+        )));
     }
 
     match params.kind.as_str() {
@@ -527,7 +628,11 @@ pub async fn create_mobile_data(
             // 统一单据号生成：使用 tSys_DocNoSeq 原子分配，格式 PD{YYMM}{NNNN}
             let move_no = crate::utils::doc_no::generate_via_docnoseq(&mut conn, "PD").await?;
             let move_date = jstr(&params.data, "MoveDate");
-            let move_date = if move_date.is_empty() { chrono::Local::now().format("%Y-%m-%d").to_string() } else { move_date };
+            let move_date = if move_date.is_empty() {
+                chrono::Local::now().format("%Y-%m-%d").to_string()
+            } else {
+                move_date
+            };
             let note = jstr(&params.data, "Remark");
 
             // 事务包裹：INSERT 主表 + INSERT 明细 原子化，任一明细失败回滚
@@ -565,7 +670,9 @@ pub async fn create_mobile_data(
                 inventory_ledger::rollback_tran(&mut conn).await;
                 return Ok(Json(ApiResponse::err(&format!("盘点单保存失败: {}", e))));
             }
-            return Ok(Json(ApiResponse::ok(serde_json::json!({ "id": move_id, "MoveNo": move_no }))));
+            return Ok(Json(ApiResponse::ok(
+                serde_json::json!({ "id": move_id, "MoveNo": move_no }),
+            )));
         }
         "replenishment" => {
             // ===== 补货 tArd_AR 扁平明细表（分组键 = StkID + 日期(到天)）=====
@@ -587,7 +694,11 @@ pub async fn create_mobile_data(
             let check_date_key = chrono::NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
                 .map(|d| d.format("%Y%m%d").to_string())
                 .unwrap_or_else(|_| date_str.replace("-", ""));
-            let check_row = conn.query(check_sql, &[&stk_id, &check_date_key]).await?.into_row().await?;
+            let check_row = conn
+                .query(check_sql, &[&stk_id, &check_date_key])
+                .await?
+                .into_row()
+                .await?;
             // 有旧记录则沿用其 EDate 时间戳（保持同一天同一分组），否则用当前时间戳
             let batch_time = if let Some(row) = check_row {
                 get_str(&row, "EDate")
@@ -603,18 +714,33 @@ pub async fn create_mobile_data(
                 let detail_sql = r#"INSERT INTO [tArd_AR] ([RowID], [StkID], [EmpID], [EDate], [SaleDate], [GDSID], [Qty], [Price], [Amt], [Used])
                     VALUES (NEWID(), @p1, @p2, @p3, @p3, @p4, @p5, @p6, @p7, @p8)"#;
                 let dp: Vec<&dyn tiberius::ToSql> = vec![
-                    &stk_id, &emp_id, &batch_time, &gds_id, &qty, &zero_price, &zero_price, &used,
+                    &stk_id,
+                    &emp_id,
+                    &batch_time,
+                    &gds_id,
+                    &qty,
+                    &zero_price,
+                    &zero_price,
+                    &used,
                 ];
                 conn.execute(detail_sql, &dp).await?;
             }
             // 生成显示用单号：仓库编码-YYYYMMDD
             let code_sql = "SELECT TOP 1 [StkCode] FROM [tBas_Stock] WHERE [StkID] = @p1";
             let code_row = conn.query(code_sql, &[&stk_id]).await?.into_row().await?;
-            let stk_code = code_row.as_ref().map(|r| get_str(r, "StkCode")).unwrap_or_default();
+            let stk_code = code_row
+                .as_ref()
+                .map(|r| get_str(r, "StkCode"))
+                .unwrap_or_default();
             let apply_no = format!("{}-{}", stk_code, check_date_key);
-            return Ok(Json(ApiResponse::ok(serde_json::json!({ "count": params.details.len(), "ApplyNo": apply_no }))));
+            return Ok(Json(ApiResponse::ok(
+                serde_json::json!({ "count": params.details.len(), "ApplyNo": apply_no }),
+            )));
         }
-        _ => Ok(Json(ApiResponse::err(&format!("不支持的新增类型: {}", params.kind)))),
+        _ => Ok(Json(ApiResponse::err(&format!(
+            "不支持的新增类型: {}",
+            params.kind
+        )))),
     }
 }
 
@@ -626,7 +752,11 @@ pub async fn update_mobile_data(
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let emp_id = if claims.emp_id.is_empty() { ZERO_UUID.to_string() } else { claims.emp_id.clone() };
+    let emp_id = if claims.emp_id.is_empty() {
+        ZERO_UUID.to_string()
+    } else {
+        claims.emp_id.clone()
+    };
 
     if let Some((p_kind, p_name, _p_code_prefix)) = kind_to_pkind(&params.kind) {
         // ===== tSys_Parameters 批次模式：先删旧批次(PCode)，再插新明细 =====
@@ -635,7 +765,11 @@ pub async fn update_mobile_data(
         let remark = jstr(&params.data, "Remark");
         let reason = jstr(&params.data, "Reason");
         // 删旧记录
-        conn.execute("DELETE FROM [tSys_Parameters] WHERE [PCode] = @p1", &[p_code]).await?;
+        conn.execute(
+            "DELETE FROM [tSys_Parameters] WHERE [PCode] = @p1",
+            &[p_code],
+        )
+        .await?;
         // 插新明细（PTerm 用行号保证唯一索引 idx_Parameters_CodeTerm 不冲突）
         let sql = r#"INSERT INTO [tSys_Parameters] ([ParametersID], [PCode], [PTerm], [PName], [PKind], [PHelp], [PValue], [EUser], [EDate])
             VALUES (NEWID(), @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)"#;
@@ -659,7 +793,14 @@ pub async fn update_mobile_data(
             };
             let p_value_str = p_value.to_string();
             let params_vec: Vec<&dyn tiberius::ToSql> = vec![
-                p_code, &p_term, &p_name, &p_kind, &remark, &p_value_str, &emp_id, &now,
+                p_code,
+                &p_term,
+                &p_name,
+                &p_kind,
+                &remark,
+                &p_value_str,
+                &emp_id,
+                &now,
             ];
             conn.execute(sql, &params_vec).await?;
         }
@@ -719,7 +860,12 @@ pub async fn update_mobile_data(
             // 删除旧明细（该仓库该天所有记录）+ 插入新明细（事务包裹）
             let del_sql = "DELETE FROM [tArd_AR] WHERE [StkID] = @p1 AND CONVERT(varchar(8),[EDate],112) = @p2";
             // 插入新明细
-            let date_str = format!("{}-{}-{}", &date_key[0..4], &date_key[4..6], &date_key[6..8]);
+            let date_str = format!(
+                "{}-{}-{}",
+                &date_key[0..4],
+                &date_key[4..6],
+                &date_key[6..8]
+            );
             let batch_time = format!("{} 00:00:00", date_str);
             let used = "Y";
             let zero_price: f64 = 0.0;
@@ -745,7 +891,10 @@ pub async fn update_mobile_data(
             }
             return Ok(Json(ApiResponse::msg("更新成功")));
         }
-        _ => Ok(Json(ApiResponse::err(&format!("不支持的更新类型: {}", params.kind)))),
+        _ => Ok(Json(ApiResponse::err(&format!(
+            "不支持的更新类型: {}",
+            params.kind
+        )))),
     }
 }
 
@@ -763,7 +912,11 @@ pub async fn delete_mobile_data(
     if kind_to_pkind(&params.kind).is_some() {
         // ===== tSys_Parameters 批次删除：按 PCode 删除整批 =====
         for p_code in &params.ids {
-            conn.execute("DELETE FROM [tSys_Parameters] WHERE [PCode] = @p1", &[p_code]).await?;
+            conn.execute(
+                "DELETE FROM [tSys_Parameters] WHERE [PCode] = @p1",
+                &[p_code],
+            )
+            .await?;
         }
         return Ok(Json(ApiResponse::msg("删除成功")));
     }
@@ -772,7 +925,11 @@ pub async fn delete_mobile_data(
         "stock_check" => {
             // ===== 盘点：软删除 State='D' =====
             for id in &params.ids {
-                conn.execute("UPDATE [tStk_Move] SET [State] = 'D' WHERE [MoveID] = @p1", &[id]).await?;
+                conn.execute(
+                    "UPDATE [tStk_Move] SET [State] = 'D' WHERE [MoveID] = @p1",
+                    &[id],
+                )
+                .await?;
             }
             return Ok(Json(ApiResponse::msg("删除成功")));
         }
@@ -801,7 +958,10 @@ pub async fn delete_mobile_data(
             }
             return Ok(Json(ApiResponse::msg("删除成功")));
         }
-        _ => Ok(Json(ApiResponse::err(&format!("不支持的删除类型: {}", params.kind)))),
+        _ => Ok(Json(ApiResponse::err(&format!(
+            "不支持的删除类型: {}",
+            params.kind
+        )))),
     }
 }
 

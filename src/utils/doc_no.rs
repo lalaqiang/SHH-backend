@@ -1,12 +1,12 @@
-use axum::{extract::State, Json};
-use bb8::PooledConnection;
-use bb8_tiberius::ConnectionManager;
-use serde::Deserialize;
-use tiberius::ToSql;
 use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
 use crate::utils::ApiResponse;
+use axum::{Json, extract::State};
+use bb8::PooledConnection;
+use bb8_tiberius::ConnectionManager;
+use serde::Deserialize;
+use tiberius::ToSql;
 
 type Conn = PooledConnection<'static, ConnectionManager>;
 
@@ -98,7 +98,8 @@ pub async fn reset_doc_seq(
     };
 
     Ok(Json(ApiResponse::msg(&format!(
-        "已重置单据 [{}] 的序号（删除 {} 条记录）", prefix, deleted
+        "已重置单据 [{}] 的序号（删除 {} 条记录）",
+        prefix, deleted
     ))))
 }
 
@@ -159,7 +160,9 @@ pub async fn generate_via_docnoseq(conn: &mut Conn, prefix: &str) -> Result<Stri
                 if let Some(seq) = row.get::<i64, _>(0) {
                     tracing::debug!(
                         "[generate_via_docnoseq] prefix={} period={} allocated_seq={}",
-                        prefix, period_str, seq
+                        prefix,
+                        period_str,
+                        seq
                     );
                     return Ok(format!("{}{:04}", full_prefix, seq));
                 }
@@ -172,7 +175,10 @@ pub async fn generate_via_docnoseq(conn: &mut Conn, prefix: &str) -> Result<Stri
         let init_seq = max_seq + 1; // 首次初始化 = MAX + 1，不跳号
         tracing::debug!(
             "[generate_via_docnoseq] prefix={} period={} init_seq={} (max_seq={})",
-            prefix, period_str, init_seq, max_seq
+            prefix,
+            period_str,
+            init_seq,
+            max_seq
         );
 
         // 尝试 INSERT，CurrentSeq 直接设为 init_seq（已分配的序号）

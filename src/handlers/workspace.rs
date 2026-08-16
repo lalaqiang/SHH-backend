@@ -1,12 +1,12 @@
-use axum::extract::{State, Json, Extension};
-use serde::Deserialize;
-use tiberius::Row;
 use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
-use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
 use crate::handlers::base_data::row_to_json;
 use crate::middleware::auth::Claims;
+use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
+use axum::extract::{Extension, Json, State};
+use serde::Deserialize;
+use tiberius::Row;
 
 #[derive(Deserialize)]
 pub struct WorkspaceParams {
@@ -75,7 +75,9 @@ pub async fn get_todo_list(
             query_params.push(Some(format!("%{}%", kw)));
             let result = format!(
                 "SELECT * FROM ({}) t WHERE t.docNo LIKE @p{} OR t.docType LIKE @p{}",
-                base_query, pidx, pidx + 1
+                base_query,
+                pidx,
+                pidx + 1
             );
             result
         } else {
@@ -108,7 +110,12 @@ pub async fn get_todo_list(
     let rows: Vec<Row> = data_stream.into_first_result().await?;
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Ok(Json(ApiResponse::ok_paginated(data, total as u64, page, page_size)))
+    Ok(Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 /// POST /api/workspace/doing - 获取当前用户正在处理的单据列表
@@ -160,7 +167,9 @@ pub async fn get_doing_list(
             query_params.push(Some(format!("%{}%", kw)));
             let result = format!(
                 "SELECT * FROM ({}) t WHERE t.docNo LIKE @p{} OR t.docType LIKE @p{}",
-                base_query, pidx, pidx + 1
+                base_query,
+                pidx,
+                pidx + 1
             );
             result
         } else {
@@ -193,7 +202,12 @@ pub async fn get_doing_list(
     let rows: Vec<Row> = data_stream.into_first_result().await?;
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Ok(Json(ApiResponse::ok_paginated(data, total as u64, page, page_size)))
+    Ok(Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 /// POST /api/workspace/common-menus - 获取/保存常用菜单
@@ -234,15 +248,8 @@ pub async fn get_common_menus(
                                 VALUES (NEWID(), @p1, @p2, @p3, @p4, @p5, @p6, @p7)"#;
             let pkind = "common_menus";
             let pdesc = "用户常用菜单";
-            let insert_params: Vec<&dyn tiberius::ToSql> = vec![
-                &pcode,
-                &pdesc,
-                &pkind,
-                &user_code,
-                menus,
-                &zero_uuid,
-                &now,
-            ];
+            let insert_params: Vec<&dyn tiberius::ToSql> =
+                vec![&pcode, &pdesc, &pkind, &user_code, menus, &zero_uuid, &now];
             conn.execute(insert_sql, &insert_params).await?;
         }
 
@@ -250,7 +257,8 @@ pub async fn get_common_menus(
     }
 
     // 查询常用菜单
-    let query_sql = "SELECT PValue FROM tSys_Parameters WHERE PKind = 'common_menus' AND PCode = @p1";
+    let query_sql =
+        "SELECT PValue FROM tSys_Parameters WHERE PKind = 'common_menus' AND PCode = @p1";
     let query_params: Vec<&dyn tiberius::ToSql> = vec![&pcode];
     let stream = conn.query(query_sql, &query_params).await?;
 

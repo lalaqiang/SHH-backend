@@ -5,11 +5,11 @@
 #![allow(dead_code)]
 
 use axum::{
+    Router,
     body::Body,
     http::{Request, StatusCode},
     response::Response,
     routing::get,
-    Router,
 };
 use tower::ServiceExt;
 

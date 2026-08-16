@@ -1,19 +1,15 @@
-use axum::{
-    extract::State,
-    Json,
-    Extension,
-};
-use chrono::Datelike;
-use serde::{Deserialize, Serialize};
-use tiberius::Row;
 use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
-use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
-use crate::utils::password::{hash_password, verify_password, needs_upgrade};
-use crate::utils::jwt::{create_token, make_claims};
-use crate::handlers::base_data::{try_get_value, row_to_json};
+use crate::handlers::base_data::{row_to_json, try_get_value};
 use crate::middleware::auth::Claims;
+use crate::utils::jwt::{create_token, make_claims};
+use crate::utils::password::{hash_password, needs_upgrade, verify_password};
+use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
+use axum::{Extension, Json, extract::State};
+use chrono::Datelike;
+use serde::{Deserialize, Serialize};
+use tiberius::Row;
 
 /// 读取字符串字段，兼容 uniqueidentifier(GUID) 类型字段（如 EmpID/StkID/DeptID 等）
 /// 直接用 row.get::<&str,_> 读取 Guid 字段会 panic，故统一通过 try_get_value 兜底
@@ -56,11 +52,16 @@ pub async fn list_stores(
     let sql = "SELECT [StkID], [StkCode], [StkName] FROM [tBas_Stock] WHERE [Used] = @P1 ORDER BY [StkName] ASC";
     let stream = conn.query(sql, &[&"Y"]).await?;
     let rows: Vec<Row> = stream.into_first_result().await?;
-    let list = rows.iter().map(|r| serde_json::json!({
-        "StkID": get_str(r, "StkID"),
-        "StkCode": get_str(r, "StkCode"),
-        "StkName": get_str(r, "StkName"),
-    })).collect();
+    let list = rows
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "StkID": get_str(r, "StkID"),
+                "StkCode": get_str(r, "StkCode"),
+                "StkName": get_str(r, "StkName"),
+            })
+        })
+        .collect();
     Ok(Json(ApiResponse::ok(list)))
 }
 
@@ -105,10 +106,12 @@ pub async fn mobile_login(
         if needs_upgrade(&stored_password) {
             if let Some(hashed) = hash_password(&body.Password) {
                 if !emp_id.is_empty() {
-                    let _ = conn.execute(
-                        "UPDATE tBas_Emp SET PassWordStr = @p1 WHERE EmpID = @p2",
-                        &[&hashed.as_str(), &emp_id.as_str()],
-                    ).await;
+                    let _ = conn
+                        .execute(
+                            "UPDATE tBas_Emp SET PassWordStr = @p1 WHERE EmpID = @p2",
+                            &[&hashed.as_str(), &emp_id.as_str()],
+                        )
+                        .await;
                 }
             }
         }
@@ -130,7 +133,9 @@ pub async fn mobile_login(
         };
         Ok(Json(ApiResponse::ok(resp)))
     } else {
-        Ok(Json(ApiResponse::<MobileLoginResponse>::err("未找到该工号或无移动端登录权限")))
+        Ok(Json(ApiResponse::<MobileLoginResponse>::err(
+            "未找到该工号或无移动端登录权限",
+        )))
     }
 }
 
@@ -145,9 +150,18 @@ pub struct MobileRegisterRequest {
 }
 
 pub async fn mobile_register(
-    State(_config): State<Config>,
+    State(config): State<Config>,
     Json(body): Json<MobileRegisterRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
+    // P0 安全修复：公开端点默认禁用匿名注册，防止批量创建可登录账号。
+    // 需要开放时设置 ALLOW_MOBILE_REGISTER=true（见 config.rs / .env.example）。
+    if !config.allow_mobile_register {
+        tracing::warn!(emp_no = %body.EmpNo, "移动端自助注册被拒绝：ALLOW_MOBILE_REGISTER 未开启");
+        return Ok(Json(ApiResponse::err(
+            "注册功能未开放，请联系管理员创建账号",
+        )));
+    }
+
     let mut conn = get_pool().get().await?;
 
     let check_sql = "SELECT TOP 1 1 FROM [tBas_Emp] WHERE [EmpNo] = @p1";
@@ -158,12 +172,22 @@ pub async fn mobile_register(
 
     let hashed = match hash_password(&body.Password) {
         Some(h) => h,
-        None => return Ok(Json(ApiResponse::err("密码哈希失败，可能密码过长（>72字节）"))),
+        None => {
+            return Ok(Json(ApiResponse::err(
+                "密码哈希失败，可能密码过长（>72字节）",
+            )));
+        }
     };
     let emp_id = format!("{}", uuid::Uuid::new_v4());
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let dept_id = body.DeptID.as_deref().unwrap_or("00000000-0000-0000-0000-000000000000");
-    let stk_id = body.StkID.as_deref().unwrap_or("00000000-0000-0000-0000-000000000000");
+    let dept_id = body
+        .DeptID
+        .as_deref()
+        .unwrap_or("00000000-0000-0000-0000-000000000000");
+    let stk_id = body
+        .StkID
+        .as_deref()
+        .unwrap_or("00000000-0000-0000-0000-000000000000");
     let tel = body.Phone.as_deref().unwrap_or("");
     let zero_uuid = "00000000-0000-0000-0000-000000000000";
     let emp_sd: i32 = 0;
@@ -171,8 +195,18 @@ pub async fn mobile_register(
     let sql = r#"INSERT INTO [tBas_Emp] ([EmpID], [EmpNo], [EmpName], [PassWordStr], [DeptID], [StkID], [Tel], [AllowLogin], [State], [EDate], [EUser], [empSD], [OnlyLogin], [AndroidPassWord], [AndroidPower])
         VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, 'N', '3', 'A')"#;
     let params: Vec<&dyn tiberius::ToSql> = vec![
-        &emp_id, &body.EmpNo, &body.EmpName, &hashed, &dept_id, &stk_id,
-        &tel, &"Y", &"Y", &now, &zero_uuid, &emp_sd,
+        &emp_id,
+        &body.EmpNo,
+        &body.EmpName,
+        &hashed,
+        &dept_id,
+        &stk_id,
+        &tel,
+        &"Y",
+        &"Y",
+        &now,
+        &zero_uuid,
+        &emp_sd,
     ];
     conn.execute(sql, &params).await?;
 
@@ -204,10 +238,15 @@ pub async fn mobile_change_password(
         }
         let hashed = match hash_password(&body.new_password) {
             Some(h) => h,
-            None => return Ok(Json(ApiResponse::err("密码哈希失败，可能密码过长（>72字节）"))),
+            None => {
+                return Ok(Json(ApiResponse::err(
+                    "密码哈希失败，可能密码过长（>72字节）",
+                )));
+            }
         };
         let update_sql = "UPDATE [tBas_Emp] SET [PassWordStr] = @p1 WHERE [EmpNo] = @p2";
-        conn.execute(update_sql, &[&hashed.as_str(), &claims.user_code.as_str()]).await?;
+        conn.execute(update_sql, &[&hashed.as_str(), &claims.user_code.as_str()])
+            .await?;
     } else {
         return Ok(Json(ApiResponse::err("未找到该用户")));
     }
@@ -286,7 +325,9 @@ pub async fn submit_replenishment(
     let mut conn = get_pool().get().await?;
 
     // 补货日期（YYYY-MM-DD），默认今天
-    let date_str = body.SaleDate.clone()
+    let date_str = body
+        .SaleDate
+        .clone()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
     let date_key = chrono::NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
@@ -296,7 +337,11 @@ pub async fn submit_replenishment(
     // 同一天同一仓库的补货 = 同一单：有则追加明细，无则新建
     // 检查当天该仓库是否已有补货记录，有则沿用其 EDate
     let check_sql = "SELECT TOP 1 [EDate] FROM [tArd_AR] WHERE [StkID] = @p1 AND CONVERT(varchar(8),[EDate],112) = @p2";
-    let check_row = conn.query(check_sql, &[&body.StkID, &date_key]).await?.into_row().await?;
+    let check_row = conn
+        .query(check_sql, &[&body.StkID, &date_key])
+        .await?
+        .into_row()
+        .await?;
     let batch_time = if let Some(row) = check_row {
         let edate = get_str(&row, "EDate");
         if edate.is_empty() {
@@ -315,15 +360,27 @@ pub async fn submit_replenishment(
         let detail_sql = r#"INSERT INTO [tArd_AR] ([RowID], [StkID], [EmpID], [EDate], [SaleDate], [GDSID], [Qty], [Price], [Amt], [Used])
             VALUES (NEWID(), @p1, @p2, @p3, @p3, @p4, @p5, @p6, @p7, @p8)"#;
         let detail_params: Vec<&dyn tiberius::ToSql> = vec![
-            &body.StkID, &claims.emp_id, &batch_time, &detail.GDSID, &detail.Qty, &zero_price, &zero_price, &used,
+            &body.StkID,
+            &claims.emp_id,
+            &batch_time,
+            &detail.GDSID,
+            &detail.Qty,
+            &zero_price,
+            &zero_price,
+            &used,
         ];
         conn.execute(detail_sql, &detail_params).await?;
     }
 
     // 生成显示用单号：仓库编码-YYYYMMDD
     let code_sql = "SELECT TOP 1 [StkCode] FROM [tBas_Stock] WHERE [StkID] = @p1";
-    let code_row = conn.query(code_sql, &[&body.StkID]).await?.into_row().await?;
-    let stk_code = code_row.as_ref()
+    let code_row = conn
+        .query(code_sql, &[&body.StkID])
+        .await?
+        .into_row()
+        .await?;
+    let stk_code = code_row
+        .as_ref()
         .map(|r| get_str(r, "StkCode"))
         .unwrap_or_default();
     let apply_no = format!("{}-{}", stk_code, date_key);
@@ -381,14 +438,11 @@ pub async fn get_replenishment_history(
     }
 
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
-    let paginated_sql = build_pagination_sql_with_sort(
-        &base_query,
-        page,
-        page_size,
-        None,
-        None,
-    );
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, None, None);
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
 
     let mut total: i32 = 0;
     let count_stream = conn.query(&count_sql, &param_refs).await?;
@@ -400,7 +454,12 @@ pub async fn get_replenishment_history(
     let rows: Vec<Row> = data_stream.into_first_result().await?;
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Ok(Json(ApiResponse::ok_paginated(data, total as u64, page, page_size)))
+    Ok(Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 #[derive(Deserialize)]
@@ -498,7 +557,10 @@ pub async fn get_replenishment_for_transfer(
 
     base_query.push_str(" ORDER BY r.[ReplenishApplyDate] DESC");
 
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
     let data_stream = conn.query(&base_query, &param_refs).await?;
     let rows: Vec<Row> = data_stream.into_first_result().await?;
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
@@ -531,7 +593,8 @@ pub async fn get_replenishment_for_sales(
             SELECT d.[GDSID], h.[StkID], SUM(d.[Qty]) as SalesQty, SUM(d.[Amt]) as SalesAmt
             FROM [tSal_InvDetail] d
             INNER JOIN [tSal_Inv] h ON d.[SIID] = h.[SIID]
-            WHERE h.[State] <> 'D'"#.to_string();
+            WHERE h.[State] <> 'D'"#
+        .to_string();
     let mut query_params: Vec<Option<String>> = Vec::new();
     let mut pidx = 1;
 
@@ -562,7 +625,10 @@ pub async fn get_replenishment_for_sales(
 
     base_query.push_str(" ORDER BY g.[GDSDesc]");
 
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
     let data_stream = conn.query(&base_query, &param_refs).await?;
     let rows: Vec<Row> = data_stream.into_first_result().await?;
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
@@ -675,7 +741,9 @@ pub async fn get_stock_check_history(
         if !kw.is_empty() {
             base_query.push_str(&format!(
                 " AND (m.[MoveNO] LIKE @p{} OR m.[Note] LIKE @p{} OR fs.[StkName] LIKE @p{})",
-                pidx, pidx + 1, pidx + 2
+                pidx,
+                pidx + 1,
+                pidx + 2
             ));
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
@@ -684,14 +752,11 @@ pub async fn get_stock_check_history(
     }
 
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
-    let paginated_sql = build_pagination_sql_with_sort(
-        &base_query,
-        page,
-        page_size,
-        None,
-        None,
-    );
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, None, None);
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
 
     let mut total: i32 = 0;
     let count_stream = conn.query(&count_sql, &param_refs).await?;
@@ -703,7 +768,12 @@ pub async fn get_stock_check_history(
     let rows: Vec<Row> = data_stream.into_first_result().await?;
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Ok(Json(ApiResponse::ok_paginated(data, total as u64, page, page_size)))
+    Ok(Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 #[derive(Deserialize)]
@@ -730,7 +800,8 @@ pub async fn get_mobile_stock_query(
         LEFT JOIN [tBas_Goods] g ON q.[GDSID] = g.[GDSID]
         LEFT JOIN [tBas_Stock] s ON q.[StkID] = s.[StkID]
         LEFT JOIN [tBas_Unit] u ON g.[UnitNO] = u.[UnitNO]
-        WHERE g.[State] <> 'D'"#.to_string();
+        WHERE g.[State] <> 'D'"#
+        .to_string();
     let mut query_params: Vec<Option<String>> = Vec::new();
     let mut pidx = 1;
 
@@ -738,7 +809,9 @@ pub async fn get_mobile_stock_query(
         if !kw.is_empty() {
             base_query.push_str(&format!(
                 " AND (g.[GDSNO] LIKE @p{} OR g.[GDSDesc] LIKE @p{} OR g.[BarCode] LIKE @p{})",
-                pidx, pidx + 1, pidx + 2
+                pidx,
+                pidx + 1,
+                pidx + 2
             ));
             pidx += 3;
             query_params.push(Some(format!("%{}%", kw)));
@@ -755,14 +828,11 @@ pub async fn get_mobile_stock_query(
     }
 
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
-    let paginated_sql = build_pagination_sql_with_sort(
-        &base_query,
-        page,
-        page_size,
-        None,
-        None,
-    );
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, None, None);
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
 
     let mut total: i32 = 0;
     let count_stream = conn.query(&count_sql, &param_refs).await?;
@@ -774,7 +844,12 @@ pub async fn get_mobile_stock_query(
     let rows: Vec<Row> = data_stream.into_first_result().await?;
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Ok(Json(ApiResponse::ok_paginated(data, total as u64, page, page_size)))
+    Ok(Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 #[derive(Deserialize)]
@@ -812,7 +887,8 @@ pub async fn submit_special_price(
         "NewPrice": body.NewPrice,
         "StartDate": start_date,
         "EndDate": end_date,
-    }).to_string();
+    })
+    .to_string();
 
     let p_kind = "special_price";
     let p_desc = "特价申请";
@@ -820,7 +896,13 @@ pub async fn submit_special_price(
     let p_code = format!("SP{}", chrono::Local::now().format("%Y%m%d%H%M%S"));
     let p_value_str = p_value.as_str();
     let params: Vec<&dyn tiberius::ToSql> = vec![
-        &p_code, &p_desc, &p_kind, &remark, &p_value_str, &claims.emp_id, &now,
+        &p_code,
+        &p_desc,
+        &p_kind,
+        &remark,
+        &p_value_str,
+        &claims.emp_id,
+        &now,
     ];
     conn.execute(sql, &params).await?;
 
@@ -842,12 +924,17 @@ pub async fn get_special_price_history(
     let page = params.page.unwrap_or(1);
     let page_size = std::cmp::min(params.page_size.unwrap_or(20), 1000);
 
-    let base_query = r#"SELECT * FROM [tSys_Parameters] WHERE [PKind] = 'special_price' AND [EUser] = @p1"#.to_string();
+    let base_query =
+        r#"SELECT * FROM [tSys_Parameters] WHERE [PKind] = 'special_price' AND [EUser] = @p1"#
+            .to_string();
     let query_params: Vec<Option<String>> = vec![Some(claims.emp_id.clone())];
 
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
     let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, None, None);
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
 
     let mut total: i32 = 0;
     let count_stream = conn.query(&count_sql, &param_refs).await?;
@@ -859,7 +946,12 @@ pub async fn get_special_price_history(
     let rows: Vec<Row> = data_stream.into_first_result().await?;
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Ok(Json(ApiResponse::ok_paginated(data, total as u64, page, page_size)))
+    Ok(Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 #[derive(Deserialize)]
@@ -891,14 +983,21 @@ pub async fn submit_reward_product(
         "GDSID": body.GDSID,
         "Qty": body.Qty,
         "Reason": reason,
-    }).to_string();
+    })
+    .to_string();
 
     let p_kind = "reward_product";
     let p_desc = "奖励产品申请";
     let p_code = format!("RP{}", chrono::Local::now().format("%Y%m%d%H%M%S"));
     let p_value_str = p_value.as_str();
     let params: Vec<&dyn tiberius::ToSql> = vec![
-        &p_code, &p_desc, &p_kind, &remark, &p_value_str, &claims.emp_id, &now,
+        &p_code,
+        &p_desc,
+        &p_kind,
+        &remark,
+        &p_value_str,
+        &claims.emp_id,
+        &now,
     ];
     conn.execute(sql, &params).await?;
 
@@ -920,12 +1019,17 @@ pub async fn get_reward_product_history(
     let page = params.page.unwrap_or(1);
     let page_size = std::cmp::min(params.page_size.unwrap_or(20), 1000);
 
-    let base_query = r#"SELECT * FROM [tSys_Parameters] WHERE [PKind] = 'reward_product' AND [EUser] = @p1"#.to_string();
+    let base_query =
+        r#"SELECT * FROM [tSys_Parameters] WHERE [PKind] = 'reward_product' AND [EUser] = @p1"#
+            .to_string();
     let query_params: Vec<Option<String>> = vec![Some(claims.emp_id.clone())];
 
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
     let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, None, None);
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
 
     let mut total: i32 = 0;
     let count_stream = conn.query(&count_sql, &param_refs).await?;
@@ -937,7 +1041,12 @@ pub async fn get_reward_product_history(
     let rows: Vec<Row> = data_stream.into_first_result().await?;
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Ok(Json(ApiResponse::ok_paginated(data, total as u64, page, page_size)))
+    Ok(Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 #[derive(Deserialize)]
@@ -969,14 +1078,21 @@ pub async fn submit_gift_giving(
         "GDSID": body.GDSID,
         "Qty": body.Qty,
         "Reason": reason,
-    }).to_string();
+    })
+    .to_string();
 
     let p_kind = "gift_giving";
     let p_desc = "赠品赠送申请";
     let p_code = format!("GG{}", chrono::Local::now().format("%Y%m%d%H%M%S"));
     let p_value_str = p_value.as_str();
     let params: Vec<&dyn tiberius::ToSql> = vec![
-        &p_code, &p_desc, &p_kind, &remark, &p_value_str, &claims.emp_id, &now,
+        &p_code,
+        &p_desc,
+        &p_kind,
+        &remark,
+        &p_value_str,
+        &claims.emp_id,
+        &now,
     ];
     conn.execute(sql, &params).await?;
 
@@ -998,12 +1114,17 @@ pub async fn get_gift_giving_history(
     let page = params.page.unwrap_or(1);
     let page_size = std::cmp::min(params.page_size.unwrap_or(20), 1000);
 
-    let base_query = r#"SELECT * FROM [tSys_Parameters] WHERE [PKind] = 'gift_giving' AND [EUser] = @p1"#.to_string();
+    let base_query =
+        r#"SELECT * FROM [tSys_Parameters] WHERE [PKind] = 'gift_giving' AND [EUser] = @p1"#
+            .to_string();
     let query_params: Vec<Option<String>> = vec![Some(claims.emp_id.clone())];
 
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
     let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, None, None);
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
 
     let mut total: i32 = 0;
     let count_stream = conn.query(&count_sql, &param_refs).await?;
@@ -1015,7 +1136,12 @@ pub async fn get_gift_giving_history(
     let rows: Vec<Row> = data_stream.into_first_result().await?;
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Ok(Json(ApiResponse::ok_paginated(data, total as u64, page, page_size)))
+    Ok(Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 // ==================== 批量提交（特价/奖励/赠品统一接口） ====================
@@ -1057,11 +1183,19 @@ pub async fn submit_batch(
 
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     // 生成共享批次号 PCode（同一批次所有明细共用）
-    let p_code = format!("{}{}", p_code_prefix, chrono::Local::now().format("%Y%m%d%H%M%S"));
+    let p_code = format!(
+        "{}{}",
+        p_code_prefix,
+        chrono::Local::now().format("%Y%m%d%H%M%S")
+    );
     let cust_id = body.CustID.as_deref().unwrap_or("");
     let remark = body.Remark.as_deref().unwrap_or("");
     let reason = body.Reason.as_deref().unwrap_or("");
-    let emp_id = if claims.emp_id.is_empty() { "00000000-0000-0000-0000-000000000000".to_string() } else { claims.emp_id.clone() };
+    let emp_id = if claims.emp_id.is_empty() {
+        "00000000-0000-0000-0000-000000000000".to_string()
+    } else {
+        claims.emp_id.clone()
+    };
 
     // ★ PTerm 用行号保证唯一索引 idx_Parameters_CodeTerm(PCode, PTerm) 不冲突
     let sql = r#"INSERT INTO [tSys_Parameters] ([ParametersID], [PCode], [PTerm], [PName], [PKind], [PHelp], [PValue], [EUser], [EDate])
@@ -1093,12 +1227,21 @@ pub async fn submit_batch(
         };
         let p_value_str = p_value.to_string();
         let params: Vec<&dyn tiberius::ToSql> = vec![
-            &p_code, &p_term, &p_name, &p_kind, &remark, &p_value_str, &emp_id, &now,
+            &p_code,
+            &p_term,
+            &p_name,
+            &p_kind,
+            &remark,
+            &p_value_str,
+            &emp_id,
+            &now,
         ];
         conn.execute(sql, &params).await?;
     }
 
-    Ok(Json(ApiResponse::ok(serde_json::json!({ "PCode": p_code, "count": body.details.len() }))))
+    Ok(Json(ApiResponse::ok(
+        serde_json::json!({ "PCode": p_code, "count": body.details.len() }),
+    )))
 }
 
 #[derive(Deserialize)]
@@ -1125,7 +1268,8 @@ pub async fn get_mobile_shortages(
         FROM [tStk_Qty] q
         LEFT JOIN [tBas_Goods] g ON q.[GDSID] = g.[GDSID]
         LEFT JOIN [tBas_Stock] s ON q.[StkID] = s.[StkID]
-        WHERE g.[State] <> 'D' AND q.[Qty] <= @p1"#.to_string();
+        WHERE g.[State] <> 'D' AND q.[Qty] <= @p1"#
+        .to_string();
     let mut query_params: Vec<Option<String>> = vec![Some(threshold.to_string())];
     let pidx = 2;
 
@@ -1138,7 +1282,10 @@ pub async fn get_mobile_shortages(
 
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
     let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, None, None);
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
 
     let mut total: i32 = 0;
     let count_stream = conn.query(&count_sql, &param_refs).await?;
@@ -1150,7 +1297,12 @@ pub async fn get_mobile_shortages(
     let rows: Vec<Row> = data_stream.into_first_result().await?;
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Ok(Json(ApiResponse::ok_paginated(data, total as u64, page, page_size)))
+    Ok(Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 #[derive(Deserialize)]
@@ -1176,14 +1328,27 @@ pub async fn get_mobile_commission(
     let emp_sql = "SELECT TOP 1 e.[EmpID], e.[EmpName], e.[StkID] FROM [tBas_Emp] e WHERE e.[EmpNo] = @p1 AND e.[State] <> 'D'";
     let emp_stream = conn.query(emp_sql, &[&claims.user_code.as_str()]).await?;
     let (emp_id, _emp_name, emp_stk_id) = if let Some(row) = emp_stream.into_row().await? {
-        (get_str(&row, "EmpID"), get_str(&row, "EmpName"), get_str(&row, "StkID"))
+        (
+            get_str(&row, "EmpID"),
+            get_str(&row, "EmpName"),
+            get_str(&row, "StkID"),
+        )
     } else {
         (String::new(), String::new(), String::new())
     };
 
     // 优先使用参数 StkID，其次使用员工关联仓库（tBas_Emp.StkID）
-    let stk_id = params.StkID.clone().filter(|s| !s.is_empty())
-        .or_else(|| if !emp_stk_id.is_empty() { Some(emp_stk_id.clone()) } else { None })
+    let stk_id = params
+        .StkID
+        .clone()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            if !emp_stk_id.is_empty() {
+                Some(emp_stk_id.clone())
+            } else {
+                None
+            }
+        })
         .filter(|s| !s.is_empty());
 
     if stk_id.is_none() {
@@ -1201,8 +1366,16 @@ pub async fn get_mobile_commission(
     let now = chrono::Utc::now();
     let default_start = format!("{:04}-{:02}-01", now.year(), now.month());
     let default_end = format!("{:04}-{:02}-{:02}", now.year(), now.month(), now.day());
-    let start_date = params.start_date.clone().filter(|s| !s.is_empty()).unwrap_or(default_start);
-    let end_date = params.end_date.clone().filter(|s| !s.is_empty()).unwrap_or(default_end);
+    let start_date = params
+        .start_date
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(default_start);
+    let end_date = params
+        .end_date
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(default_end);
 
     // 按品牌分组聚合销售单明细的提成数据
     // 数据源：tSal_Inv + tSal_InvDetail（State IN ('S','Y')），已包含 Commission/CommissionRate/CommissionType
@@ -1229,34 +1402,46 @@ pub async fn get_mobile_commission(
         ORDER BY Commission DESC
     "#;
 
-    let stream = conn.query(sql, &[&stk_id.as_str(), &start_date.as_str(), &end_date.as_str()]).await?;
+    let stream = conn
+        .query(
+            sql,
+            &[&stk_id.as_str(), &start_date.as_str(), &end_date.as_str()],
+        )
+        .await?;
     let rows: Vec<Row> = stream.into_first_result().await?;
 
     let mut total_sales = 0.0f64;
     let mut total_commission = 0.0f64;
-    let list: Vec<serde_json::Value> = rows.iter().map(|row| {
-        let brand_id = get_str(row, "BrandID");
-        let brand_name = get_str(row, "BrandName");
-        let brand_level = get_str(row, "BrandLevel");
-        let sales_amount = row_try_f64(row, "SalesAmount");
-        let commission = row_try_f64(row, "Commission");
-        let commission_rate = row_try_f64(row, "CommissionRate");
-        let product_count = row.try_get::<i32, _>("ProductCount").ok().flatten().unwrap_or(0);
+    let list: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| {
+            let brand_id = get_str(row, "BrandID");
+            let brand_name = get_str(row, "BrandName");
+            let brand_level = get_str(row, "BrandLevel");
+            let sales_amount = row_try_f64(row, "SalesAmount");
+            let commission = row_try_f64(row, "Commission");
+            let commission_rate = row_try_f64(row, "CommissionRate");
+            let product_count = row
+                .try_get::<i32, _>("ProductCount")
+                .ok()
+                .flatten()
+                .unwrap_or(0);
 
-        total_sales += sales_amount;
-        total_commission += commission;
+            total_sales += sales_amount;
+            total_commission += commission;
 
-        serde_json::json!({
-            "BrandID": brand_id,
-            "BrandName": brand_name,
-            "BrandLevel": brand_level,
-            "SalesAmount": sales_amount,
-            "Commission": commission,
-            "CommissionRate": commission_rate,
-            "CommissionAmount": commission,
-            "ProductCount": product_count,
+            serde_json::json!({
+                "BrandID": brand_id,
+                "BrandName": brand_name,
+                "BrandLevel": brand_level,
+                "SalesAmount": sales_amount,
+                "Commission": commission,
+                "CommissionRate": commission_rate,
+                "CommissionAmount": commission,
+                "ProductCount": product_count,
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(ApiResponse::ok(serde_json::json!({
         "list": list,
@@ -1286,7 +1471,8 @@ pub async fn get_current_sales_task(
     let mut conn = get_pool().get().await?;
 
     let mut base_query = r#"SELECT * FROM [tSys_Parameters]
-        WHERE [PKind] = 'sales_task' AND [EUser] = @p1 AND [EDate] >= @p2"#.to_string();
+        WHERE [PKind] = 'sales_task' AND [EUser] = @p1 AND [EDate] >= @p2"#
+        .to_string();
     let mut query_params: Vec<Option<String>> = vec![
         Some(claims.emp_id.clone()),
         Some(chrono::Local::now().format("%Y-%m-%d").to_string()),
@@ -1301,7 +1487,10 @@ pub async fn get_current_sales_task(
 
     base_query.push_str(" ORDER BY [EDate] DESC");
 
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
     let stream = conn.query(&base_query, &param_refs).await?;
 
     if let Some(row) = stream.into_row().await? {
@@ -1329,7 +1518,8 @@ pub async fn get_sales_task_list(
 
     let mut base_query = r#"SELECT t.*, e.[EmpName] AS [EUserName] FROM [tSys_Parameters] t
         LEFT JOIN [tBas_Emp] e ON t.[EUser] = e.[EmpID]
-        WHERE t.[PKind] = 'sales_task' AND t.[EUser] = @p1"#.to_string();
+        WHERE t.[PKind] = 'sales_task' AND t.[EUser] = @p1"#
+        .to_string();
     let mut query_params: Vec<Option<String>> = vec![Some(claims.emp_id.clone())];
     let pidx = 2;
 
@@ -1343,7 +1533,10 @@ pub async fn get_sales_task_list(
 
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
     let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, None, None);
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
 
     let mut total: i32 = 0;
     let count_stream = conn.query(&count_sql, &param_refs).await?;
@@ -1355,7 +1548,12 @@ pub async fn get_sales_task_list(
     let rows: Vec<Row> = data_stream.into_first_result().await?;
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Ok(Json(ApiResponse::ok_paginated(data, total as u64, page, page_size)))
+    Ok(Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 #[derive(Deserialize)]
@@ -1389,13 +1587,20 @@ pub async fn create_sales_task(
         "StartDate": body.StartDate,
         "EndDate": body.EndDate,
         "StkID": stk_id,
-    }).to_string();
+    })
+    .to_string();
 
     let p_kind = "sales_task";
     let p_desc = "销售任务";
     let p_value_str = p_value.as_str();
     let params: Vec<&dyn tiberius::ToSql> = vec![
-        &param_id, &p_desc, &p_kind, &remark, &p_value_str, &claims.emp_id, &now,
+        &param_id,
+        &p_desc,
+        &p_kind,
+        &remark,
+        &p_value_str,
+        &claims.emp_id,
+        &now,
     ];
     conn.execute(sql, &params).await?;
 
@@ -1435,13 +1640,32 @@ pub async fn update_sales_task(
         return Ok(Json(ApiResponse::err("未找到该销售任务")));
     }
 
-    let mut existing: serde_json::Value = serde_json::from_str(&existing_value).unwrap_or(serde_json::json!({}));
+    let mut existing: serde_json::Value =
+        serde_json::from_str(&existing_value).unwrap_or(serde_json::json!({}));
     if let Some(obj) = existing.as_object_mut() {
-        if let Some(v) = &body.TaskName { obj.insert("TaskName".to_string(), serde_json::Value::String(v.clone())); }
-        if let Some(v) = &body.TargetAmt { obj.insert("TargetAmt".to_string(), serde_json::Value::Number(serde_json::Number::from_f64(*v).unwrap_or(serde_json::Number::from(0)))); }
-        if let Some(v) = &body.StartDate { obj.insert("StartDate".to_string(), serde_json::Value::String(v.clone())); }
-        if let Some(v) = &body.EndDate { obj.insert("EndDate".to_string(), serde_json::Value::String(v.clone())); }
-        if let Some(v) = &body.StkID { obj.insert("StkID".to_string(), serde_json::Value::String(v.clone())); }
+        if let Some(v) = &body.TaskName {
+            obj.insert("TaskName".to_string(), serde_json::Value::String(v.clone()));
+        }
+        if let Some(v) = &body.TargetAmt {
+            obj.insert(
+                "TargetAmt".to_string(),
+                serde_json::Value::Number(
+                    serde_json::Number::from_f64(*v).unwrap_or(serde_json::Number::from(0)),
+                ),
+            );
+        }
+        if let Some(v) = &body.StartDate {
+            obj.insert(
+                "StartDate".to_string(),
+                serde_json::Value::String(v.clone()),
+            );
+        }
+        if let Some(v) = &body.EndDate {
+            obj.insert("EndDate".to_string(), serde_json::Value::String(v.clone()));
+        }
+        if let Some(v) = &body.StkID {
+            obj.insert("StkID".to_string(), serde_json::Value::String(v.clone()));
+        }
     }
 
     let new_p_value = existing.to_string();
@@ -1451,9 +1675,7 @@ pub async fn update_sales_task(
 
     let update_sql = r#"UPDATE [tSys_Parameters] SET [PValue] = @p1, [EDate] = @p2
         WHERE [PKind] = 'sales_task' AND [PCode] = @p3"#;
-    let update_params: Vec<&dyn tiberius::ToSql> = vec![
-        &new_p_value_str, &now, &task_id_str,
-    ];
+    let update_params: Vec<&dyn tiberius::ToSql> = vec![&new_p_value_str, &now, &task_id_str];
     conn.execute(update_sql, &update_params).await?;
 
     Ok(Json(ApiResponse::msg("销售任务更新成功")))
@@ -1507,13 +1729,20 @@ pub async fn submit_daily_sales_record(
         "RecordDate": body.RecordDate,
         "SalesAmt": body.SalesAmt,
         "StkID": stk_id,
-    }).to_string();
+    })
+    .to_string();
 
     let p_kind = "sales_record";
     let p_desc = "销售日报";
     let p_value_str = p_value.as_str();
     let params: Vec<&dyn tiberius::ToSql> = vec![
-        &param_id, &p_desc, &p_kind, &remark, &p_value_str, &claims.emp_id, &now,
+        &param_id,
+        &p_desc,
+        &p_kind,
+        &remark,
+        &p_value_str,
+        &claims.emp_id,
+        &now,
     ];
     conn.execute(sql, &params).await?;
 
@@ -1539,7 +1768,8 @@ pub async fn get_sales_task_records(
     let page_size = std::cmp::min(params.page_size.unwrap_or(20), 1000);
 
     let mut base_query = r#"SELECT * FROM [tSys_Parameters]
-        WHERE [PKind] = 'sales_record' AND [EUser] = @p1"#.to_string();
+        WHERE [PKind] = 'sales_record' AND [EUser] = @p1"#
+        .to_string();
     let mut query_params: Vec<Option<String>> = vec![Some(claims.emp_id.clone())];
     let mut pidx = 2;
 
@@ -1568,7 +1798,10 @@ pub async fn get_sales_task_records(
 
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
     let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, None, None);
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
 
     let mut total: i32 = 0;
     let count_stream = conn.query(&count_sql, &param_refs).await?;
@@ -1580,7 +1813,12 @@ pub async fn get_sales_task_records(
     let rows: Vec<Row> = data_stream.into_first_result().await?;
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Ok(Json(ApiResponse::ok_paginated(data, total as u64, page, page_size)))
+    Ok(Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 #[derive(Deserialize)]
@@ -1615,7 +1853,8 @@ pub async fn submit_shortage(
         "Contact": body.Contact,
         "Note": body.Note,
         "details": body.details,
-    }).to_string();
+    })
+    .to_string();
 
     let p_kind = "shortage_report";
     let p_desc = "缺货上报";
@@ -1623,7 +1862,13 @@ pub async fn submit_shortage(
     let note_str = body.Note.as_deref().unwrap_or("");
     let user_code = claims.user_code.as_str();
     let params: Vec<&dyn tiberius::ToSql> = vec![
-        &param_id, &p_desc, &p_kind, &note_str, &p_value_str, &user_code, &now,
+        &param_id,
+        &p_desc,
+        &p_kind,
+        &note_str,
+        &p_value_str,
+        &user_code,
+        &now,
     ];
     let sql = r#"INSERT INTO [tSys_Parameters] ([ParametersID], [PCode], [PName], [PKind], [PHelp], [PValue], [EUser], [EDate])
         VALUES (NEWID(), @p1, @p2, @p3, @p4, @p5, @p6, @p7)"#;
@@ -1667,10 +1912,12 @@ pub async fn get_mobile_home_stats(
             FROM [tOnline_Order] o
             WHERE o.[State] <> 'D' AND o.[EmpID] = @p1
               AND o.[EDate] >= @p2 AND o.[EDate] <= @p3"#;
-        let order_stream = conn.query(
-            order_sql,
-            &[&emp_id.as_str(), &today_start.as_str(), &today_end.as_str()],
-        ).await?;
+        let order_stream = conn
+            .query(
+                order_sql,
+                &[&emp_id.as_str(), &today_start.as_str(), &today_end.as_str()],
+            )
+            .await?;
         if let Some(row) = order_stream.into_row().await? {
             today_orders = row.get::<i32, _>("cnt").unwrap_or(0) as i64;
             today_amount = row.get::<f64, _>("amt").unwrap_or(0.0);
@@ -1718,12 +1965,16 @@ pub async fn get_shortage_report_history(
 
     let base_query = r#"SELECT * FROM [tSys_Parameters]
         WHERE [PKind] = 'shortage_report' AND [EUser] = @p1
-        ORDER BY [EDate] DESC"#.to_string();
+        ORDER BY [EDate] DESC"#
+        .to_string();
     let query_params: Vec<Option<String>> = vec![Some(claims.emp_id.clone())];
 
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
     let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, None, None);
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
 
     let mut total: i32 = 0;
     let count_stream = conn.query(&count_sql, &param_refs).await?;
@@ -1735,5 +1986,10 @@ pub async fn get_shortage_report_history(
     let rows: Vec<Row> = data_stream.into_first_result().await?;
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Ok(Json(ApiResponse::ok_paginated(data, total as u64, page, page_size)))
+    Ok(Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    )))
 }

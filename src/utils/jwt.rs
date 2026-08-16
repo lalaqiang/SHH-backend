@@ -21,11 +21,11 @@
 //!   - `Claims` 结构体在此模块定义，`middleware::auth` 通过 `pub use` 重导出，
 //!     所有既有的 `use crate::middleware::auth::Claims` 无需修改。
 
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation, Algorithm};
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Mutex;
-use once_cell::sync::Lazy;
 
 /// token 有效期（小时）
 const TOKEN_TTL_HOURS: i64 = 24;
@@ -120,8 +120,7 @@ pub fn verify_token(secret: &str, token: &str) -> Result<Claims, jsonwebtoken::e
 //   - 如需多实例共享，可后续替换为 Redis 后端
 // ============================================================
 
-static BLACKLIST: Lazy<Mutex<HashSet<(String, usize)>>> =
-    Lazy::new(|| Mutex::new(HashSet::new()));
+static BLACKLIST: Lazy<Mutex<HashSet<(String, usize)>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
 /// 将 token 加入黑名单（登出时调用）
 pub fn revoke_token(claims: &Claims) {

@@ -1,12 +1,12 @@
-use axum::{extract::State, Json};
-use serde::Deserialize;
-use tiberius::Row;
+use super::base_data::row_to_json;
 use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
-use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
 use crate::services::inventory_ledger;
-use super::base_data::row_to_json;
+use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
+use axum::{Json, extract::State};
+use serde::Deserialize;
+use tiberius::Row;
 
 #[derive(Deserialize)]
 pub struct PaginationParams {
@@ -20,7 +20,10 @@ pub struct PaginationParams {
 const ZERO_UUID: &str = "00000000-0000-0000-0000-000000000000";
 
 fn json_str(v: &serde_json::Value, key: &str) -> String {
-    v.get(key).and_then(|v| v.as_str()).unwrap_or("").to_string()
+    v.get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
 }
 
 fn json_f64(v: &serde_json::Value, key: &str) -> f64 {
@@ -57,14 +60,37 @@ pub async fn get_sales_orders(
         }
     }
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
-    let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, params.sort_prop.as_deref(), params.sort_order.as_deref());
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let paginated_sql = build_pagination_sql_with_sort(
+        &base_query,
+        page,
+        page_size,
+        params.sort_prop.as_deref(),
+        params.sort_order.as_deref(),
+    );
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
     let mut total: i32 = 0;
-    if let Some(row) = conn.query(&count_sql, &param_refs).await?.into_row().await? {
+    if let Some(row) = conn
+        .query(&count_sql, &param_refs)
+        .await?
+        .into_row()
+        .await?
+    {
         total = row.get::<i32, _>("cnt").unwrap_or(0);
     }
-    let rows: Vec<Row> = conn.query(&paginated_sql, &param_refs).await?.into_first_result().await?;
-    Ok(Json(ApiResponse::ok_paginated(rows.iter().map(row_to_json).collect(), total as u64, page, page_size)))
+    let rows: Vec<Row> = conn
+        .query(&paginated_sql, &param_refs)
+        .await?
+        .into_first_result()
+        .await?;
+    Ok(Json(ApiResponse::ok_paginated(
+        rows.iter().map(row_to_json).collect(),
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 #[derive(Deserialize)]
@@ -94,7 +120,11 @@ pub async fn create_sales_order(
     let sq_uuid = empty_or_zero(&json_str(d, "SQID")).to_string();
     let disrate = json_f64(d, "DisRate");
     let downpay = json_f64(d, "DownPay");
-    let curr = if json_str(d, "CurrCode").is_empty() { "CNY".to_string() } else { json_str(d, "CurrCode") };
+    let curr = if json_str(d, "CurrCode").is_empty() {
+        "CNY".to_string()
+    } else {
+        json_str(d, "CurrCode")
+    };
     let remark = json_str(d, "Remark");
     let dt = now();
     let draft_state: &str = crate::handlers::doc_state::STATE_NEW;
@@ -165,7 +195,9 @@ pub async fn create_sales_order(
         inventory_ledger::rollback_tran(&mut conn).await;
         return Ok(Json(ApiResponse::err(&format!("销售订单保存失败: {}", e))));
     }
-    Ok(Json(ApiResponse::ok(serde_json::json!({ "SoNo": so_no, "SOID": soid_out }))))
+    Ok(Json(ApiResponse::ok(
+        serde_json::json!({ "SoNo": so_no, "SOID": soid_out }),
+    )))
 }
 
 #[derive(Deserialize)]
@@ -182,13 +214,21 @@ pub async fn update_sales_order(
     let mut conn = get_pool().get().await?;
     // ===== 编辑锁 =====
     {
-        let state_check = conn.query("SELECT State FROM tSal_Order WHERE SOID=@p1", &[&params.soid]).await?;
+        let state_check = conn
+            .query(
+                "SELECT State FROM tSal_Order WHERE SOID=@p1",
+                &[&params.soid],
+            )
+            .await?;
         if let Some(row) = state_check.into_row().await? {
             let state: String = row.get::<&str, _>(0).unwrap_or("").to_string();
-                if !crate::handlers::doc_state::is_editable(&state) {
-                    let msg = format!("单据已{}，不可编辑，请先反审", crate::handlers::doc_state::label(&state));
-                    return Ok(Json(ApiResponse::err(&msg)));
-                }
+            if !crate::handlers::doc_state::is_editable(&state) {
+                let msg = format!(
+                    "单据已{}，不可编辑，请先反审",
+                    crate::handlers::doc_state::label(&state)
+                );
+                return Ok(Json(ApiResponse::err(&msg)));
+            }
         }
     }
     let d = &params.data;
@@ -199,7 +239,8 @@ pub async fn update_sales_order(
     let disrate = json_f64(d, "DisRate");
     let downpay = json_f64(d, "DownPay");
     let remark = json_str(d, "Remark");
-    let upd = "UPDATE tSal_Order SET DisRate=@p1, DownPay=@p2, Note=@p3, LUTime=GETDATE() WHERE SoNo=@p4";
+    let upd =
+        "UPDATE tSal_Order SET DisRate=@p1, DownPay=@p2, Note=@p3, LUTime=GETDATE() WHERE SoNo=@p4";
     let p: Vec<&dyn tiberius::ToSql> = vec![&disrate, &downpay, &remark, &so_no];
     // 事务包裹：UPDATE 主表 + DELETE 旧明细 + INSERT 新明细 原子化，避免中途失败导致明细丢失
     let tx_result: std::result::Result<(), String> = async {
@@ -266,14 +307,37 @@ pub async fn get_sales_outbound(
         }
     }
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
-    let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, params.sort_prop.as_deref(), params.sort_order.as_deref());
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let paginated_sql = build_pagination_sql_with_sort(
+        &base_query,
+        page,
+        page_size,
+        params.sort_prop.as_deref(),
+        params.sort_order.as_deref(),
+    );
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
     let mut total: i32 = 0;
-    if let Some(row) = conn.query(&count_sql, &param_refs).await?.into_row().await? {
+    if let Some(row) = conn
+        .query(&count_sql, &param_refs)
+        .await?
+        .into_row()
+        .await?
+    {
         total = row.get::<i32, _>("cnt").unwrap_or(0);
     }
-    let rows: Vec<Row> = conn.query(&paginated_sql, &param_refs).await?.into_first_result().await?;
-    Ok(Json(ApiResponse::ok_paginated(rows.iter().map(row_to_json).collect(), total as u64, page, page_size)))
+    let rows: Vec<Row> = conn
+        .query(&paginated_sql, &param_refs)
+        .await?
+        .into_first_result()
+        .await?;
+    Ok(Json(ApiResponse::ok_paginated(
+        rows.iter().map(row_to_json).collect(),
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 #[derive(Deserialize)]
@@ -304,10 +368,18 @@ pub async fn create_sales_outbound(
     let dept_uuid = empty_or_zero(&json_str(d, "DeptID")).to_string();
     let btp_uuid = empty_or_zero(&json_str(d, "BTPID")).to_string();
     let so_uuid = empty_or_zero(&json_str(d, "SOID")).to_string();
-    let total_amt: f64 = params.details.iter().map(|x| json_f64(x, "Amt").max(json_f64(x, "Qty") * json_f64(x, "Price"))).sum();
+    let total_amt: f64 = params
+        .details
+        .iter()
+        .map(|x| json_f64(x, "Amt").max(json_f64(x, "Qty") * json_f64(x, "Price")))
+        .sum();
     let total_qty: f64 = params.details.iter().map(|x| json_f64(x, "Qty")).sum();
     let disrate = json_f64(d, "DisRate");
-    let curr = if json_str(d, "CurrCode").is_empty() { "CNY".to_string() } else { json_str(d, "CurrCode") };
+    let curr = if json_str(d, "CurrCode").is_empty() {
+        "CNY".to_string()
+    } else {
+        json_str(d, "CurrCode")
+    };
     let remark = json_str(d, "Remark");
     let dt = now();
     let draft_state: &str = crate::handlers::doc_state::STATE_NEW;
@@ -371,7 +443,9 @@ pub async fn create_sales_outbound(
         inventory_ledger::rollback_tran(&mut conn).await;
         return Ok(Json(ApiResponse::err(&format!("销售出库保存失败: {}", e))));
     }
-    Ok(Json(ApiResponse::ok(serde_json::json!({ "IONo": io_no, "IOID": ioid_out }))))
+    Ok(Json(ApiResponse::ok(
+        serde_json::json!({ "IONo": io_no, "IOID": ioid_out }),
+    )))
 }
 
 #[derive(Deserialize)]
@@ -388,13 +462,21 @@ pub async fn update_sales_outbound(
     let mut conn = get_pool().get().await?;
     // ===== 编辑锁 =====
     {
-        let state_check = conn.query("SELECT State FROM tStk_IO WHERE IOID=@p1 AND Kind='SD'", &[&params.soid]).await?;
+        let state_check = conn
+            .query(
+                "SELECT State FROM tStk_IO WHERE IOID=@p1 AND Kind='SD'",
+                &[&params.soid],
+            )
+            .await?;
         if let Some(row) = state_check.into_row().await? {
             let state: String = row.get::<&str, _>(0).unwrap_or("").to_string();
-                if !crate::handlers::doc_state::is_editable(&state) {
-                    let msg = format!("单据已{}，不可编辑，请先反审", crate::handlers::doc_state::label(&state));
-                    return Ok(Json(ApiResponse::err(&msg)));
-                }
+            if !crate::handlers::doc_state::is_editable(&state) {
+                let msg = format!(
+                    "单据已{}，不可编辑，请先反审",
+                    crate::handlers::doc_state::label(&state)
+                );
+                return Ok(Json(ApiResponse::err(&msg)));
+            }
         }
     }
     let d = &params.data;
@@ -404,12 +486,17 @@ pub async fn update_sales_outbound(
     }
     let stk_id = json_str(d, "StkID");
     let cust_id = empty_or_zero(&json_str(d, "CustID")).to_string();
-    let total_amt: f64 = params.details.iter().map(|x| json_f64(x, "Amt").max(json_f64(x, "Qty") * json_f64(x, "Price"))).sum();
+    let total_amt: f64 = params
+        .details
+        .iter()
+        .map(|x| json_f64(x, "Amt").max(json_f64(x, "Qty") * json_f64(x, "Price")))
+        .sum();
     let total_qty: f64 = params.details.iter().map(|x| json_f64(x, "Qty")).sum();
     let remark = json_str(d, "Remark");
     // 销售出库走 tStk_IO Kind='SD'（tSal_Inv 字段过简，无法保留业务字段）
     let upd = "UPDATE tStk_IO SET StkID=@p1, CustID=@p2, SumAmt=@p3, SumQty=@p4, Note=@p5, LUTime=GETDATE() WHERE IONo=@p6 AND Kind='SD'";
-    let p: Vec<&dyn tiberius::ToSql> = vec![&stk_id, &cust_id, &total_amt, &total_qty, &remark, &io_no];
+    let p: Vec<&dyn tiberius::ToSql> =
+        vec![&stk_id, &cust_id, &total_amt, &total_qty, &remark, &io_no];
     // 事务包裹：UPDATE 主表 + DELETE 旧明细 + INSERT 新明细 原子化，避免中途失败导致明细丢失
     let tx_result: std::result::Result<(), String> = async {
         inventory_ledger::begin_tran(&mut conn).await.map_err(|e| e.to_string())?;
@@ -471,14 +558,37 @@ pub async fn get_sales_quotes(
         }
     }
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
-    let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, params.sort_prop.as_deref(), params.sort_order.as_deref());
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let paginated_sql = build_pagination_sql_with_sort(
+        &base_query,
+        page,
+        page_size,
+        params.sort_prop.as_deref(),
+        params.sort_order.as_deref(),
+    );
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
     let mut total: i32 = 0;
-    if let Some(row) = conn.query(&count_sql, &param_refs).await?.into_row().await? {
+    if let Some(row) = conn
+        .query(&count_sql, &param_refs)
+        .await?
+        .into_row()
+        .await?
+    {
         total = row.get::<i32, _>("cnt").unwrap_or(0);
     }
-    let rows: Vec<Row> = conn.query(&paginated_sql, &param_refs).await?.into_first_result().await?;
-    Ok(Json(ApiResponse::ok_paginated(rows.iter().map(row_to_json).collect(), total as u64, page, page_size)))
+    let rows: Vec<Row> = conn
+        .query(&paginated_sql, &param_refs)
+        .await?
+        .into_first_result()
+        .await?;
+    Ok(Json(ApiResponse::ok_paginated(
+        rows.iter().map(row_to_json).collect(),
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 #[derive(Deserialize)]
@@ -557,7 +667,9 @@ pub async fn create_sales_quote(
         inventory_ledger::rollback_tran(&mut conn).await;
         return Ok(Json(ApiResponse::err(&format!("销售报价保存失败: {}", e))));
     }
-    Ok(Json(ApiResponse::ok(serde_json::json!({ "SQNo": sq_no, "SQID": sqid_out }))))
+    Ok(Json(ApiResponse::ok(
+        serde_json::json!({ "SQNo": sq_no, "SQID": sqid_out }),
+    )))
 }
 
 #[derive(Deserialize)]
@@ -574,13 +686,21 @@ pub async fn update_sales_quote(
     let mut conn = get_pool().get().await?;
     // ===== 编辑锁 =====
     {
-        let state_check = conn.query("SELECT State FROM tSal_Quote WHERE SQID=@p1", &[&params.sqid]).await?;
+        let state_check = conn
+            .query(
+                "SELECT State FROM tSal_Quote WHERE SQID=@p1",
+                &[&params.sqid],
+            )
+            .await?;
         if let Some(row) = state_check.into_row().await? {
             let state: String = row.get::<&str, _>(0).unwrap_or("").to_string();
-                if !crate::handlers::doc_state::is_editable(&state) {
-                    let msg = format!("单据已{}，不可编辑，请先反审", crate::handlers::doc_state::label(&state));
-                    return Ok(Json(ApiResponse::err(&msg)));
-                }
+            if !crate::handlers::doc_state::is_editable(&state) {
+                let msg = format!(
+                    "单据已{}，不可编辑，请先反审",
+                    crate::handlers::doc_state::label(&state)
+                );
+                return Ok(Json(ApiResponse::err(&msg)));
+            }
         }
     }
     let d = &params.data;
@@ -640,14 +760,37 @@ pub async fn get_sales_adjprice(
         }
     }
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
-    let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, params.sort_prop.as_deref(), params.sort_order.as_deref());
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let paginated_sql = build_pagination_sql_with_sort(
+        &base_query,
+        page,
+        page_size,
+        params.sort_prop.as_deref(),
+        params.sort_order.as_deref(),
+    );
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
     let mut total: i32 = 0;
-    if let Some(row) = conn.query(&count_sql, &param_refs).await?.into_row().await? {
+    if let Some(row) = conn
+        .query(&count_sql, &param_refs)
+        .await?
+        .into_row()
+        .await?
+    {
         total = row.get::<i32, _>("cnt").unwrap_or(0);
     }
-    let rows: Vec<Row> = conn.query(&paginated_sql, &param_refs).await?.into_first_result().await?;
-    Ok(Json(ApiResponse::ok_paginated(rows.iter().map(row_to_json).collect(), total as u64, page, page_size)))
+    let rows: Vec<Row> = conn
+        .query(&paginated_sql, &param_refs)
+        .await?
+        .into_first_result()
+        .await?;
+    Ok(Json(ApiResponse::ok_paginated(
+        rows.iter().map(row_to_json).collect(),
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 #[derive(Deserialize)]
@@ -723,5 +866,7 @@ pub async fn create_sales_adjprice(
         inventory_ledger::rollback_tran(&mut conn).await;
         return Ok(Json(ApiResponse::err(&format!("销售调价保存失败: {}", e))));
     }
-    Ok(Json(ApiResponse::ok(serde_json::json!({ "SAPNo": sap_no, "SAPID": sapid_out }))))
+    Ok(Json(ApiResponse::ok(
+        serde_json::json!({ "SAPNo": sap_no, "SAPID": sapid_out }),
+    )))
 }

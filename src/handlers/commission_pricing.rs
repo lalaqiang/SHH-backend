@@ -1,16 +1,12 @@
-use axum::{
-    extract::State,
-    Extension,
-    Json,
-};
-use serde::Deserialize;
-use tiberius::Row;
 use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
-use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
-use crate::handlers::base_data::{row_to_json};
+use crate::handlers::base_data::row_to_json;
 use crate::middleware::auth::Claims;
+use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
+use axum::{Extension, Json, extract::State};
+use serde::Deserialize;
+use tiberius::Row;
 
 // =====================================================================
 // 定价模板（pricing）相关 handler
@@ -37,7 +33,13 @@ pub async fn get_pricing_templates(
 
     let base_query = "SELECT p.ParametersID, p.PCode, p.PName AS TemplateName, p.PKind AS PriceType, p.PValue AS Rate, p.PHelp AS Remark, p.EDate, p.EUser FROM tSys_Parameters p WHERE p.PKind = 'pricing' AND p.State <> 'D'";
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
-    let paginated_sql = build_pagination_sql_with_sort(base_query, page, page_size, params.sort_prop.as_deref(), params.sort_order.as_deref());
+    let paginated_sql = build_pagination_sql_with_sort(
+        base_query,
+        page,
+        page_size,
+        params.sort_prop.as_deref(),
+        params.sort_order.as_deref(),
+    );
 
     let mut total: i32 = 0;
     let count_stream = conn.query(&count_sql, &[]).await?;
@@ -49,7 +51,12 @@ pub async fn get_pricing_templates(
     let rows: Vec<Row> = data_stream.into_first_result().await?;
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Ok(Json(ApiResponse::ok_paginated(data, total as u64, page, page_size)))
+    Ok(Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 #[derive(Deserialize)]
@@ -78,7 +85,13 @@ pub async fn create_pricing_template(
     let p_value = body.PValue.as_deref().unwrap_or("{}");
     // ★ EUser 是 uniqueidentifier 列，必须传 UUID 字符串（claims.emp_id 是 UUID）
     //   claims.user_code 是 "admin" 等业务编码，SQL Server 无法转换为 uniqueidentifier
-    let e_user: &str = if !claims.emp_id.is_empty() { claims.emp_id.as_str() } else { return Ok(Json(ApiResponse::err("登录用户缺少 EmpID，无法写入审计字段"))) };
+    let e_user: &str = if !claims.emp_id.is_empty() {
+        claims.emp_id.as_str()
+    } else {
+        return Ok(Json(ApiResponse::err(
+            "登录用户缺少 EmpID，无法写入审计字段",
+        )));
+    };
 
     if p_name.is_empty() {
         return Ok(Json(ApiResponse::err("模板名称不能为空")));
@@ -87,16 +100,13 @@ pub async fn create_pricing_template(
     let sql = r#"INSERT INTO tSys_Parameters (ParametersID, PCode, PName, PKind, PTerm, PHelp, PValue, EUser, EDate)
         VALUES (NEWID(), @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)"#;
 
-    conn.execute(sql, &[
-        &p_code,
-        &p_name,
-        &p_kind,
-        &p_term,
-        &p_help,
-        &p_value,
-        &e_user,
-        &now,
-    ]).await?;
+    conn.execute(
+        sql,
+        &[
+            &p_code, &p_name, &p_kind, &p_term, &p_help, &p_value, &e_user, &now,
+        ],
+    )
+    .await?;
 
     Ok(Json(ApiResponse::msg("定价模板创建成功")))
 }
@@ -127,7 +137,13 @@ pub async fn update_pricing_template(
     let p_help = body.PHelp.as_deref().unwrap_or("");
     let p_value = body.PValue.as_deref().unwrap_or("{}");
     // ★ EUser 是 uniqueidentifier 列，必须传 UUID 字符串（claims.emp_id 是 UUID）
-    let e_user: &str = if !claims.emp_id.is_empty() { claims.emp_id.as_str() } else { return Ok(Json(ApiResponse::err("登录用户缺少 EmpID，无法写入审计字段"))) };
+    let e_user: &str = if !claims.emp_id.is_empty() {
+        claims.emp_id.as_str()
+    } else {
+        return Ok(Json(ApiResponse::err(
+            "登录用户缺少 EmpID，无法写入审计字段",
+        )));
+    };
 
     if p_name.is_empty() {
         return Ok(Json(ApiResponse::err("模板名称不能为空")));
@@ -135,17 +151,21 @@ pub async fn update_pricing_template(
 
     let sql = "UPDATE tSys_Parameters SET PCode = @p1, PName = @p2, PKind = @p3, PTerm = @p4, PHelp = @p5, PValue = @p6, EUser = @p7, EDate = @p8 WHERE ParametersID = @p9";
 
-    conn.execute(sql, &[
-        &p_code,
-        &p_name,
-        &p_kind,
-        &p_term,
-        &p_help,
-        &p_value,
-        &e_user,
-        &now,
-        &body.ParametersID.as_str(),
-    ]).await?;
+    conn.execute(
+        sql,
+        &[
+            &p_code,
+            &p_name,
+            &p_kind,
+            &p_term,
+            &p_help,
+            &p_value,
+            &e_user,
+            &now,
+            &body.ParametersID.as_str(),
+        ],
+    )
+    .await?;
 
     Ok(Json(ApiResponse::msg("定价模板更新成功")))
 }
@@ -170,7 +190,10 @@ pub async fn delete_pricing_template(
         conn.execute(sql, &[&id.as_str()]).await?;
     }
 
-    Ok(Json(ApiResponse::msg(&format!("成功删除{}个模板", body.ids.len()))))
+    Ok(Json(ApiResponse::msg(&format!(
+        "成功删除{}个模板",
+        body.ids.len()
+    ))))
 }
 
 #[derive(Deserialize)]
@@ -203,7 +226,8 @@ pub async fn get_customer_prices(
         LEFT JOIN tBas_Cust c ON cp.CustID = c.CustID
         LEFT JOIN tBas_Brand b ON cp.BrandID = b.BrandID
         LEFT JOIN tSys_Parameters p ON cp.PLID = p.ParametersID
-        WHERE 1=1"#.to_string();
+        WHERE 1=1"#
+        .to_string();
     let mut query_params: Vec<Option<String>> = Vec::new();
     let mut pidx = 1;
 
@@ -222,7 +246,10 @@ pub async fn get_customer_prices(
         }
     }
 
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
     let stream = conn.query(&sql, &param_refs).await?;
     let rows: Vec<Row> = stream.into_first_result().await?;
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
@@ -244,8 +271,11 @@ pub async fn save_customer_price(
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
 
-    let check_sql = "SELECT COUNT(*) as cnt FROM tBas_CustPriceTac WHERE CustID = @p1 AND BrandID = @p2";
-    let stream = conn.query(check_sql, &[&body.CustID.as_str(), &body.BrandID.as_str()]).await?;
+    let check_sql =
+        "SELECT COUNT(*) as cnt FROM tBas_CustPriceTac WHERE CustID = @p1 AND BrandID = @p2";
+    let stream = conn
+        .query(check_sql, &[&body.CustID.as_str(), &body.BrandID.as_str()])
+        .await?;
     let mut exists = false;
     if let Some(row) = stream.into_row().await? {
         let cnt: i32 = row.get::<i32, _>("cnt").unwrap_or(0);
@@ -256,18 +286,12 @@ pub async fn save_customer_price(
 
     if exists {
         let sql = "UPDATE tBas_CustPriceTac SET PLID = @p1 WHERE CustID = @p2 AND BrandID = @p3";
-        conn.execute(sql, &[
-            &plid,
-            &body.CustID.as_str(),
-            &body.BrandID.as_str(),
-        ]).await?;
+        conn.execute(sql, &[&plid, &body.CustID.as_str(), &body.BrandID.as_str()])
+            .await?;
     } else {
         let sql = "INSERT INTO tBas_CustPriceTac (CustID, BrandID, PLID) VALUES (@p1, @p2, @p3)";
-        conn.execute(sql, &[
-            &body.CustID.as_str(),
-            &body.BrandID.as_str(),
-            &plid,
-        ]).await?;
+        conn.execute(sql, &[&body.CustID.as_str(), &body.BrandID.as_str(), &plid])
+            .await?;
     }
 
     Ok(Json(ApiResponse::msg("客户定价保存成功")))

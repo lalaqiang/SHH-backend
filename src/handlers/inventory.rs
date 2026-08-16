@@ -1,13 +1,13 @@
-use axum::{extract::State, Json, Extension};
-use serde::Deserialize;
-use tiberius::Row;
+use super::base_data::row_to_json;
 use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::{AppError, Result};
-use crate::utils::{ApiResponse, build_pagination_sql_with_sort, row_get_f64};
-use super::base_data::{try_get_value, row_to_json};
 use crate::handlers::approval::Conn as StockConn;
 use crate::middleware::auth::Claims;
+use crate::utils::{ApiResponse, build_pagination_sql_with_sort, row_get_f64};
+use axum::{Extension, Json, extract::State};
+use serde::Deserialize;
+use tiberius::Row;
 
 #[derive(Deserialize)]
 pub struct PaginationParams {
@@ -21,15 +21,14 @@ pub struct PaginationParams {
 const ZERO_UUID: &str = "00000000-0000-0000-0000-000000000000";
 
 fn json_str(v: &serde_json::Value, key: &str) -> String {
-    v.get(key).and_then(|v| v.as_str()).unwrap_or("").to_string()
+    v.get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
 }
 
 fn json_f64(v: &serde_json::Value, key: &str) -> f64 {
     v.get(key).and_then(|v| v.as_f64()).unwrap_or(0.0)
-}
-
-fn json_i32(v: &serde_json::Value, key: &str) -> i32 {
-    v.get(key).and_then(|v| v.as_i64()).unwrap_or(0) as i32
 }
 
 fn empty_or_zero(s: &str) -> &str {
@@ -58,14 +57,37 @@ pub async fn get_io_list(
         }
     }
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
-    let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, params.sort_prop.as_deref(), params.sort_order.as_deref());
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let paginated_sql = build_pagination_sql_with_sort(
+        &base_query,
+        page,
+        page_size,
+        params.sort_prop.as_deref(),
+        params.sort_order.as_deref(),
+    );
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
     let mut total: i32 = 0;
-    if let Some(row) = conn.query(&count_sql, &param_refs).await?.into_row().await? {
+    if let Some(row) = conn
+        .query(&count_sql, &param_refs)
+        .await?
+        .into_row()
+        .await?
+    {
         total = row.get::<i32, _>("cnt").unwrap_or(0);
     }
-    let rows: Vec<Row> = conn.query(&paginated_sql, &param_refs).await?.into_first_result().await?;
-    Ok(Json(ApiResponse::ok_paginated(rows.iter().map(row_to_json).collect(), total as u64, page, page_size)))
+    let rows: Vec<Row> = conn
+        .query(&paginated_sql, &param_refs)
+        .await?
+        .into_first_result()
+        .await?;
+    Ok(Json(ApiResponse::ok_paginated(
+        rows.iter().map(row_to_json).collect(),
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 // ============== POID/SOID 上游单据校验 ==============
@@ -90,7 +112,9 @@ pub async fn validate_upstream_po(
     let row = row_opt.ok_or_else(|| AppError::BadRequest("采购订单不存在".to_string()))?;
     let state = row.get::<&str, _>("State").unwrap_or("").to_string();
     if state == "D" || state == "C" {
-        return Err(AppError::BadRequest("该采购订单已作废，无法入库".to_string()));
+        return Err(AppError::BadRequest(
+            "该采购订单已作废，无法入库".to_string(),
+        ));
     }
     let po_qty = row_get_f64(&row, "Q");
     // 2) 累计已入库数量（只算已审核/已确认的 PD 采购入库）
@@ -99,14 +123,15 @@ pub async fn validate_upstream_po(
                 FROM tStk_IODetail d \
                 INNER JOIN tStk_IO io ON io.IOID = d.IOID \
                 WHERE io.POID = @p1 AND io.Kind = 'PD' AND io.State IN ('S', 'Y')";
-    let row2_opt = conn.query(sql2, &[&poid]).await
+    let row2_opt = conn
+        .query(sql2, &[&poid])
+        .await
         .map_err(|e| AppError::Internal(format!("查 PO 累计入库失败: {}", e)))?
-        .into_row().await
+        .into_row()
+        .await
         .ok()
         .flatten();
-    let already_in: f64 = row2_opt
-        .map(|r| row_get_f64(&r, "TotalIn"))
-        .unwrap_or(0.0);
+    let already_in: f64 = row2_opt.map(|r| row_get_f64(&r, "TotalIn")).unwrap_or(0.0);
     if already_in + current_qty > po_qty + 0.0001 {
         return Err(AppError::BadRequest(format!(
             "超量入库：PO数量={} 已入库={} 本次={}",
@@ -137,7 +162,9 @@ pub async fn validate_upstream_so(
     let row = row_opt.ok_or_else(|| AppError::BadRequest("销售订单不存在".to_string()))?;
     let state = row.get::<&str, _>("State").unwrap_or("").to_string();
     if state == "D" || state == "C" {
-        return Err(AppError::BadRequest("该销售订单已作废，无法出库".to_string()));
+        return Err(AppError::BadRequest(
+            "该销售订单已作废，无法出库".to_string(),
+        ));
     }
     let so_qty = row_get_f64(&row, "Q");
     // 2) 累计净出库数量 = SD/SI/POS 出库 - SR 退货（只算已审核/已确认）
@@ -147,14 +174,15 @@ pub async fn validate_upstream_so(
                 FROM tStk_IODetail d \
                 INNER JOIN tStk_IO io ON io.IOID = d.IOID \
                 WHERE io.SOID = @p1 AND io.Kind IN ('SD','SI','POS','SR') AND io.State IN ('S', 'Y')";
-    let row2_opt = conn.query(sql2, &[&soid]).await
+    let row2_opt = conn
+        .query(sql2, &[&soid])
+        .await
         .map_err(|e| AppError::Internal(format!("查 SO 累计出库失败: {}", e)))?
-        .into_row().await
+        .into_row()
+        .await
         .ok()
         .flatten();
-    let already_out: f64 = row2_opt
-        .map(|r| row_get_f64(&r, "TotalOut"))
-        .unwrap_or(0.0);
+    let already_out: f64 = row2_opt.map(|r| row_get_f64(&r, "TotalOut")).unwrap_or(0.0);
     if already_out + current_qty > so_qty + 0.0001 {
         return Err(AppError::BadRequest(format!(
             "超量出库：SO数量={} 已出库={} 本次={}",
@@ -186,7 +214,9 @@ pub async fn create_io(
     }
     let kind = json_str(d, "Kind");
     if kind.is_empty() {
-        return Ok(Json(ApiResponse::err("Kind 必填（PD/PR/SD/SR/SI/POS/RI/O/REQ/OTO/OTI/DBO/DBI/TH/DB/ZP/OT/ADJ）")));
+        return Ok(Json(ApiResponse::err(
+            "Kind 必填（PD/PR/SD/SR/SI/POS/RI/O/REQ/OTO/OTI/DBO/DBI/TH/DB/ZP/OT/ADJ）",
+        )));
     }
     let stk_id = json_str(d, "StkID");
     if stk_id.is_empty() {
@@ -198,7 +228,11 @@ pub async fn create_io(
     // EmpID 优先取前端传入；为空时回退到当前登录用户（claims.emp_id）
     let emp_uuid = {
         let e = json_str(d, "EmpID");
-        if e.is_empty() { claims.emp_id.clone() } else { e }
+        if e.is_empty() {
+            claims.emp_id.clone()
+        } else {
+            e
+        }
     };
     let dept_uuid = empty_or_zero(&json_str(d, "DeptID")).to_string();
     let dea_uuid = empty_or_zero(&json_str(d, "DeaTypeID")).to_string();
@@ -206,14 +240,22 @@ pub async fn create_io(
     let so_uuid = empty_or_zero(&json_str(d, "SOID")).to_string();
     let btp_uuid = empty_or_zero(&json_str(d, "BTPID")).to_string();
     let us_uuid = empty_or_zero(&json_str(d, "USID")).to_string();
-    let total_amt: f64 = params.details.iter().map(|x| json_f64(x, "Amt").max(json_f64(x, "Qty") * json_f64(x, "Price"))).sum();
+    let total_amt: f64 = params
+        .details
+        .iter()
+        .map(|x| json_f64(x, "Amt").max(json_f64(x, "Qty") * json_f64(x, "Price")))
+        .sum();
     let total_qty: f64 = params.details.iter().map(|x| json_f64(x, "Qty")).sum();
     let total_camt: f64 = params.details.iter().map(|x| json_f64(x, "CostAmt")).sum();
     let rsum_amt = json_f64(d, "RSumAmt");
     let disrate = json_f64(d, "DisRate");
     let downpay = json_f64(d, "DownPay");
     // TermDay 字段已从 INSERT 中移除（见下方 P5 修复注释）
-    let curr = if json_str(d, "CurrCode").is_empty() { "CNY".to_string() } else { json_str(d, "CurrCode") };
+    let curr = if json_str(d, "CurrCode").is_empty() {
+        "CNY".to_string()
+    } else {
+        json_str(d, "CurrCode")
+    };
     let remark = json_str(d, "Remark");
     let draft_state: &str = crate::handlers::doc_state::STATE_NEW;
 
@@ -291,7 +333,9 @@ pub async fn create_io(
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
         return Ok(Json(ApiResponse::err(&format!("入出库单保存失败: {}", e))));
     }
-    Ok(Json(ApiResponse::ok(serde_json::json!({ "IONo": io_no, "IOID": ioid_out }))))
+    Ok(Json(ApiResponse::ok(
+        serde_json::json!({ "IONo": io_no, "IOID": ioid_out }),
+    )))
 }
 
 #[derive(Deserialize)]
@@ -313,15 +357,27 @@ pub async fn update_io(
     }
     // 状态校验：仅 N/E 允许修改，避免已审核（S/Y/C）单据被破坏性更新
     let state_sql = "SELECT ISNULL(State,'') AS S FROM tStk_IO WHERE IOID = @p1";
-    let state = match conn.query(state_sql, &[&params.ioid]).await?.into_row().await? {
+    let state = match conn
+        .query(state_sql, &[&params.ioid])
+        .await?
+        .into_row()
+        .await?
+    {
         Some(r) => r.get::<&str, _>("S").unwrap_or("").to_string(),
         None => return Ok(Json(ApiResponse::err("单据不存在"))),
     };
     if !matches!(state.as_str(), "N" | "E") {
-        return Ok(Json(ApiResponse::err(&format!("当前状态({})不允许修改，请先反审", state))));
+        return Ok(Json(ApiResponse::err(&format!(
+            "当前状态({})不允许修改，请先反审",
+            state
+        ))));
     }
     let stk_id = json_str(d, "StkID");
-    let total_amt: f64 = params.details.iter().map(|x| json_f64(x, "Amt").max(json_f64(x, "Qty") * json_f64(x, "Price"))).sum();
+    let total_amt: f64 = params
+        .details
+        .iter()
+        .map(|x| json_f64(x, "Amt").max(json_f64(x, "Qty") * json_f64(x, "Price")))
+        .sum();
     let total_qty: f64 = params.details.iter().map(|x| json_f64(x, "Qty")).sum();
     let remark = json_str(d, "Remark");
 
@@ -378,14 +434,37 @@ pub async fn get_move_list(
         }
     }
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
-    let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, params.sort_prop.as_deref(), params.sort_order.as_deref());
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let paginated_sql = build_pagination_sql_with_sort(
+        &base_query,
+        page,
+        page_size,
+        params.sort_prop.as_deref(),
+        params.sort_order.as_deref(),
+    );
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
     let mut total: i32 = 0;
-    if let Some(row) = conn.query(&count_sql, &param_refs).await?.into_row().await? {
+    if let Some(row) = conn
+        .query(&count_sql, &param_refs)
+        .await?
+        .into_row()
+        .await?
+    {
         total = row.get::<i32, _>("cnt").unwrap_or(0);
     }
-    let rows: Vec<Row> = conn.query(&paginated_sql, &param_refs).await?.into_first_result().await?;
-    Ok(Json(ApiResponse::ok_paginated(rows.iter().map(row_to_json).collect(), total as u64, page, page_size)))
+    let rows: Vec<Row> = conn
+        .query(&paginated_sql, &param_refs)
+        .await?
+        .into_first_result()
+        .await?;
+    Ok(Json(ApiResponse::ok_paginated(
+        rows.iter().map(row_to_json).collect(),
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 #[derive(Deserialize)]
@@ -409,7 +488,9 @@ pub async fn create_move(
         return Ok(Json(ApiResponse::err("MoveNO 不能为空")));
     }
     let kind = json_str(d, "Kind");
-    if kind.is_empty() { return Ok(Json(ApiResponse::err("Kind 必填（DB/TH/ZP）"))); }
+    if kind.is_empty() {
+        return Ok(Json(ApiResponse::err("Kind 必填（DB/TH/ZP）")));
+    }
     let from_stk = json_str(d, "FromStkID");
     let to_stk = json_str(d, "ToStkID");
     if from_stk.is_empty() || to_stk.is_empty() {
@@ -419,10 +500,17 @@ pub async fn create_move(
     // EmpID 优先取前端传入；为空时回退到当前登录用户（claims.emp_id）
     let emp_uuid = {
         let e = json_str(d, "EmpID");
-        if e.is_empty() { claims.emp_id.clone() } else { e }
+        if e.is_empty() {
+            claims.emp_id.clone()
+        } else {
+            e
+        }
     };
-    let total_amt: f64 = params.details.iter().map(|x| json_f64(x, "Amt").max(json_f64(x, "Qty") * json_f64(x, "Price"))).sum();
-    let remark = json_str(d, "Remark");
+    let total_amt: f64 = params
+        .details
+        .iter()
+        .map(|x| json_f64(x, "Amt").max(json_f64(x, "Qty") * json_f64(x, "Price")))
+        .sum();
     let draft_state: &str = crate::handlers::doc_state::STATE_NEW;
 
     // 事务包裹：INSERT 主表 + INSERT 明细 + 库存快照回填 原子化
@@ -474,7 +562,9 @@ pub async fn create_move(
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
         return Ok(Json(ApiResponse::err(&format!("调拨单保存失败: {}", e))));
     }
-    Ok(Json(ApiResponse::ok(serde_json::json!({ "MoveNO": move_no, "MoveID": moveid_out }))))
+    Ok(Json(ApiResponse::ok(
+        serde_json::json!({ "MoveNO": move_no, "MoveID": moveid_out }),
+    )))
 }
 
 #[derive(Deserialize)]
@@ -496,16 +586,28 @@ pub async fn update_move(
     }
     // 状态校验：仅 N/E 允许修改
     let state_sql = "SELECT ISNULL(State,'') AS S FROM tStk_Move WHERE MoveID = @p1";
-    let state = match conn.query(state_sql, &[&params.moveid]).await?.into_row().await? {
+    let state = match conn
+        .query(state_sql, &[&params.moveid])
+        .await?
+        .into_row()
+        .await?
+    {
         Some(r) => r.get::<&str, _>("S").unwrap_or("").to_string(),
         None => return Ok(Json(ApiResponse::err("单据不存在"))),
     };
     if !matches!(state.as_str(), "N" | "E") {
-        return Ok(Json(ApiResponse::err(&format!("当前状态({})不允许修改，请先反审", state))));
+        return Ok(Json(ApiResponse::err(&format!(
+            "当前状态({})不允许修改，请先反审",
+            state
+        ))));
     }
     let from_stk = json_str(d, "FromStkID");
     let to_stk = json_str(d, "ToStkID");
-    let total_amt: f64 = params.details.iter().map(|x| json_f64(x, "Amt").max(json_f64(x, "Qty") * json_f64(x, "Price"))).sum();
+    let total_amt: f64 = params
+        .details
+        .iter()
+        .map(|x| json_f64(x, "Amt").max(json_f64(x, "Qty") * json_f64(x, "Price")))
+        .sum();
     let remark = json_str(d, "Remark");
     // 事务包裹：UPDATE 主表 + DELETE 旧明细 + INSERT 新明细 原子化
     let tx_result: std::result::Result<(), String> = async {
@@ -562,14 +664,37 @@ pub async fn get_check_list(
         }
     }
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
-    let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, params.sort_prop.as_deref(), params.sort_order.as_deref());
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let paginated_sql = build_pagination_sql_with_sort(
+        &base_query,
+        page,
+        page_size,
+        params.sort_prop.as_deref(),
+        params.sort_order.as_deref(),
+    );
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
     let mut total: i32 = 0;
-    if let Some(row) = conn.query(&count_sql, &param_refs).await?.into_row().await? {
+    if let Some(row) = conn
+        .query(&count_sql, &param_refs)
+        .await?
+        .into_row()
+        .await?
+    {
         total = row.get::<i32, _>("cnt").unwrap_or(0);
     }
-    let rows: Vec<Row> = conn.query(&paginated_sql, &param_refs).await?.into_first_result().await?;
-    Ok(Json(ApiResponse::ok_paginated(rows.iter().map(row_to_json).collect(), total as u64, page, page_size)))
+    let rows: Vec<Row> = conn
+        .query(&paginated_sql, &param_refs)
+        .await?
+        .into_first_result()
+        .await?;
+    Ok(Json(ApiResponse::ok_paginated(
+        rows.iter().map(row_to_json).collect(),
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 #[derive(Deserialize)]
@@ -596,7 +721,11 @@ pub async fn create_check(
     // EmpID 优先取前端传入；为空时回退到当前登录用户（claims.emp_id）
     let emp_uuid = {
         let e = json_str(d, "EmpID");
-        if e.is_empty() { claims.emp_id.clone() } else { e }
+        if e.is_empty() {
+            claims.emp_id.clone()
+        } else {
+            e
+        }
     };
     let stk_id = json_str(d, "StkID");
     let dt = now();
@@ -651,7 +780,9 @@ pub async fn create_check(
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
         return Ok(Json(ApiResponse::err(&format!("盘点单保存失败: {}", e))));
     }
-    Ok(Json(ApiResponse::ok(serde_json::json!({ "TranNo": tran_no, "TranID": tranid_out }))))
+    Ok(Json(ApiResponse::ok(
+        serde_json::json!({ "TranNo": tran_no, "TranID": tranid_out }),
+    )))
 }
 
 // ============== 补货申请 ==============
@@ -671,14 +802,37 @@ pub async fn get_replenish_list(
         }
     }
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
-    let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, params.sort_prop.as_deref(), params.sort_order.as_deref());
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let paginated_sql = build_pagination_sql_with_sort(
+        &base_query,
+        page,
+        page_size,
+        params.sort_prop.as_deref(),
+        params.sort_order.as_deref(),
+    );
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
     let mut total: i32 = 0;
-    if let Some(row) = conn.query(&count_sql, &param_refs).await?.into_row().await? {
+    if let Some(row) = conn
+        .query(&count_sql, &param_refs)
+        .await?
+        .into_row()
+        .await?
+    {
         total = row.get::<i32, _>("cnt").unwrap_or(0);
     }
-    let rows: Vec<Row> = conn.query(&paginated_sql, &param_refs).await?.into_first_result().await?;
-    Ok(Json(ApiResponse::ok_paginated(rows.iter().map(row_to_json).collect(), total as u64, page, page_size)))
+    let rows: Vec<Row> = conn
+        .query(&paginated_sql, &param_refs)
+        .await?
+        .into_first_result()
+        .await?;
+    Ok(Json(ApiResponse::ok_paginated(
+        rows.iter().map(row_to_json).collect(),
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 #[derive(Deserialize)]
@@ -699,17 +853,26 @@ pub async fn create_replenish(
         return Ok(Json(ApiResponse::err("ReplenishApplyNo 不能为空")));
     }
     let stk_id = json_str(d, "StkID");
-    let kind = if json_str(d, "Kind").is_empty() { "RP".to_string() } else { json_str(d, "Kind") };
+    let kind = if json_str(d, "Kind").is_empty() {
+        "RP".to_string()
+    } else {
+        json_str(d, "Kind")
+    };
     // EmpID 优先取前端传入；为空时回退到当前登录用户（claims.emp_id）
     let emp_uuid = {
         let e = json_str(d, "EmpID");
-        if e.is_empty() { claims.emp_id.clone() } else { e }
+        if e.is_empty() {
+            claims.emp_id.clone()
+        } else {
+            e
+        }
     };
     let end_date = json_str(d, "EndDate");
     let end_dt: chrono::NaiveDateTime = if end_date.is_empty() {
         now() + chrono::Duration::days(7)
     } else {
-        chrono::NaiveDateTime::parse_from_str(&end_date, "%Y-%m-%d %H:%M:%S").unwrap_or_else(|_| now() + chrono::Duration::days(7))
+        chrono::NaiveDateTime::parse_from_str(&end_date, "%Y-%m-%d %H:%M:%S")
+            .unwrap_or_else(|_| now() + chrono::Duration::days(7))
     };
     let dt = now();
     let draft_state: &str = crate::handlers::doc_state::STATE_NEW;
@@ -759,7 +922,9 @@ pub async fn create_replenish(
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
         return Ok(Json(ApiResponse::err(&format!("补货申请保存失败: {}", e))));
     }
-    Ok(Json(ApiResponse::ok(serde_json::json!({ "ReplenishApplyNo": apply_no, "ReplenishApplyID": apply_id_out }))))
+    Ok(Json(ApiResponse::ok(
+        serde_json::json!({ "ReplenishApplyNo": apply_no, "ReplenishApplyID": apply_id_out }),
+    )))
 }
 
 // ============== 库存预警 ==============
@@ -774,19 +939,19 @@ pub struct LowStockItem {
     pub UnitNO: String,
     pub StkID: String,
     pub StkName: String,
-    pub QQty: f64,         // 当前在库可用量
-    pub Qty: f64,          // 账面总库存
-    pub BttomStkQty: f64,  // 安全库存下限
-    pub TopStkQty: f64,    // 安全库存上限
-    pub SuggestQty: f64,   // 建议补货量
-    pub AlertLevel: String,// 严重等级: 紧急(QQty=0) / 警告(QQty<50%下限) / 提醒(QQty<下限)
+    pub QQty: f64,          // 当前在库可用量
+    pub Qty: f64,           // 账面总库存
+    pub BttomStkQty: f64,   // 安全库存下限
+    pub TopStkQty: f64,     // 安全库存上限
+    pub SuggestQty: f64,    // 建议补货量
+    pub AlertLevel: String, // 严重等级: 紧急(QQty=0) / 警告(QQty<50%下限) / 提醒(QQty<下限)
 }
 
 #[derive(serde::Serialize)]
 pub struct LowStockAlertResult {
     pub total: i32,
-    pub critical: i32,    // QQty = 0
-    pub warning: i32,     // QQty < 50% BttomStkQty
+    pub critical: i32, // QQty = 0
+    pub warning: i32,  // QQty < 50% BttomStkQty
     pub items: Vec<LowStockItem>,
 }
 
@@ -798,8 +963,15 @@ pub async fn low_stock_alert(
     Json(params): Json<serde_json::Value>,
 ) -> Result<Json<ApiResponse<LowStockAlertResult>>> {
     let mut conn = get_pool().get().await?;
-    let stk_id = params.get("stk_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let only_active = params.get("only_active").and_then(|v| v.as_bool()).unwrap_or(true);
+    let stk_id = params
+        .get("stk_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let only_active = params
+        .get("only_active")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
 
     // SQL：JOIN 库存 + 商品表 + 仓库表，过滤掉停用商品
     let sql = r#"
@@ -826,9 +998,12 @@ pub async fn low_stock_alert(
     "#;
     let stk_id_param: &str = &stk_id;
     let active_filter: i32 = if only_active { 1 } else { 0 };
-    let rows = conn.query(sql, &[&stk_id_param, &active_filter]).await
+    let rows = conn
+        .query(sql, &[&stk_id_param, &active_filter])
+        .await
         .map_err(|e| AppError::Internal(format!("查预警失败: {}", e)))?
-        .into_first_result().await
+        .into_first_result()
+        .await
         .unwrap_or_default();
 
     let mut items: Vec<LowStockItem> = Vec::new();
@@ -841,14 +1016,30 @@ pub async fn low_stock_alert(
         let unitno = r.get::<&str, _>("UnitNO").unwrap_or("").to_string();
         let stkid = r.get::<&str, _>("StkID").unwrap_or("").to_string();
         let stkname = r.get::<&str, _>("StkName").unwrap_or("").to_string();
-        let qqty: f64 = r.get::<&str, _>("QQty").unwrap_or("0").parse().unwrap_or(0.0);
+        let qqty: f64 = r
+            .get::<&str, _>("QQty")
+            .unwrap_or("0")
+            .parse()
+            .unwrap_or(0.0);
         let qty: f64 = r.get::<&str, _>("Q").unwrap_or("0").parse().unwrap_or(0.0);
-        let bsq: f64 = r.get::<&str, _>("BSQ").unwrap_or("0").parse().unwrap_or(0.0);
-        let tsq: f64 = r.get::<&str, _>("TSQ").unwrap_or("0").parse().unwrap_or(0.0);
+        let bsq: f64 = r
+            .get::<&str, _>("BSQ")
+            .unwrap_or("0")
+            .parse()
+            .unwrap_or(0.0);
+        let tsq: f64 = r
+            .get::<&str, _>("TSQ")
+            .unwrap_or("0")
+            .parse()
+            .unwrap_or(0.0);
         // 建议补货量：补到 TopStkQty（如有），否则补到 BttomStkQty*2
-        let suggest = if tsq > 0.0 { (tsq - qqty).max(0.0) }
-                      else if bsq > 0.0 { (bsq * 2.0 - qqty).max(0.0) }
-                      else { 0.0 };
+        let suggest = if tsq > 0.0 {
+            (tsq - qqty).max(0.0)
+        } else if bsq > 0.0 {
+            (bsq * 2.0 - qqty).max(0.0)
+        } else {
+            0.0
+        };
         // 严重等级
         let level: &str;
         if qqty <= 0.0001 {
@@ -861,9 +1052,16 @@ pub async fn low_stock_alert(
             level = "提醒";
         }
         items.push(LowStockItem {
-            GDSID: gdsid, GDSNO: gdsno, GDSDesc: gdsdesc,
-            UnitNO: unitno, StkID: stkid, StkName: stkname,
-            QQty: qqty, Qty: qty, BttomStkQty: bsq, TopStkQty: tsq,
+            GDSID: gdsid,
+            GDSNO: gdsno,
+            GDSDesc: gdsdesc,
+            UnitNO: unitno,
+            StkID: stkid,
+            StkName: stkname,
+            QQty: qqty,
+            Qty: qty,
+            BttomStkQty: bsq,
+            TopStkQty: tsq,
             SuggestQty: suggest,
             AlertLevel: level.to_string(),
         });
@@ -910,8 +1108,8 @@ pub async fn replenish_from_alert(
     State(_config): State<Config>,
     Json(params): Json<ReplenishFromAlertRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
-    use crate::utils::doc_no::generate_via_docnoseq;
     use crate::services::inventory_ledger::{begin_tran, commit_tran, rollback_tran};
+    use crate::utils::doc_no::generate_via_docnoseq;
     use std::collections::BTreeMap;
 
     let mut conn = get_pool().get().await?;
@@ -940,38 +1138,50 @@ pub async fn replenish_from_alert(
               AND g.GDSStateNO IN (1, 2)
               AND (g.GDSID IS NOT NULL AND g.GDSID <> '00000000-0000-0000-0000-000000000000')
         "#;
-        let rows = conn.query(sql, &[]).await
+        let rows = conn
+            .query(sql, &[])
+            .await
             .map_err(|e| AppError::Internal(format!("查预警失败: {}", e)))?
-            .into_first_result().await
+            .into_first_result()
+            .await
             .unwrap_or_default();
-        rows.iter().filter_map(|r| {
-            let top = r.get::<f64, _>("TopStkQty").unwrap_or(0.0);
-            let qty = r.get::<f64, _>("Qty").unwrap_or(0.0);
-            let pack = r.get::<f64, _>("PackCnvQty").unwrap_or(0.0);
-            let raw = (top - qty).max(0.0);
-            if raw <= 0.0 { return None; }
-            // 整件取整：ceil(raw / pack) * pack
-            let apply_qty = if pack > 1.0 {
-                (raw / pack).ceil() * pack
-            } else {
-                raw
-            };
-            Some(AlertItem {
-                GDSID: r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
-                StkID: r.get::<&str, _>("StkID").unwrap_or("").to_string(),
-                SuppID: Some(r.get::<&str, _>("SuppID").unwrap_or(ZERO_UUID).to_string()),
-                UnitNO: Some(r.get::<&str, _>("UnitNO").unwrap_or("").to_string()),
-                ApplyQty: Some(apply_qty),
+        rows.iter()
+            .filter_map(|r| {
+                let top = r.get::<f64, _>("TopStkQty").unwrap_or(0.0);
+                let qty = r.get::<f64, _>("Qty").unwrap_or(0.0);
+                let pack = r.get::<f64, _>("PackCnvQty").unwrap_or(0.0);
+                let raw = (top - qty).max(0.0);
+                if raw <= 0.0 {
+                    return None;
+                }
+                // 整件取整：ceil(raw / pack) * pack
+                let apply_qty = if pack > 1.0 {
+                    (raw / pack).ceil() * pack
+                } else {
+                    raw
+                };
+                Some(AlertItem {
+                    GDSID: r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
+                    StkID: r.get::<&str, _>("StkID").unwrap_or("").to_string(),
+                    SuppID: Some(r.get::<&str, _>("SuppID").unwrap_or(ZERO_UUID).to_string()),
+                    UnitNO: Some(r.get::<&str, _>("UnitNO").unwrap_or("").to_string()),
+                    ApplyQty: Some(apply_qty),
+                })
             })
-        }).collect()
+            .collect()
     };
     if items.is_empty() {
         return Ok(Json(ApiResponse::err("无预警项需要转采购订单")));
     }
     // 过滤掉 GDSID/StkID 为空或 zero-uuid 的脏数据
-    let valid_items: Vec<AlertItem> = items.into_iter()
-        .filter(|i| !i.GDSID.is_empty() && !i.StkID.is_empty()
-            && i.GDSID != ZERO_UUID && i.StkID != ZERO_UUID)
+    let valid_items: Vec<AlertItem> = items
+        .into_iter()
+        .filter(|i| {
+            !i.GDSID.is_empty()
+                && !i.StkID.is_empty()
+                && i.GDSID != ZERO_UUID
+                && i.StkID != ZERO_UUID
+        })
         .collect();
     if valid_items.is_empty() {
         return Ok(Json(ApiResponse::err("所有项都缺少 GDSID/StkID，无法生成")));
@@ -980,9 +1190,15 @@ pub async fn replenish_from_alert(
     // 2) 查询商品补充信息（SuppID, AInPrice, GDSNO, GDSDesc, BarCode, PackCnvQty）
     //    一次查所有商品，避免逐行查询
     let gds_ids: Vec<String> = valid_items.iter().map(|i| i.GDSID.clone()).collect();
-    let mut goods_info: std::collections::HashMap<String, (String, String, String, String, f64, f64, String)> = Default::default();
+    let mut goods_info: std::collections::HashMap<
+        String,
+        (String, String, String, String, f64, f64, String),
+    > = Default::default();
     {
-        let placeholders = (0..gds_ids.len()).map(|i| format!("@P{}", i + 1)).collect::<Vec<_>>().join(",");
+        let placeholders = (0..gds_ids.len())
+            .map(|i| format!("@P{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(",");
         let sql = format!(
             "SELECT CAST(GDSID AS NVARCHAR(40)) AS GDSID, ISNULL(GDSNO,'') AS GDSNO, \
              ISNULL(GDSDesc,'') AS GDSDesc, ISNULL(BarCode,'') AS BarCode, \
@@ -995,7 +1211,8 @@ pub async fn replenish_from_alert(
         //   原代码 gds_id_refs.iter().map(|s| ...) 中 s 是 &&str，作为 &dyn ToSql 传给
         //   tiberius 时被当作指针地址而非字符串值，导致 WHERE GDSID IN(...) 匹配不到任何行
         //   ★ 注意：&String 通过 deref coercion 转换为 &str，tiberius 能正确识别
-        let params: Vec<&dyn tiberius::ToSql> = gds_ids.iter().map(|s| s as &dyn tiberius::ToSql).collect();
+        let params: Vec<&dyn tiberius::ToSql> =
+            gds_ids.iter().map(|s| s as &dyn tiberius::ToSql).collect();
         match conn.query(&sql, &params).await {
             Ok(rows) => {
                 if let Ok(result) = rows.into_first_result().await {
@@ -1003,13 +1220,27 @@ pub async fn replenish_from_alert(
                         // ★ GDSID 统一转小写：SQL Server CAST(uniqueidentifier AS NVARCHAR) 返回大写，
                         //   而 uuid::Uuid::to_string() 返回小写，HashMap key 区分大小写会导致查不到
                         let gid = r.get::<&str, _>("GDSID").unwrap_or("").to_lowercase();
-                        let supp_id = r.get::<&str, _>("SuppID").unwrap_or(ZERO_UUID).to_lowercase();
+                        let supp_id = r
+                            .get::<&str, _>("SuppID")
+                            .unwrap_or(ZERO_UUID)
+                            .to_lowercase();
                         let gds_no = r.get::<&str, _>("GDSNO").unwrap_or("").to_string();
                         let gds_desc = r.get::<&str, _>("GDSDesc").unwrap_or("").to_string();
                         let barcode = r.get::<&str, _>("BarCode").unwrap_or("").to_string();
                         let ain_price = row_get_f64(&r, "AInPrice");
                         let pack_cnv = row_get_f64(&r, "PackCnvQty");
-                        goods_info.insert(gid, (supp_id, gds_no, gds_desc, barcode, ain_price, pack_cnv, String::new()));
+                        goods_info.insert(
+                            gid,
+                            (
+                                supp_id,
+                                gds_no,
+                                gds_desc,
+                                barcode,
+                                ain_price,
+                                pack_cnv,
+                                String::new(),
+                            ),
+                        );
                     }
                 }
             }
@@ -1029,7 +1260,10 @@ pub async fn replenish_from_alert(
         let p: Vec<&dyn tiberius::ToSql> = vec![&item.GDSID, &item.StkID];
         if let Ok(s) = conn.query(q, &p).await {
             if let Ok(Some(r)) = s.into_row().await {
-                stock_map.insert((item.GDSID.clone(), item.StkID.clone()), row_get_f64(&r, "Qty"));
+                stock_map.insert(
+                    (item.GDSID.clone(), item.StkID.clone()),
+                    row_get_f64(&r, "Qty"),
+                );
             }
         }
     }
@@ -1042,9 +1276,13 @@ pub async fn replenish_from_alert(
     for item in valid_items {
         let gid_lower = item.GDSID.to_lowercase();
         let info = goods_info.get(&gid_lower);
-        let goods_supp_id = info.map(|(s, _, _, _, _, _, _)| s.clone()).unwrap_or_else(|| ZERO_UUID.to_string());
+        let goods_supp_id = info
+            .map(|(s, _, _, _, _, _, _)| s.clone())
+            .unwrap_or_else(|| ZERO_UUID.to_string());
         // ★ 优先用前端传的 SuppID（非空且非 zero UUID 才用，统一转小写匹配 goods_info 中的 key）
-        let supp_id = item.SuppID.as_ref()
+        let supp_id = item
+            .SuppID
+            .as_ref()
             .map(|s| s.as_str())
             .filter(|s| !s.is_empty() && *s != ZERO_UUID)
             .map(|s| s.to_lowercase())
@@ -1056,30 +1294,72 @@ pub async fn replenish_from_alert(
     // 5) 每组生成一张采购订单
     let dt: chrono::NaiveDateTime = chrono::Local::now().naive_local();
     let draft_state: &str = crate::handlers::doc_state::STATE_NEW;
-    let euser = if claims.emp_id.is_empty() { ZERO_UUID.to_string() } else { claims.emp_id.clone() };
+    let euser = if claims.emp_id.is_empty() {
+        ZERO_UUID.to_string()
+    } else {
+        claims.emp_id.clone()
+    };
     let mut created_docs: Vec<serde_json::Value> = Vec::new();
 
     for ((supp_id, stk_id), group_items) in grouped {
         // 预计算明细数据 + 合计金额
         let mut total_amt: f64 = 0.0;
         // (GDSID, GDSNO, GDSDesc, BarCode, Qty, Price, Amt, PackCnvQty, UnitNO, StkQty)
-        let mut detail_data: Vec<(String, String, String, String, f64, f64, f64, f64, String, f64)> = Vec::new();
+        let mut detail_data: Vec<(
+            String,
+            String,
+            String,
+            String,
+            f64,
+            f64,
+            f64,
+            f64,
+            String,
+            f64,
+        )> = Vec::new();
         for item in &group_items {
             let qty = item.ApplyQty.unwrap_or(0.0);
-            if qty <= 0.0 { continue; }
+            if qty <= 0.0 {
+                continue;
+            }
             // ★ GDSID 转小写查找 goods_info（与插入时的大小写统一）
             let gid_lower = item.GDSID.to_lowercase();
             let info = goods_info.get(&gid_lower);
-            let default_info = (ZERO_UUID.to_string(), String::new(), String::new(), String::new(), 0.0, 0.0, String::new());
-            let (_, gds_no, gds_desc, barcode, ain_price, pack_cnv, _) = info.unwrap_or(&default_info);
+            let default_info = (
+                ZERO_UUID.to_string(),
+                String::new(),
+                String::new(),
+                String::new(),
+                0.0,
+                0.0,
+                String::new(),
+            );
+            let (_, gds_no, gds_desc, barcode, ain_price, pack_cnv, _) =
+                info.unwrap_or(&default_info);
             let price = *ain_price;
             let amt = qty * price;
             total_amt += amt;
             let unit = item.UnitNO.clone().unwrap_or_default();
-            let stk_qty = stock_map.get(&(item.GDSID.clone(), item.StkID.clone())).copied().unwrap_or(0.0);
-            detail_data.push((item.GDSID.clone(), gds_no.clone(), gds_desc.clone(), barcode.clone(), qty, price, amt, *pack_cnv, unit, stk_qty));
+            let stk_qty = stock_map
+                .get(&(item.GDSID.clone(), item.StkID.clone()))
+                .copied()
+                .unwrap_or(0.0);
+            detail_data.push((
+                item.GDSID.clone(),
+                gds_no.clone(),
+                gds_desc.clone(),
+                barcode.clone(),
+                qty,
+                price,
+                amt,
+                *pack_cnv,
+                unit,
+                stk_qty,
+            ));
         }
-        if detail_data.is_empty() { continue; }
+        if detail_data.is_empty() {
+            continue;
+        }
         let detail_count = detail_data.len();
 
         // 事务包裹：主表 + 明细 原子化，返回 (POID, PoNo) 或错误
@@ -1195,7 +1475,8 @@ pub async fn get_replenish_suggestions(
     // 默认（sort_prop 为空或 SuggestQty）：按来源优先级（both > shortage > alert）+ SuggestQty DESC
     //   ★ 来源优先级排序确保最紧急的"缺货+预警"行优先展示
     // 其他字段：按用户指定字段 + sort_order 排序
-    let order_clause = build_suggestion_order(params.sort_prop.as_deref(), params.sort_order.as_deref());
+    let order_clause =
+        build_suggestion_order(params.sort_prop.as_deref(), params.sort_order.as_deref());
 
     // 计算总数
     let count_sql = format!(
@@ -1280,7 +1561,11 @@ pub async fn get_replenish_suggestions(
 
     // 参数绑定
     let mut count_params: Vec<&dyn tiberius::ToSql> = Vec::new();
-    let kw_pattern = if !keyword.is_empty() { format!("%{}%", keyword) } else { String::new() };
+    let kw_pattern = if !keyword.is_empty() {
+        format!("%{}%", keyword)
+    } else {
+        String::new()
+    };
     let stk_param: &str = &stk_id;
     let supp_param: &str = &supp_id;
     let kw_param: &str = &kw_pattern;
@@ -1296,9 +1581,12 @@ pub async fn get_replenish_suggestions(
     }
 
     let total: i64 = {
-        let row = conn.query(&count_sql, &count_params).await
+        let row = conn
+            .query(&count_sql, &count_params)
+            .await
             .map_err(|e| AppError::Internal(format!("查补货建议总数失败: {}", e)))?
-            .into_row().await
+            .into_row()
+            .await
             .map_err(|e| AppError::Internal(format!("读取补货建议总数失败: {}", e)))?;
         row.and_then(|r| r.get::<i32, _>("cnt")).unwrap_or(0) as i64
     };
@@ -1397,60 +1685,77 @@ pub async fn get_replenish_suggestions(
         data_params.push(&supp_param);
     }
 
-    let rows = conn.query(&data_sql, &data_params).await
+    let rows = conn
+        .query(&data_sql, &data_params)
+        .await
         .map_err(|e| AppError::Internal(format!("查补货建议失败: {}", e)))?
-        .into_first_result().await
+        .into_first_result()
+        .await
         .map_err(|e| AppError::Internal(format!("读取补货建议失败: {}", e)))?;
 
-    let items: Vec<serde_json::Value> = rows.iter().map(|r| {
-        let source_type = r.try_get::<&str, _>("SourceType").ok().flatten().unwrap_or("alert");
-        serde_json::json!({
-            "GDSID": r.try_get::<&str, _>("GDSID").ok().flatten().unwrap_or(""),
-            "GDSNO": r.try_get::<&str, _>("GDSNO").ok().flatten().unwrap_or(""),
-            "GDSDesc": r.try_get::<&str, _>("GDSDesc").ok().flatten().unwrap_or(""),
-            "GDSSpec": r.try_get::<&str, _>("GDSSpec").ok().flatten().unwrap_or(""),
-            "BarCode": r.try_get::<&str, _>("BarCode").ok().flatten().unwrap_or(""),
-            "GDSStateNO": r.try_get::<i32, _>("GDSStateNO").ok().flatten().unwrap_or(0),
-            "GDSTypeName": r.try_get::<&str, _>("GDSTypeName").ok().flatten().unwrap_or(""),
-            "BrandName": r.try_get::<&str, _>("BrandName").ok().flatten().unwrap_or(""),
-            "SuppID": r.try_get::<&str, _>("SuppID").ok().flatten().unwrap_or(""),
-            "SuppName": r.try_get::<&str, _>("SuppName").ok().flatten().unwrap_or(""),
-            "UnitNO": r.try_get::<&str, _>("UnitNO").ok().flatten().unwrap_or(""),
-            "UnitName": r.try_get::<&str, _>("UnitName").ok().flatten().unwrap_or(""),
-            "PackCnvQty": row_get_f64(r, "PackCnvQty"),
-            "AInPrice": row_get_f64(r, "AInPrice"),
-            "TopStkQty": row_get_f64(r, "TopStkQty"),
-            "BttomStkQty": row_get_f64(r, "BttomStkQty"),
-            "StkID": r.try_get::<&str, _>("StkID").ok().flatten().unwrap_or(""),
-            "StkName": r.try_get::<&str, _>("StkName").ok().flatten().unwrap_or(""),
-            "ShortQty": row_get_f64(r, "ShortQty"),
-            "ShortAmt": row_get_f64(r, "ShortAmt"),
-            "LatestShortDate": r.try_get::<chrono::NaiveDateTime, _>("LatestShortDate")
-                .ok().flatten()
-                .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
-                .unwrap_or_default(),
-            "SampleDocNo": r.try_get::<&str, _>("SampleDocNo").ok().flatten().unwrap_or(""),
-            "ShortCount": r.try_get::<i32, _>("ShortCount").ok().flatten().unwrap_or(0),
-            "CurStockQty": row_get_f64(r, "CurStockQty"),
-            "CurAvailableQty": row_get_f64(r, "CurAvailableQty"),
-            "SuggestQty": row_get_f64(r, "SuggestQty"),
-            "SourceType": source_type,
-            "SuggestAmt": row_get_f64(r, "SuggestQty") * row_get_f64(r, "AInPrice"),
+    let items: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let source_type = r
+                .try_get::<&str, _>("SourceType")
+                .ok()
+                .flatten()
+                .unwrap_or("alert");
+            serde_json::json!({
+                "GDSID": r.try_get::<&str, _>("GDSID").ok().flatten().unwrap_or(""),
+                "GDSNO": r.try_get::<&str, _>("GDSNO").ok().flatten().unwrap_or(""),
+                "GDSDesc": r.try_get::<&str, _>("GDSDesc").ok().flatten().unwrap_or(""),
+                "GDSSpec": r.try_get::<&str, _>("GDSSpec").ok().flatten().unwrap_or(""),
+                "BarCode": r.try_get::<&str, _>("BarCode").ok().flatten().unwrap_or(""),
+                "GDSStateNO": r.try_get::<i32, _>("GDSStateNO").ok().flatten().unwrap_or(0),
+                "GDSTypeName": r.try_get::<&str, _>("GDSTypeName").ok().flatten().unwrap_or(""),
+                "BrandName": r.try_get::<&str, _>("BrandName").ok().flatten().unwrap_or(""),
+                "SuppID": r.try_get::<&str, _>("SuppID").ok().flatten().unwrap_or(""),
+                "SuppName": r.try_get::<&str, _>("SuppName").ok().flatten().unwrap_or(""),
+                "UnitNO": r.try_get::<&str, _>("UnitNO").ok().flatten().unwrap_or(""),
+                "UnitName": r.try_get::<&str, _>("UnitName").ok().flatten().unwrap_or(""),
+                "PackCnvQty": row_get_f64(r, "PackCnvQty"),
+                "AInPrice": row_get_f64(r, "AInPrice"),
+                "TopStkQty": row_get_f64(r, "TopStkQty"),
+                "BttomStkQty": row_get_f64(r, "BttomStkQty"),
+                "StkID": r.try_get::<&str, _>("StkID").ok().flatten().unwrap_or(""),
+                "StkName": r.try_get::<&str, _>("StkName").ok().flatten().unwrap_or(""),
+                "ShortQty": row_get_f64(r, "ShortQty"),
+                "ShortAmt": row_get_f64(r, "ShortAmt"),
+                "LatestShortDate": r.try_get::<chrono::NaiveDateTime, _>("LatestShortDate")
+                    .ok().flatten()
+                    .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+                    .unwrap_or_default(),
+                "SampleDocNo": r.try_get::<&str, _>("SampleDocNo").ok().flatten().unwrap_or(""),
+                "ShortCount": r.try_get::<i32, _>("ShortCount").ok().flatten().unwrap_or(0),
+                "CurStockQty": row_get_f64(r, "CurStockQty"),
+                "CurAvailableQty": row_get_f64(r, "CurAvailableQty"),
+                "SuggestQty": row_get_f64(r, "SuggestQty"),
+                "SourceType": source_type,
+                "SuggestAmt": row_get_f64(r, "SuggestQty") * row_get_f64(r, "AInPrice"),
+            })
         })
-    }).collect();
+        .collect();
 
     // 统计各来源数量
-    let shortage_count = items.iter().filter(|v| {
-        let st = v.get("SourceType").and_then(|s| s.as_str()).unwrap_or("");
-        st == "shortage" || st == "both"
-    }).count();
-    let alert_count = items.iter().filter(|v| {
-        let st = v.get("SourceType").and_then(|s| s.as_str()).unwrap_or("");
-        st == "alert" || st == "both"
-    }).count();
-    let both_count = items.iter().filter(|v| {
-        v.get("SourceType").and_then(|s| s.as_str()).unwrap_or("") == "both"
-    }).count();
+    let shortage_count = items
+        .iter()
+        .filter(|v| {
+            let st = v.get("SourceType").and_then(|s| s.as_str()).unwrap_or("");
+            st == "shortage" || st == "both"
+        })
+        .count();
+    let alert_count = items
+        .iter()
+        .filter(|v| {
+            let st = v.get("SourceType").and_then(|s| s.as_str()).unwrap_or("");
+            st == "alert" || st == "both"
+        })
+        .count();
+    let both_count = items
+        .iter()
+        .filter(|v| v.get("SourceType").and_then(|s| s.as_str()).unwrap_or("") == "both")
+        .count();
 
     Ok(Json(ApiResponse::ok(serde_json::json!({
         "items": items,
@@ -1481,7 +1786,6 @@ fn build_suggestion_where(keyword: &str, stk_id: &str, supp_id: &str, source_typ
     }
     if !supp_id.is_empty() {
         parts.push(format!("AND SuppID = @p{}", idx));
-        idx += 1;
     }
     // source_type 过滤
     match source_type {
@@ -1499,7 +1803,8 @@ fn build_suggestion_where(keyword: &str, stk_id: &str, supp_id: &str, source_typ
 /// - 其他字段：按白名单字段 + sort_order 排序
 ///   ★ 白名单防 SQL 注入；未知字段回退到默认排序
 fn build_suggestion_order(sort_prop: Option<&str>, sort_order: Option<&str>) -> String {
-    const DEFAULT_ORDER: &str = "CASE SourceType WHEN 'both' THEN 0 WHEN 'shortage' THEN 1 ELSE 2 END, SuggestQty DESC";
+    const DEFAULT_ORDER: &str =
+        "CASE SourceType WHEN 'both' THEN 0 WHEN 'shortage' THEN 1 ELSE 2 END, SuggestQty DESC";
 
     // 字段名 → SQL 排序表达式（SuggestAmt 在 CTE 里无对应列，用表达式替代）
     let allowed: &[(&str, &str)] = &[
@@ -1563,7 +1868,7 @@ pub async fn inventory_adjust(
     State(_config): State<Config>,
     Json(params): Json<InventoryAdjustRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
-    use crate::handlers::approval::{post_ledger, fill_detail_stock_snapshot};
+    use crate::handlers::approval::{fill_detail_stock_snapshot, post_ledger};
     use crate::services::inventory_ledger::{begin_tran, commit_tran, rollback_tran};
 
     if params.GDSID.is_empty() || params.StkID.is_empty() {
@@ -1583,7 +1888,11 @@ pub async fn inventory_adjust(
     let direction: f64 = if params.Qty >= 0.0 { 1.0 } else { -1.0 };
     let abs_qty = params.Qty.abs();
     // EUser/AUser 用当前登录用户（claims.emp_id），原硬编码 ZERO_UUID 违反审计规则
-    let euser = if claims.emp_id.is_empty() { ZERO_UUID.to_string() } else { claims.emp_id.clone() };
+    let euser = if claims.emp_id.is_empty() {
+        ZERO_UUID.to_string()
+    } else {
+        claims.emp_id.clone()
+    };
     let auser = euser.clone();
 
     // 主事务包裹：主表+明细+库存过账+状态更新，任一失败回滚
@@ -1675,7 +1984,8 @@ pub async fn inventory_adjust(
                 // new_qty 在 Ok 分支绑定，Err 分支不可见，需从消息解析
                 let current_qty = parse_current_qty_from_err(&e);
                 // 查询商品和仓库名称（事务已回滚，只读查询不影响数据）
-                let (gds_no, gds_name, stk_no, stk_name) = query_gds_stk_names(&mut conn, &params.GDSID, &params.StkID).await;
+                let (gds_no, gds_name, stk_no, stk_name) =
+                    query_gds_stk_names(&mut conn, &params.GDSID, &params.StkID).await;
                 let shortage = (abs_qty - current_qty).max(0.0);
                 let shortage_list = serde_json::json!([{
                     "row_no": 1,
@@ -1718,7 +2028,11 @@ fn parse_current_qty_from_err(e: &str) -> f64 {
 
 /// 查询商品编码/名称 + 仓库编码/名称（库存不足错误展示用）
 /// 失败时返回空字符串，不阻断错误响应
-async fn query_gds_stk_names(conn: &mut StockConn, gdsid: &str, stkid: &str) -> (String, String, String, String) {
+async fn query_gds_stk_names(
+    conn: &mut StockConn,
+    gdsid: &str,
+    stkid: &str,
+) -> (String, String, String, String) {
     let sql = "SELECT g.GDSNO, g.GDSDesc, s.StkNO, s.StkName \
                FROM tBas_Goods g LEFT JOIN tBas_Stock s ON '1'='1' \
                WHERE g.GDSID = @p1 AND s.StkID = @p2";
@@ -1740,8 +2054,8 @@ async fn query_gds_stk_names(conn: &mut StockConn, gdsid: &str, stkid: &str) -> 
 // ============== 月结（月末把上月 EndQty → 本月 InitQty）==============
 #[derive(Deserialize)]
 pub struct MonthSettleRequest {
-    pub from_ym: i32,  // 来源月份 YYYYMM，如 202605
-    pub to_ym: i32,    // 目标月份 YYYYMM，如 202606
+    pub from_ym: i32, // 来源月份 YYYYMM，如 202605
+    pub to_ym: i32,   // 目标月份 YYYYMM，如 202606
 }
 
 /// POST /api/inventory/month_settle
@@ -1764,7 +2078,10 @@ pub async fn month_settle(
     //   改为：通过 AtomicBool 标志位保证单实例串行执行
     //   多实例部署需要数据库 sp_getapplock 或 Redis 分布式锁（后续扩展）
     static MONTH_SETTLE_RUNNING: AtomicBool = AtomicBool::new(false);
-    if MONTH_SETTLE_RUNNING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+    if MONTH_SETTLE_RUNNING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
         return Ok(Json(ApiResponse::err_with_code(
             "月结操作正在执行中，请稍后重试（避免并发导致库存数据错乱）",
             "OPERATION_IN_PROGRESS",
@@ -1792,7 +2109,9 @@ pub async fn month_settle(
 
     // 简单校验
     if params.from_ym < 200001 || params.from_ym > 209912 {
-        return Ok(Json(ApiResponse::err("from_ym 格式应为 YYYYMM（如 202605）")));
+        return Ok(Json(ApiResponse::err(
+            "from_ym 格式应为 YYYYMM（如 202605）",
+        )));
     }
     if params.to_ym < 200001 || params.to_ym > 209912 {
         return Ok(Json(ApiResponse::err("to_ym 格式应为 YYYYMM（如 202606）")));
@@ -1804,11 +2123,20 @@ pub async fn month_settle(
     let rows = month_end_settle(&mut conn, params.from_ym, params.to_ym).await;
     if rows < 0 {
         // 失败也记录审计日志（便于排查）
-        let remark = format!("月结失败：from_ym={}, to_ym={}", params.from_ym, params.to_ym);
+        let remark = format!(
+            "月结失败：from_ym={}, to_ym={}",
+            params.from_ym, params.to_ym
+        );
         crate::services::inventory_ledger::record_oper(
-            &mut conn, "POST", "tStk_StockYM", "",
-            &claims.user_code, None, Some(&remark),
-        ).await;
+            &mut conn,
+            "POST",
+            "tStk_StockYM",
+            "",
+            &claims.user_code,
+            None,
+            Some(&remark),
+        )
+        .await;
         return Ok(Json(ApiResponse::err("月结执行失败，请检查数据库连接")));
     }
 
@@ -1818,9 +2146,15 @@ pub async fn month_settle(
         params.from_ym, params.to_ym, rows
     );
     crate::services::inventory_ledger::record_oper(
-        &mut conn, "POST", "tStk_StockYM", "",
-        &claims.user_code, None, Some(&remark),
-    ).await;
+        &mut conn,
+        "POST",
+        "tStk_StockYM",
+        "",
+        &claims.user_code,
+        None,
+        Some(&remark),
+    )
+    .await;
 
     Ok(Json(ApiResponse::ok(serde_json::json!({
         "from_ym": params.from_ym,
@@ -1831,8 +2165,8 @@ pub async fn month_settle(
 
 #[derive(Deserialize)]
 pub struct MonthSettleRollbackRequest {
-    pub to_ym: i32,    // 要回滚的目标月份 YYYYMM
-    pub force: Option<i32>,  // 0=安全模式（默认），1=强制回滚
+    pub to_ym: i32,         // 要回滚的目标月份 YYYYMM
+    pub force: Option<i32>, // 0=安全模式（默认），1=强制回滚
 }
 
 /// POST /api/inventory/month_settle_rollback
@@ -1851,7 +2185,10 @@ pub async fn month_settle_rollback(
 
     // P2-21：应用级互斥锁
     static ROLLBACK_RUNNING: AtomicBool = AtomicBool::new(false);
-    if ROLLBACK_RUNNING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+    if ROLLBACK_RUNNING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
         return Ok(Json(ApiResponse::err_with_code(
             "月结回滚操作正在执行中，请稍后重试",
             "OPERATION_IN_PROGRESS",
@@ -1888,21 +2225,53 @@ pub async fn month_settle_rollback(
 
     // 审计日志：记录月结回滚结果（成功/失败/拒绝）
     let (audit_remark, audit_success) = match ret {
-        -1 => (format!("月结回滚失败：参数错误 to_ym={}", params.to_ym), false),
-        -2 => (format!("月结回滚被拒：to_ym={} 已有业务活动（force={}）", params.to_ym, force), false),
-        -3 => (format!("月结回滚跳过：to_ym={} 无 StockYM 记录", params.to_ym), true),
-        n if n >= 0 => (format!("月结回滚成功：to_ym={}, force={}, 删除 {} 条记录", params.to_ym, force, n), true),
-        _ => (format!("月结回滚失败：to_ym={}, force={}, 未知错误 ret={}", params.to_ym, force, ret), false),
+        -1 => (
+            format!("月结回滚失败：参数错误 to_ym={}", params.to_ym),
+            false,
+        ),
+        -2 => (
+            format!(
+                "月结回滚被拒：to_ym={} 已有业务活动（force={}）",
+                params.to_ym, force
+            ),
+            false,
+        ),
+        -3 => (
+            format!("月结回滚跳过：to_ym={} 无 StockYM 记录", params.to_ym),
+            true,
+        ),
+        n if n >= 0 => (
+            format!(
+                "月结回滚成功：to_ym={}, force={}, 删除 {} 条记录",
+                params.to_ym, force, n
+            ),
+            true,
+        ),
+        _ => (
+            format!(
+                "月结回滚失败：to_ym={}, force={}, 未知错误 ret={}",
+                params.to_ym, force, ret
+            ),
+            false,
+        ),
     };
     let oper_type = if audit_success { "POST" } else { "DELETE" };
     crate::services::inventory_ledger::record_oper(
-        &mut conn, oper_type, "tStk_StockYM", "",
-        &claims.user_code, None, Some(&audit_remark),
-    ).await;
+        &mut conn,
+        oper_type,
+        "tStk_StockYM",
+        "",
+        &claims.user_code,
+        None,
+        Some(&audit_remark),
+    )
+    .await;
 
     match ret {
         -1 => Ok(Json(ApiResponse::err("参数错误：to_ym 格式应为 YYYYMM"))),
-        -2 => Ok(Json(ApiResponse::err("该月已有业务活动（inQty/OutQty 非0），拒绝回滚。如需强制回滚请传 force=1"))),
+        -2 => Ok(Json(ApiResponse::err(
+            "该月已有业务活动（inQty/OutQty 非0），拒绝回滚。如需强制回滚请传 force=1",
+        ))),
         -3 => Ok(Json(ApiResponse::ok(serde_json::json!({
             "to_ym": params.to_ym,
             "deleted_count": 0,
@@ -1917,7 +2286,6 @@ pub async fn month_settle_rollback(
     }
 }
 
-
 // ============== 详情查询 ==============
 #[derive(Deserialize)]
 pub struct DetailParams {
@@ -1931,15 +2299,26 @@ pub async fn get_io_detail(
     let mut conn = get_pool().get().await?;
     // 查主表
     let master_sql = "SELECT * FROM tStk_IO WHERE IOID = @p1";
-    let master = match conn.query(master_sql, &[&params.id]).await?.into_row().await? {
+    let master = match conn
+        .query(master_sql, &[&params.id])
+        .await?
+        .into_row()
+        .await?
+    {
         Some(r) => row_to_json(&r),
         None => return Ok(Json(ApiResponse::err("单据不存在"))),
     };
     // 查明细
     let det_sql = "SELECT * FROM tStk_IODetail WHERE IOID = @p1 ORDER BY RowNO";
-    let rows: Vec<Row> = conn.query(det_sql, &[&params.id]).await?.into_first_result().await?;
+    let rows: Vec<Row> = conn
+        .query(det_sql, &[&params.id])
+        .await?
+        .into_first_result()
+        .await?;
     let details: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
-    Ok(Json(ApiResponse::ok(serde_json::json!({ "master": master, "details": details }))))
+    Ok(Json(ApiResponse::ok(
+        serde_json::json!({ "master": master, "details": details }),
+    )))
 }
 
 pub async fn get_move_detail(
@@ -1948,14 +2327,25 @@ pub async fn get_move_detail(
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
     let master_sql = "SELECT * FROM tStk_Move WHERE MoveID = @p1";
-    let master = match conn.query(master_sql, &[&params.id]).await?.into_row().await? {
+    let master = match conn
+        .query(master_sql, &[&params.id])
+        .await?
+        .into_row()
+        .await?
+    {
         Some(r) => row_to_json(&r),
         None => return Ok(Json(ApiResponse::err("单据不存在"))),
     };
     let det_sql = "SELECT * FROM tStk_MoveDetail WHERE MoveID = @p1 ORDER BY RowNO";
-    let rows: Vec<Row> = conn.query(det_sql, &[&params.id]).await?.into_first_result().await?;
+    let rows: Vec<Row> = conn
+        .query(det_sql, &[&params.id])
+        .await?
+        .into_first_result()
+        .await?;
     let details: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
-    Ok(Json(ApiResponse::ok(serde_json::json!({ "master": master, "details": details }))))
+    Ok(Json(ApiResponse::ok(
+        serde_json::json!({ "master": master, "details": details }),
+    )))
 }
 
 pub async fn get_check_detail(
@@ -1964,14 +2354,25 @@ pub async fn get_check_detail(
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
     let master_sql = "SELECT * FROM tStk_Tran WHERE TranID = @p1";
-    let master = match conn.query(master_sql, &[&params.id]).await?.into_row().await? {
+    let master = match conn
+        .query(master_sql, &[&params.id])
+        .await?
+        .into_row()
+        .await?
+    {
         Some(r) => row_to_json(&r),
         None => return Ok(Json(ApiResponse::err("单据不存在"))),
     };
     let det_sql = "SELECT * FROM tStk_TranDetail WHERE TranID = @p1 ORDER BY RowNO";
-    let rows: Vec<Row> = conn.query(det_sql, &[&params.id]).await?.into_first_result().await?;
+    let rows: Vec<Row> = conn
+        .query(det_sql, &[&params.id])
+        .await?
+        .into_first_result()
+        .await?;
     let details: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
-    Ok(Json(ApiResponse::ok(serde_json::json!({ "master": master, "details": details }))))
+    Ok(Json(ApiResponse::ok(
+        serde_json::json!({ "master": master, "details": details }),
+    )))
 }
 
 // ============== 盘点单更新 ==============
@@ -1993,19 +2394,29 @@ pub async fn update_check(
     let emp_uuid = empty_or_zero(&json_str(d, "EmpID")).to_string();
     let note = json_str(d, "Note");
     let tran_date = json_str(d, "TranDate");
-    let dt = if tran_date.is_empty() { now() } else {
+    let dt = if tran_date.is_empty() {
+        now()
+    } else {
         chrono::NaiveDateTime::parse_from_str(&tran_date, "%Y-%m-%d %H:%M:%S")
             .or_else(|_| chrono::NaiveDateTime::parse_from_str(&tran_date, "%Y-%m-%d"))
             .unwrap_or_else(|_| now())
     };
     // 状态校验：仅 N/E 允许修改
     let state_sql = "SELECT ISNULL(State,'') AS S FROM tStk_Tran WHERE TranID = @p1";
-    let state = match conn.query(state_sql, &[&params.tranid]).await?.into_row().await? {
+    let state = match conn
+        .query(state_sql, &[&params.tranid])
+        .await?
+        .into_row()
+        .await?
+    {
         Some(r) => r.get::<&str, _>("S").unwrap_or("").to_string(),
         None => return Ok(Json(ApiResponse::err("单据不存在"))),
     };
     if !matches!(state.as_str(), "N" | "E") {
-        return Ok(Json(ApiResponse::err(&format!("当前状态({})不允许修改，请先反审", state))));
+        return Ok(Json(ApiResponse::err(&format!(
+            "当前状态({})不允许修改，请先反审",
+            state
+        ))));
     }
     // 事务包裹：UPDATE 主表 + DELETE 旧明细 + INSERT 新明细 原子化
     let tx_result: std::result::Result<(), String> = async {
@@ -2050,21 +2461,38 @@ pub async fn delete_io(
     let mut conn = get_pool().get().await?;
     // 检查状态：D（已软删） / N（新建） / E（编辑中） 允许删除；S/Y/C 需先反审
     let state_sql = "SELECT ISNULL(State,'') AS S FROM tStk_IO WHERE IOID = @p1";
-    let state = match conn.query(state_sql, &[&params.id]).await?.into_row().await? {
+    let state = match conn
+        .query(state_sql, &[&params.id])
+        .await?
+        .into_row()
+        .await?
+    {
         Some(r) => r.get::<&str, _>("S").unwrap_or("").to_string(),
         None => return Ok(Json(ApiResponse::err("单据不存在"))),
     };
     if !matches!(state.as_str(), "D" | "N" | "E") {
-        return Ok(Json(ApiResponse::err(&format!("当前状态({})不允许删除，请先反审", state))));
+        return Ok(Json(ApiResponse::err(&format!(
+            "当前状态({})不允许删除，请先反审",
+            state
+        ))));
     }
     // 事务包裹：明细删除成功但主表删除失败时避免明细丢失
     let result: std::result::Result<(), String> = async {
-        crate::services::inventory_ledger::begin_tran(&mut conn).await.map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM tStk_IODetail WHERE IOID = @p1", &[&params.id]).await.map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM tStk_IO WHERE IOID = @p1", &[&params.id]).await.map_err(|e| e.to_string())?;
-        crate::services::inventory_ledger::commit_tran(&mut conn).await.map_err(|e| e.to_string())?;
+        crate::services::inventory_ledger::begin_tran(&mut conn)
+            .await
+            .map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM tStk_IODetail WHERE IOID = @p1", &[&params.id])
+            .await
+            .map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM tStk_IO WHERE IOID = @p1", &[&params.id])
+            .await
+            .map_err(|e| e.to_string())?;
+        crate::services::inventory_ledger::commit_tran(&mut conn)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
-    }.await;
+    }
+    .await;
     if let Err(e) = result {
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
         return Ok(Json(ApiResponse::err(&format!("删除失败: {}", e))));
@@ -2078,20 +2506,40 @@ pub async fn delete_move(
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
     let state_sql = "SELECT ISNULL(State,'') AS S FROM tStk_Move WHERE MoveID = @p1";
-    let state = match conn.query(state_sql, &[&params.id]).await?.into_row().await? {
+    let state = match conn
+        .query(state_sql, &[&params.id])
+        .await?
+        .into_row()
+        .await?
+    {
         Some(r) => r.get::<&str, _>("S").unwrap_or("").to_string(),
         None => return Ok(Json(ApiResponse::err("单据不存在"))),
     };
     if !matches!(state.as_str(), "D" | "N" | "E") {
-        return Ok(Json(ApiResponse::err(&format!("当前状态({})不允许删除，请先反审", state))));
+        return Ok(Json(ApiResponse::err(&format!(
+            "当前状态({})不允许删除，请先反审",
+            state
+        ))));
     }
     let result: std::result::Result<(), String> = async {
-        crate::services::inventory_ledger::begin_tran(&mut conn).await.map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM tStk_MoveDetail WHERE MoveID = @p1", &[&params.id]).await.map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM tStk_Move WHERE MoveID = @p1", &[&params.id]).await.map_err(|e| e.to_string())?;
-        crate::services::inventory_ledger::commit_tran(&mut conn).await.map_err(|e| e.to_string())?;
+        crate::services::inventory_ledger::begin_tran(&mut conn)
+            .await
+            .map_err(|e| e.to_string())?;
+        conn.execute(
+            "DELETE FROM tStk_MoveDetail WHERE MoveID = @p1",
+            &[&params.id],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM tStk_Move WHERE MoveID = @p1", &[&params.id])
+            .await
+            .map_err(|e| e.to_string())?;
+        crate::services::inventory_ledger::commit_tran(&mut conn)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
-    }.await;
+    }
+    .await;
     if let Err(e) = result {
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
         return Ok(Json(ApiResponse::err(&format!("删除失败: {}", e))));
@@ -2105,20 +2553,40 @@ pub async fn delete_check(
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let mut conn = get_pool().get().await?;
     let state_sql = "SELECT ISNULL(State,'') AS S FROM tStk_Tran WHERE TranID = @p1";
-    let state = match conn.query(state_sql, &[&params.id]).await?.into_row().await? {
+    let state = match conn
+        .query(state_sql, &[&params.id])
+        .await?
+        .into_row()
+        .await?
+    {
         Some(r) => r.get::<&str, _>("S").unwrap_or("").to_string(),
         None => return Ok(Json(ApiResponse::err("单据不存在"))),
     };
     if !matches!(state.as_str(), "D" | "N" | "E") {
-        return Ok(Json(ApiResponse::err(&format!("当前状态({})不允许删除，请先反审", state))));
+        return Ok(Json(ApiResponse::err(&format!(
+            "当前状态({})不允许删除，请先反审",
+            state
+        ))));
     }
     let result: std::result::Result<(), String> = async {
-        crate::services::inventory_ledger::begin_tran(&mut conn).await.map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM tStk_TranDetail WHERE TranID = @p1", &[&params.id]).await.map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM tStk_Tran WHERE TranID = @p1", &[&params.id]).await.map_err(|e| e.to_string())?;
-        crate::services::inventory_ledger::commit_tran(&mut conn).await.map_err(|e| e.to_string())?;
+        crate::services::inventory_ledger::begin_tran(&mut conn)
+            .await
+            .map_err(|e| e.to_string())?;
+        conn.execute(
+            "DELETE FROM tStk_TranDetail WHERE TranID = @p1",
+            &[&params.id],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM tStk_Tran WHERE TranID = @p1", &[&params.id])
+            .await
+            .map_err(|e| e.to_string())?;
+        crate::services::inventory_ledger::commit_tran(&mut conn)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
-    }.await;
+    }
+    .await;
     if let Err(e) = result {
         crate::services::inventory_ledger::rollback_tran(&mut conn).await;
         return Ok(Json(ApiResponse::err(&format!("删除失败: {}", e))));
@@ -2138,27 +2606,50 @@ pub async fn get_stock_flow(
                           FROM [tStk_StockTranHis] h \
                           LEFT JOIN [tBas_Goods] g ON h.[GDSID] = g.[GDSID] \
                           LEFT JOIN [tBas_Stock] sk ON h.[StkID] = sk.[StkID] \
-                          WHERE 1=1".to_string();
+                          WHERE 1=1"
+        .to_string();
     let mut query_params: Vec<Option<String>> = Vec::new();
-    let mut pidx = 1;
+    let pidx = 1;
     if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
             base_query.push_str(&format!(" AND (g.[GDSNO] LIKE @p{} OR g.[GDSDesc] LIKE @p{} OR CAST(h.[TranID] AS NVARCHAR(40)) LIKE @p{})", pidx, pidx+1, pidx+2));
-            pidx += 3;
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
         }
     }
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
-    let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, params.sort_prop.as_deref(), params.sort_order.as_deref());
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let paginated_sql = build_pagination_sql_with_sort(
+        &base_query,
+        page,
+        page_size,
+        params.sort_prop.as_deref(),
+        params.sort_order.as_deref(),
+    );
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
     let mut total: i32 = 0;
-    if let Some(row) = conn.query(&count_sql, &param_refs).await?.into_row().await? {
+    if let Some(row) = conn
+        .query(&count_sql, &param_refs)
+        .await?
+        .into_row()
+        .await?
+    {
         total = row.get::<i32, _>("cnt").unwrap_or(0);
     }
-    let rows: Vec<Row> = conn.query(&paginated_sql, &param_refs).await?.into_first_result().await?;
-    Ok(Json(ApiResponse::ok_paginated(rows.iter().map(row_to_json).collect(), total as u64, page, page_size)))
+    let rows: Vec<Row> = conn
+        .query(&paginated_sql, &param_refs)
+        .await?
+        .into_first_result()
+        .await?;
+    Ok(Json(ApiResponse::ok_paginated(
+        rows.iter().map(row_to_json).collect(),
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 // ============== 单据流水（三表 UNION：tStk_IODetail + tStk_MoveDetail + tStk_TranDetail） ==============
@@ -2188,12 +2679,24 @@ pub struct DocFlowParams {
 
 /// 解析 DocDate 参数：兼容数组 ["start","end"]、空字符串 ""、null、缺失
 /// 返回 (start, end)，均为空字符串表示无日期过滤
-fn parse_doc_date_range(doc_date: &Option<serde_json::Value>, start_date: &Option<String>, end_date: &Option<String>) -> (String, String) {
+fn parse_doc_date_range(
+    doc_date: &Option<serde_json::Value>,
+    start_date: &Option<String>,
+    end_date: &Option<String>,
+) -> (String, String) {
     if let Some(v) = doc_date {
         match v {
             serde_json::Value::Array(arr) => {
-                let s = arr.get(0).and_then(|x| x.as_str()).unwrap_or("").to_string();
-                let e = arr.get(1).and_then(|x| x.as_str()).unwrap_or("").to_string();
+                let s = arr
+                    .get(0)
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let e = arr
+                    .get(1)
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 return (s, e);
             }
             serde_json::Value::String(s) => {
@@ -2206,7 +2709,10 @@ fn parse_doc_date_range(doc_date: &Option<serde_json::Value>, start_date: &Optio
             _ => {}
         }
     }
-    (start_date.clone().unwrap_or_default(), end_date.clone().unwrap_or_default())
+    (
+        start_date.clone().unwrap_or_default(),
+        end_date.clone().unwrap_or_default(),
+    )
 }
 
 pub async fn get_doc_flows(
@@ -2221,7 +2727,8 @@ pub async fn get_doc_flows(
     // 解析日期范围（提前计算，用于内联到每个 UNION 子查询）
     // 完全尊重前端传入：用户清空日期 = 查全部（无日期过滤）
     // 若只传一端，则仅按该端过滤，另一端不强制补齐
-    let (start_d, end_d) = parse_doc_date_range(&params.DocDate, &params.start_date, &params.end_date);
+    let (start_d, end_d) =
+        parse_doc_date_range(&params.DocDate, &params.start_date, &params.end_date);
 
     let mut query_params: Vec<Option<String>> = Vec::new();
     let mut pidx = 1;
@@ -2369,7 +2876,7 @@ pub async fn get_doc_flows(
     // ★ 必须下推：TOP N 下推时子查询取前 N 条（按日期排序），若 keyword 在外层过滤，
     //   子查询的 TOP N 可能不含目标记录 → 分页查询返回空但 count 正确
     //   （bug 现象：搜单号查不到，加 Kind 过滤后能查到）
-    let mut outer_where = String::new();
+    let outer_where = String::new();
     if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
             let kw_pat = format!("%{}%", kw);
@@ -2405,19 +2912,51 @@ pub async fn get_doc_flows(
     let sort_prop = params.sort_prop.as_deref().unwrap_or("");
     let sort_order = params.sort_order.as_deref().unwrap_or("desc");
     let is_docdate_sort = sort_prop == "DocDate";
-    let has_gdsid_filter = params.GDSID.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+    let has_gdsid_filter = params
+        .GDSID
+        .as_deref()
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
     // TOP N 下推条件：按 DocDate 排序 且 无 GDSID 过滤（单商品查询需全量计算结存）
     let use_top_pushdown = is_docdate_sort && !has_gdsid_filter;
-    let top_n = (page * page_size) as u32;  // 子查询取前 N 条用于外层分页
-    let direction = if sort_order.eq_ignore_ascii_case("asc") { "ASC" } else { "DESC" };
+    let top_n = (page * page_size) as u32; // 子查询取前 N 条用于外层分页
+    let direction = if sort_order.eq_ignore_ascii_case("asc") {
+        "ASC"
+    } else {
+        "DESC"
+    };
     // 子查询内部的 ORDER BY 片段（仅启用下推时生效）
-    let io_order = if use_top_pushdown { format!(" ORDER BY io.IoDate {}", direction) } else { String::new() };
-    let mv_order = if use_top_pushdown { format!(" ORDER BY mv.MoveDate {}", direction) } else { String::new() };
-    let tr_order = if use_top_pushdown { format!(" ORDER BY tr.TranDate {}", direction) } else { String::new() };
+    let io_order = if use_top_pushdown {
+        format!(" ORDER BY io.IoDate {}", direction)
+    } else {
+        String::new()
+    };
+    let mv_order = if use_top_pushdown {
+        format!(" ORDER BY mv.MoveDate {}", direction)
+    } else {
+        String::new()
+    };
+    let tr_order = if use_top_pushdown {
+        format!(" ORDER BY tr.TranDate {}", direction)
+    } else {
+        String::new()
+    };
     // 子查询前缀：TOP N（启用下推时）；否则空（全表扫由外层分页）
-    let io_top = if use_top_pushdown { format!("TOP ({}) ", top_n) } else { String::new() };
-    let mv_top = if use_top_pushdown { format!("TOP ({}) ", top_n) } else { String::new() };
-    let tr_top = if use_top_pushdown { format!("TOP ({}) ", top_n) } else { String::new() };
+    let io_top = if use_top_pushdown {
+        format!("TOP ({}) ", top_n)
+    } else {
+        String::new()
+    };
+    let mv_top = if use_top_pushdown {
+        format!("TOP ({}) ", top_n)
+    } else {
+        String::new()
+    };
+    let tr_top = if use_top_pushdown {
+        format!("TOP ({}) ", top_n)
+    } else {
+        String::new()
+    };
 
     // 三表 UNION 基础 SQL（过滤条件已下推到每个子查询）
     // ★ 基本设计：每条流水 = 一次仓库库存变动，只有一列「仓库」+「方向(入库+1/出库-1)」
@@ -2446,7 +2985,8 @@ pub async fn get_doc_flows(
         //   同一个参数名在 SQL 中可重复引用，只需 push 一次
         let opening_pidx = pidx;
         query_params.push(Some(start_d.clone()));
-        format!("\
+        format!(
+            "\
 LEFT JOIN ( \
   SELECT GDSID, StkID, SUM(Qty * Direction) AS opening_qty FROM ( \
     SELECT d.GDSID AS GDSID, io.StkID AS StkID, \
@@ -2477,11 +3017,15 @@ LEFT JOIN ( \
     LEFT JOIN tStk_Tran tr ON d.TranID = tr.TranID \
     WHERE tr.State NOT IN ('D','C') AND tr.TranDate < @p{opening_pidx} AND d.GDSID = @p{gdsid_pidx} \
   ) h GROUP BY GDSID, StkID \
-) o ON flow.GDSID = o.GDSID AND flow.StkID = o.StkID", opening_pidx = opening_pidx, gdsid_pidx = gdsid_pidx)
+) o ON flow.GDSID = o.GDSID AND flow.StkID = o.StkID",
+            opening_pidx = opening_pidx,
+            gdsid_pidx = gdsid_pidx
+        )
     } else {
         String::new()
     };
-    let base_query = format!("\
+    let base_query = format!(
+        "\
 SELECT * FROM ( \
   SELECT {io_top}d.IODetailID AS DetailID, io.IONo AS DocNo, io.IoDate AS DocDate, io.Kind AS Kind, \
          CAST(io.BTPID AS NVARCHAR(40)) AS BTPID, \
@@ -2585,9 +3129,17 @@ SELECT * FROM ( \
   LEFT JOIN tBas_Emp e ON tr.EmpID = e.EmpID \
   WHERE {tr_where}{tr_order} \
 ) AS flow WHERE 1=1{outer_where}",
-        io_where = io_where, mv_where = mv_where, tr_where = tr_where, outer_where = outer_where,
-        io_top = io_top, mv_top = mv_top, tr_top = tr_top,
-        io_order = io_order, mv_order = mv_order, tr_order = tr_order);
+        io_where = io_where,
+        mv_where = mv_where,
+        tr_where = tr_where,
+        outer_where = outer_where,
+        io_top = io_top,
+        mv_top = mv_top,
+        tr_top = tr_top,
+        io_order = io_order,
+        mv_order = mv_order,
+        tr_order = tr_order
+    );
 
     // ★ 结存计算：只在单商品查询（有 GDSID 过滤）时计算 Balance
     //   多商品查询时不同商品的结存混在一起无意义，且窗口函数需全局排序、期初子查询
@@ -2603,27 +3155,34 @@ SELECT * FROM ( \
     let balance_query = if has_gdsid_filter {
         if !start_d.is_empty() {
             // 单商品 + 有起始日期：期初 + 运行总和
-            format!("\
+            format!(
+                "\
 SELECT flow.*, \
        ISNULL(o.opening_qty, 0) \
        + ISNULL(SUM(flow.Qty * flow.Direction) OVER (PARTITION BY flow.GDSID, flow.StkID ORDER BY flow.DocDate, flow.DocNo, flow.DetailID), 0) AS Balance \
 FROM ({base_query}) flow \
 {opening_join}",
-                base_query = base_query, opening_join = opening_join)
+                base_query = base_query,
+                opening_join = opening_join
+            )
         } else {
             // 单商品 + 无起始日期：期初=0，直接运行总和
-            format!("\
+            format!(
+                "\
 SELECT flow.*, \
        ISNULL(SUM(flow.Qty * flow.Direction) OVER (PARTITION BY flow.GDSID, flow.StkID ORDER BY flow.DocDate, flow.DocNo, flow.DetailID), 0) AS Balance \
 FROM ({base_query}) flow",
-                base_query = base_query)
+                base_query = base_query
+            )
         }
     } else {
         // 多商品查询：不计算 Balance，返回 NULL（保持列结构一致，避免前端报错）
-        format!("\
+        format!(
+            "\
 SELECT flow.*, CAST(NULL AS FLOAT) AS Balance \
 FROM ({base_query}) flow",
-            base_query = base_query)
+            base_query = base_query
+        )
     };
 
     // COUNT 查询不能用下推后的 base_query（含 TOP N），需要构造一个无 TOP 的版本
@@ -2632,7 +3191,8 @@ FROM ({base_query}) flow",
     let count_sql = if is_docdate_sort {
         // 简化版 count：只 SELECT 关键词字段，但 Move 子查询必须保留 CROSS JOIN
         // 因为 mv_where 中的仓库过滤引用了 dir.Direction
-        let count_query = format!("\
+        let count_query = format!(
+            "\
 SELECT COUNT(*) as cnt FROM ( \
   SELECT io.IONo AS DocNo, ISNULL(NULLIF(d.GDSNO,''), g.GDSNO) AS GoodsGDSNO, ISNULL(NULLIF(d.GDSDesc,''), g.GDSDesc) AS GoodsGDSDesc \
   FROM tStk_IODetail d \
@@ -2653,19 +3213,46 @@ SELECT COUNT(*) as cnt FROM ( \
   LEFT JOIN tBas_Goods g ON d.GDSID = g.GDSID \
   WHERE {tr_where} \
 ) t WHERE 1=1{outer_where}",
-            io_where = io_where, mv_where = mv_where, tr_where = tr_where, outer_where = outer_where);
+            io_where = io_where,
+            mv_where = mv_where,
+            tr_where = tr_where,
+            outer_where = outer_where
+        );
         count_query
     } else {
         format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query)
     };
     // ★ 关键：分页基于 balance_query（含 Balance 列），而非 base_query
     //   之前用 base_query 导致 Balance 列从未被查询，前端拿不到后端结存，只能本地从 0 累加
-    let paginated_sql = build_pagination_sql_with_sort(&balance_query, page, page_size, params.sort_prop.as_deref(), params.sort_order.as_deref());
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let paginated_sql = build_pagination_sql_with_sort(
+        &balance_query,
+        page,
+        page_size,
+        params.sort_prop.as_deref(),
+        params.sort_order.as_deref(),
+    );
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
     let mut total: i32 = 0;
-    if let Some(row) = conn.query(&count_sql, &param_refs).await?.into_row().await? {
+    if let Some(row) = conn
+        .query(&count_sql, &param_refs)
+        .await?
+        .into_row()
+        .await?
+    {
         total = row.get::<i32, _>("cnt").unwrap_or(0);
     }
-    let rows: Vec<Row> = conn.query(&paginated_sql, &param_refs).await?.into_first_result().await?;
-    Ok(Json(ApiResponse::ok_paginated(rows.iter().map(row_to_json).collect(), total as u64, page, page_size)))
+    let rows: Vec<Row> = conn
+        .query(&paginated_sql, &param_refs)
+        .await?
+        .into_first_result()
+        .await?;
+    Ok(Json(ApiResponse::ok_paginated(
+        rows.iter().map(row_to_json).collect(),
+        total as u64,
+        page,
+        page_size,
+    )))
 }

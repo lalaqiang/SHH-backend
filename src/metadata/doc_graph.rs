@@ -12,9 +12,9 @@ use std::collections::HashMap;
 pub const DOC_GRAPH_VERSION: &str = "2026.07.14.001";
 
 /// 库存方向常量
-pub const DIR_INBOUND: f64 = 1.0;   // 入库
+pub const DIR_INBOUND: f64 = 1.0; // 入库
 pub const DIR_OUTBOUND: f64 = -1.0; // 出库
-pub const DIR_TRANSFER: f64 = 0.0;   // 调拨（双边）
+pub const DIR_TRANSFER: f64 = 0.0; // 调拨（双边）
 
 /// 状态机映射条目
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,20 +60,47 @@ const DEFAULT_STATE_MAP: &[(&str, &str)] = &[
 ];
 
 fn sm() -> Vec<StateEntry> {
-    DEFAULT_STATE_MAP.iter().map(|(k, v)| StateEntry { code: k.to_string(), text: v.to_string() }).collect()
+    DEFAULT_STATE_MAP
+        .iter()
+        .map(|(k, v)| StateEntry {
+            code: k.to_string(),
+            text: v.to_string(),
+        })
+        .collect()
 }
 
-fn upstream(v: &[&str]) -> Vec<String> { v.iter().map(|x| x.to_string()).collect() }
-fn downstream(v: &[&str]) -> Vec<String> { v.iter().map(|x| x.to_string()).collect() }
-fn req(v: &[&str]) -> Vec<String> { v.iter().map(|x| x.to_string()).collect() }
+fn upstream(v: &[&str]) -> Vec<String> {
+    v.iter().map(|x| x.to_string()).collect()
+}
+fn downstream(v: &[&str]) -> Vec<String> {
+    v.iter().map(|x| x.to_string()).collect()
+}
+fn req(v: &[&str]) -> Vec<String> {
+    v.iter().map(|x| x.to_string()).collect()
+}
 
 /// 构造函数：把字面量参数打包成 DocMeta
 #[allow(clippy::too_many_arguments)]
 pub fn build_doc(
-    table: &str, pk: &str, no: &str, date: &str, kind: &str,
-    dt: &str, dpk: &str, dfk: &str, wh: &str, src: &str,
-    up: &[&str], down: &[&str], title: &str, prefix: &str, biz: &str,
-    required: &[&str], affects_stock: bool, drg: bool, dug: bool,
+    table: &str,
+    pk: &str,
+    no: &str,
+    date: &str,
+    kind: &str,
+    dt: &str,
+    dpk: &str,
+    dfk: &str,
+    wh: &str,
+    src: &str,
+    up: &[&str],
+    down: &[&str],
+    title: &str,
+    prefix: &str,
+    biz: &str,
+    required: &[&str],
+    affects_stock: bool,
+    drg: bool,
+    dug: bool,
 ) -> DocMeta {
     DocMeta {
         table: table.to_string(),
@@ -104,100 +131,372 @@ pub fn build_doc(
 /// 全量单据元数据（运行时初始化，避免 const fn 限制）
 pub fn all_docs() -> Vec<DocMeta> {
     vec![
-        build_doc("tPur_Order", "POID", "PoNo", "PoDate", "",
-                  "tPur_OrderDetail", "PODetailID", "POID", "StkID", "",
-                  // 下游：tPur_Inv(采购入库)、tStk_IO:PR(采购退货)；TH 已迁移到 tStk_Move 不再是 PO 下游
-                  &[], &["tPur_Inv", "tStk_IO:PR"],
-                  "采购订单", "PO", "purchase",
-                  &["POID", "PoNo", "PoDate", "StkID", "SuppID"], false, true, false),
-        build_doc("tPur_Inv", "PIID", "PiNo", "RecvDate", "",
-                  "tPur_InvDetail", "PIDetailID", "PIID", "StkID", "POID",
-                  // 下游：tStk_IO:PR(采购退货)；TH 已迁移到 tStk_Move 不再是 PI 下游
-                  &["tPur_Order"], &["tStk_IO:PR"],
-                  "采购入库", "PI", "purchase",
-                  &["PIID", "PiNo", "RecvDate", "StkID", "SuppID"], true, true, false),
-        build_doc("tPur_Return", "PRID", "PrNo", "RetDate", "",
-                  "tPur_ReturnDetail", "PRDetailID", "PRID", "StkID", "FromRID",
-                  &["tPur_Inv", "tPur_Order"], &[],
-                  "采购退货", "PR", "purchase",
-                  &["PRID", "PrNo", "RetDate", "StkID", "SuppID"], true, true, false),
-        build_doc("tSal_Order", "SOID", "SoNo", "SoDate", "",
-                  "tSal_OrderDetail", "SODetailID", "SOID", "StkID", "",
-                  &[], &["tSal_Inv", "tStk_IO:SR"],
-                  "销售订单", "SO", "sales",
-                  // affects_stock=true：销售订单审核会写 QQty 预占和 tStk_Reserve，需要事务保护和期间检查
-                  &["SOID", "SoNo", "SoDate", "StkID", "CustID"], true, true, false),
-        build_doc("tSal_Inv", "SIID", "SINo", "SIDate", "",
-                  "tSal_InvDetail", "SIDetailID", "SIID", "StkID", "SOID",
-                  &["tSal_Order"], &["tStk_IO:SR"],
-                  "销售出库", "SI", "sales",
-                  &["SIID", "SINo", "SIDate", "StkID", "CustID"], true, true, false),
-        build_doc("tStk_IO", "IOID", "IONo", "IoDate", "Kind",
-                  "tStk_IODetail", "IODetailID", "IOID", "StkID", "POID",
-                  &["tPur_Order", "tPur_Inv", "tSal_Order", "tSal_Inv"], &[],
-                  "入出库单", "IO", "stock",
-                  &["IOID", "IONo", "IoDate", "Kind", "StkID"], true, true, false),
-        build_doc("tStk_Move", "MoveID", "MoveNO", "MoveDate", "Kind",
-                  "tStk_MoveDetail", "MoveDetailID", "MoveID", "FromStkID,ToStkID", "",
-                  &[], &[],
-                  "调拨单", "MV", "stock",
-                  &["MoveID", "MoveNO", "MoveDate", "Kind"], true, true, false),
-        build_doc("tStk_Tran", "TranID", "TranNo", "TranDate", "BTPID",
-                  "tStk_TranDetail", "TranDetailID", "TranID", "StkID", "",
-                  &[], &[],
-                  "盘点单", "TR", "stock",
-                  &["TranID", "TranNo", "TranDate"], true, true, true),
-        build_doc("tStk_ReplenishApply", "ReplenishApplyID", "ReplenishApplyNo", "ReplenishApplyDate", "Kind",
-                  "tStk_ReplenishApplyDtl", "ReplenishApplyDtlID", "ReplenishApplyID", "StkID", "",
-                  &[], &["tStk_IO:PD"],
-                  "补货申请", "RPA", "stock",
-                  &["ReplenishApplyID", "ReplenishApplyDate", "EndDate"], false, true, false),
-        build_doc("tFin_Receipt", "RecID", "RecNO", "RecDate", "",
-                  "tFin_ReceiptDtl", "ReceiptDtlID", "RecID", "", "SourceDocID",
-                  &["tStk_IO"], &[],
-                  "收款单", "RCV", "finance",
-                  &["RecID", "RecNO", "RecDate", "CustID"], false, false, false),
-        build_doc("tFin_Payment", "PayID", "PayNO", "PayDate", "",
-                  "tFin_PaymentDtl", "PaymentDtlID", "PayID", "", "SourceDocID",
-                  &["tStk_IO"], &[],
-                  "付款单", "PAY", "finance",
-                  &["PayID", "PayNO", "PayDate", "SuppID"], false, false, false),
+        build_doc(
+            "tPur_Order",
+            "POID",
+            "PoNo",
+            "PoDate",
+            "",
+            "tPur_OrderDetail",
+            "PODetailID",
+            "POID",
+            "StkID",
+            "",
+            // 下游：tPur_Inv(采购入库)、tStk_IO:PR(采购退货)；TH 已迁移到 tStk_Move 不再是 PO 下游
+            &[],
+            &["tPur_Inv", "tStk_IO:PR"],
+            "采购订单",
+            "PO",
+            "purchase",
+            &["POID", "PoNo", "PoDate", "StkID", "SuppID"],
+            false,
+            true,
+            false,
+        ),
+        build_doc(
+            "tPur_Inv",
+            "PIID",
+            "PiNo",
+            "RecvDate",
+            "",
+            "tPur_InvDetail",
+            "PIDetailID",
+            "PIID",
+            "StkID",
+            "POID",
+            // 下游：tStk_IO:PR(采购退货)；TH 已迁移到 tStk_Move 不再是 PI 下游
+            &["tPur_Order"],
+            &["tStk_IO:PR"],
+            "采购入库",
+            "PI",
+            "purchase",
+            &["PIID", "PiNo", "RecvDate", "StkID", "SuppID"],
+            true,
+            true,
+            false,
+        ),
+        build_doc(
+            "tPur_Return",
+            "PRID",
+            "PrNo",
+            "RetDate",
+            "",
+            "tPur_ReturnDetail",
+            "PRDetailID",
+            "PRID",
+            "StkID",
+            "FromRID",
+            &["tPur_Inv", "tPur_Order"],
+            &[],
+            "采购退货",
+            "PR",
+            "purchase",
+            &["PRID", "PrNo", "RetDate", "StkID", "SuppID"],
+            true,
+            true,
+            false,
+        ),
+        build_doc(
+            "tSal_Order",
+            "SOID",
+            "SoNo",
+            "SoDate",
+            "",
+            "tSal_OrderDetail",
+            "SODetailID",
+            "SOID",
+            "StkID",
+            "",
+            &[],
+            &["tSal_Inv", "tStk_IO:SR"],
+            "销售订单",
+            "SO",
+            "sales",
+            // affects_stock=true：销售订单审核会写 QQty 预占和 tStk_Reserve，需要事务保护和期间检查
+            &["SOID", "SoNo", "SoDate", "StkID", "CustID"],
+            true,
+            true,
+            false,
+        ),
+        build_doc(
+            "tSal_Inv",
+            "SIID",
+            "SINo",
+            "SIDate",
+            "",
+            "tSal_InvDetail",
+            "SIDetailID",
+            "SIID",
+            "StkID",
+            "SOID",
+            &["tSal_Order"],
+            &["tStk_IO:SR"],
+            "销售出库",
+            "SI",
+            "sales",
+            &["SIID", "SINo", "SIDate", "StkID", "CustID"],
+            true,
+            true,
+            false,
+        ),
+        build_doc(
+            "tStk_IO",
+            "IOID",
+            "IONo",
+            "IoDate",
+            "Kind",
+            "tStk_IODetail",
+            "IODetailID",
+            "IOID",
+            "StkID",
+            "POID",
+            &["tPur_Order", "tPur_Inv", "tSal_Order", "tSal_Inv"],
+            &[],
+            "入出库单",
+            "IO",
+            "stock",
+            &["IOID", "IONo", "IoDate", "Kind", "StkID"],
+            true,
+            true,
+            false,
+        ),
+        build_doc(
+            "tStk_Move",
+            "MoveID",
+            "MoveNO",
+            "MoveDate",
+            "Kind",
+            "tStk_MoveDetail",
+            "MoveDetailID",
+            "MoveID",
+            "FromStkID,ToStkID",
+            "",
+            &[],
+            &[],
+            "调拨单",
+            "MV",
+            "stock",
+            &["MoveID", "MoveNO", "MoveDate", "Kind"],
+            true,
+            true,
+            false,
+        ),
+        build_doc(
+            "tStk_Tran",
+            "TranID",
+            "TranNo",
+            "TranDate",
+            "BTPID",
+            "tStk_TranDetail",
+            "TranDetailID",
+            "TranID",
+            "StkID",
+            "",
+            &[],
+            &[],
+            "盘点单",
+            "TR",
+            "stock",
+            &["TranID", "TranNo", "TranDate"],
+            true,
+            true,
+            true,
+        ),
+        build_doc(
+            "tStk_ReplenishApply",
+            "ReplenishApplyID",
+            "ReplenishApplyNo",
+            "ReplenishApplyDate",
+            "Kind",
+            "tStk_ReplenishApplyDtl",
+            "ReplenishApplyDtlID",
+            "ReplenishApplyID",
+            "StkID",
+            "",
+            &[],
+            &["tStk_IO:PD"],
+            "补货申请",
+            "RPA",
+            "stock",
+            &["ReplenishApplyID", "ReplenishApplyDate", "EndDate"],
+            false,
+            true,
+            false,
+        ),
+        build_doc(
+            "tFin_Receipt",
+            "RecID",
+            "RecNO",
+            "RecDate",
+            "",
+            "tFin_ReceiptDtl",
+            "ReceiptDtlID",
+            "RecID",
+            "",
+            "SourceDocID",
+            &["tStk_IO"],
+            &[],
+            "收款单",
+            "RCV",
+            "finance",
+            &["RecID", "RecNO", "RecDate", "CustID"],
+            false,
+            false,
+            false,
+        ),
+        build_doc(
+            "tFin_Payment",
+            "PayID",
+            "PayNO",
+            "PayDate",
+            "",
+            "tFin_PaymentDtl",
+            "PaymentDtlID",
+            "PayID",
+            "",
+            "SourceDocID",
+            &["tStk_IO"],
+            &[],
+            "付款单",
+            "PAY",
+            "finance",
+            &["PayID", "PayNO", "PayDate", "SuppID"],
+            false,
+            false,
+            false,
+        ),
         // 销售报价
-        build_doc("tSal_Quote", "SQID", "SQNo", "SQDate", "",
-                  "tSal_QuoteDetail", "SQDetailID", "SQID", "StkID", "",
-                  &[], &["tSal_Order"],
-                  "销售报价", "SRQ", "sales",
-                  &["SQID", "SQNo", "SQDate", "CustID"], false, true, false),
+        build_doc(
+            "tSal_Quote",
+            "SQID",
+            "SQNo",
+            "SQDate",
+            "",
+            "tSal_QuoteDetail",
+            "SQDetailID",
+            "SQID",
+            "StkID",
+            "",
+            &[],
+            &["tSal_Order"],
+            "销售报价",
+            "SRQ",
+            "sales",
+            &["SQID", "SQNo", "SQDate", "CustID"],
+            false,
+            true,
+            false,
+        ),
         // 采购报价
-        build_doc("tPur_Quote", "PQID", "PqNo", "PqDate", "",
-                  "tPur_QuoteDetail", "PQDetailID", "PQID", "", "",
-                  &[], &["tPur_Order"],
-                  "采购报价", "PRQ", "purchase",
-                  &["PQID", "PqNo", "PqDate", "SuppID"], false, true, false),
+        build_doc(
+            "tPur_Quote",
+            "PQID",
+            "PqNo",
+            "PqDate",
+            "",
+            "tPur_QuoteDetail",
+            "PQDetailID",
+            "PQID",
+            "",
+            "",
+            &[],
+            &["tPur_Order"],
+            "采购报价",
+            "PRQ",
+            "purchase",
+            &["PQID", "PqNo", "PqDate", "SuppID"],
+            false,
+            true,
+            false,
+        ),
         // 采购调价
-        build_doc("tPur_AdjPrice", "PAPID", "PAPNo", "PAPDate", "",
-                  "tPur_AdjPriceDetail", "PAPDetailID", "PAPID", "", "",
-                  &[], &[],
-                  "采购调价", "PAP", "purchase",
-                  &["PAPID", "PAPNo", "PAPDate"], false, true, false),
+        build_doc(
+            "tPur_AdjPrice",
+            "PAPID",
+            "PAPNo",
+            "PAPDate",
+            "",
+            "tPur_AdjPriceDetail",
+            "PAPDetailID",
+            "PAPID",
+            "",
+            "",
+            &[],
+            &[],
+            "采购调价",
+            "PAP",
+            "purchase",
+            &["PAPID", "PAPNo", "PAPDate"],
+            false,
+            true,
+            false,
+        ),
         // 周期盘点
-        build_doc("tStk_StockCycle", "CycleID", "CycleNo", "CycleDate", "",
-                  "tStk_StockCycleDetail", "CycleDetailID", "CycleID", "StkID", "",
-                  &[], &[],
-                  "周期盘点", "CYC", "stock",
-                  &["CycleID", "CycleNo", "CycleDate", "StkID"], true, true, false),
+        build_doc(
+            "tStk_StockCycle",
+            "CycleID",
+            "CycleNo",
+            "CycleDate",
+            "",
+            "tStk_StockCycleDetail",
+            "CycleDetailID",
+            "CycleID",
+            "StkID",
+            "",
+            &[],
+            &[],
+            "周期盘点",
+            "CYC",
+            "stock",
+            &["CycleID", "CycleNo", "CycleDate", "StkID"],
+            true,
+            true,
+            false,
+        ),
         // 员工销量录入（扁平表，无明细）
-        build_doc("tSal_EmpSales", "ID", "", "SaleDate", "",
-                  "", "", "", "", "",
-                  &[], &[],
-                  "员工销量录入", "", "sales",
-                  &["ID", "EmpID", "GDSID", "Qty", "SaleDate"], false, false, false),
+        build_doc(
+            "tSal_EmpSales",
+            "ID",
+            "",
+            "SaleDate",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            &[],
+            &[],
+            "员工销量录入",
+            "",
+            "sales",
+            &["ID", "EmpID", "GDSID", "Qty", "SaleDate"],
+            false,
+            false,
+            false,
+        ),
         // 现金流量（扁平表，无明细）
-        build_doc("tFin_CashFlow", "CFID", "CFNO", "CFDate", "",
-                  "", "", "", "", "",
-                  &[], &[],
-                  "现金流量", "CF", "finance",
-                  &["CFID", "CFNO", "CFDate", "CFType", "CFAmt"], false, false, false),
+        build_doc(
+            "tFin_CashFlow",
+            "CFID",
+            "CFNO",
+            "CFDate",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            &[],
+            &[],
+            "现金流量",
+            "CF",
+            "finance",
+            &["CFID", "CFNO", "CFDate", "CFType", "CFAmt"],
+            false,
+            false,
+            false,
+        ),
     ]
 }
 
@@ -206,7 +505,9 @@ pub fn get_doc_meta(table: &str) -> Option<DocMeta> {
 }
 
 pub fn has_kind_field(table: &str) -> bool {
-    get_doc_meta(table).map(|m| !m.kind_field.is_empty()).unwrap_or(false)
+    get_doc_meta(table)
+        .map(|m| !m.kind_field.is_empty())
+        .unwrap_or(false)
 }
 
 /// Kind → 库存方向映射（仅对 tStk_IO 与 tStk_Move 有效）
@@ -256,7 +557,8 @@ pub struct DocGraphEdge {
 
 pub fn build_graph_response() -> DocGraphResponse {
     let graph = all_docs();
-    let docs: Vec<DocGraphNode> = graph.iter()
+    let docs: Vec<DocGraphNode> = graph
+        .iter()
         .map(|m| DocGraphNode {
             table: m.table.clone(),
             title: m.title.clone(),
@@ -358,12 +660,24 @@ mod tests {
         for m in all_docs() {
             // 核心字段：所有单据都必须有
             assert!(!m.table.is_empty(), "table name required");
-            assert!(!m.primary_key.is_empty(), "primary_key required for {}", m.table);
+            assert!(
+                !m.primary_key.is_empty(),
+                "primary_key required for {}",
+                m.table
+            );
             // 扁平表（如 tSal_EmpSales、tFin_CashFlow）无单据号、无明细，
             // no_field/detail_table 等允许为空，仅当存在明细表时才校验明细字段一致性
             if !m.detail_table.is_empty() {
-                assert!(!m.detail_primary_key.is_empty(), "detail_primary_key required when detail_table set for {}", m.table);
-                assert!(!m.detail_foreign_key.is_empty(), "detail_foreign_key required when detail_table set for {}", m.table);
+                assert!(
+                    !m.detail_primary_key.is_empty(),
+                    "detail_primary_key required when detail_table set for {}",
+                    m.table
+                );
+                assert!(
+                    !m.detail_foreign_key.is_empty(),
+                    "detail_foreign_key required when detail_table set for {}",
+                    m.table
+                );
             }
             // 业务标题与模块必须存在
             assert!(!m.title.is_empty(), "title required for {}", m.table);

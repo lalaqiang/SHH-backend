@@ -1,14 +1,11 @@
-use axum::{
-    extract::State,
-    Json,
-};
-use serde::Deserialize;
-use serde_json::Value;
-use tiberius::Row;
 use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
 use crate::utils::{ApiResponse, row_get_f64};
+use axum::{Json, extract::State};
+use serde::Deserialize;
+use serde_json::Value;
+use tiberius::Row;
 
 // =====================================================================
 // 客户定价批量计算引擎
@@ -37,8 +34,8 @@ struct PricingTemplate {
     status: i64,
     product_rules: Vec<ProductRule>,
     brand_rules: Vec<BrandRule>,
-    custom_prices: Vec<CustomPrice>,  // 策略 6 自定义价格列表
-    customer_rules: Vec<String>, // cust_id 列表
+    custom_prices: Vec<CustomPrice>, // 策略 6 自定义价格列表
+    customer_rules: Vec<String>,     // cust_id 列表
     pterm: String,
 }
 
@@ -67,23 +64,30 @@ fn round2(v: f64) -> f64 {
 // 解析 PValue JSON 为 PricingTemplate
 fn parse_template(id: &str, name: &str, pterm: &str, pvalue: &str) -> Option<PricingTemplate> {
     let cfg: Value = serde_json::from_str(pvalue).ok()?;
-    let strategy_type = cfg.get("strategyType")
+    let strategy_type = cfg
+        .get("strategyType")
         .and_then(|v| v.as_i64())
         .unwrap_or(1);
-    let multiplier = cfg.get("multiplier")
+    let multiplier = cfg
+        .get("multiplier")
         .and_then(|v| v.as_f64())
         .unwrap_or(1.0);
-    let status = cfg.get("status")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(1);
+    let status = cfg.get("status").and_then(|v| v.as_i64()).unwrap_or(1);
 
     let mut product_rules = Vec::new();
     if let Some(arr) = cfg.get("productRules").and_then(|v| v.as_array()) {
         for r in arr {
-            let gds_id = r.get("gdsId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let gds_id = r
+                .get("gdsId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let mult = r.get("multiplier").and_then(|v| v.as_f64()).unwrap_or(0.0);
             if !gds_id.is_empty() && mult > 0.0 {
-                product_rules.push(ProductRule { gds_id, multiplier: mult });
+                product_rules.push(ProductRule {
+                    gds_id,
+                    multiplier: mult,
+                });
             }
         }
     }
@@ -91,10 +95,17 @@ fn parse_template(id: &str, name: &str, pterm: &str, pvalue: &str) -> Option<Pri
     let mut brand_rules = Vec::new();
     if let Some(arr) = cfg.get("brandRules").and_then(|v| v.as_array()) {
         for r in arr {
-            let brand_id = r.get("brandId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let brand_id = r
+                .get("brandId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let mult = r.get("multiplier").and_then(|v| v.as_f64()).unwrap_or(0.0);
             if !brand_id.is_empty() && mult > 0.0 {
-                brand_rules.push(BrandRule { brand_id, multiplier: mult });
+                brand_rules.push(BrandRule {
+                    brand_id,
+                    multiplier: mult,
+                });
             }
         }
     }
@@ -114,7 +125,11 @@ fn parse_template(id: &str, name: &str, pterm: &str, pvalue: &str) -> Option<Pri
     let mut custom_prices = Vec::new();
     if let Some(arr) = cfg.get("customPrices").and_then(|v| v.as_array()) {
         for r in arr {
-            let gds_id = r.get("gdsId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let gds_id = r
+                .get("gdsId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let price = r.get("price").and_then(|v| v.as_f64()).unwrap_or(0.0);
             if !gds_id.is_empty() && price > 0.0 {
                 custom_prices.push(CustomPrice { gds_id, price });
@@ -138,7 +153,11 @@ fn parse_template(id: &str, name: &str, pterm: &str, pvalue: &str) -> Option<Pri
 
 // 按优先级获取基数：商品规则 > 品牌规则 > 默认基数
 // ★ 用户需求：所有策略类型都先查商品规则（优先级最高），再查品牌规则，最后用默认基数
-fn get_multiplier_with_priority(tpl: &PricingTemplate, gds_id: &str, brand_id: &str) -> (f64, &'static str) {
+fn get_multiplier_with_priority(
+    tpl: &PricingTemplate,
+    gds_id: &str,
+    brand_id: &str,
+) -> (f64, &'static str) {
     // ★ UUID 大小写不敏感比较（前端可能传小写，模板配置可能存大写）
     let gid_upper = gds_id.to_uppercase();
     let bid_upper = brand_id.to_uppercase();
@@ -161,18 +180,35 @@ fn get_multiplier_with_priority(tpl: &PricingTemplate, gds_id: &str, brand_id: &
 }
 
 // 根据策略计算价格，返回 (final_price, base_price, multiplier, matched_rule)
-fn calculate_price(tpl: &PricingTemplate, cost_price: f64, retail_price: f64, wholesale_price: f64, gds_id: &str, brand_id: &str) -> (f64, f64, f64, String) {
+fn calculate_price(
+    tpl: &PricingTemplate,
+    cost_price: f64,
+    retail_price: f64,
+    wholesale_price: f64,
+    gds_id: &str,
+    brand_id: &str,
+) -> (f64, f64, f64, String) {
     // 策略 6：自定义价格（优先级最高，直接返回预设价格）
     // 未命中的商品回退到默认零售价
     if tpl.strategy_type == 6 {
         let gid_upper = gds_id.to_uppercase();
         for cp in &tpl.custom_prices {
             if cp.gds_id.to_uppercase() == gid_upper {
-                return (round2(cp.price).max(0.0), cp.price, 1.0, "自定义价格".to_string());
+                return (
+                    round2(cp.price).max(0.0),
+                    cp.price,
+                    1.0,
+                    "自定义价格".to_string(),
+                );
             }
         }
         // 自定义价格未命中：回退到零售价
-        return (round2(retail_price).max(0.0), retail_price, 1.0, "默认零售价".to_string());
+        return (
+            round2(retail_price).max(0.0),
+            retail_price,
+            1.0,
+            "默认零售价".to_string(),
+        );
     }
 
     // ★ 所有策略类型都先查商品规则 > 品牌规则 > 默认基数（用户需求：商品定价规则优先级最高）
@@ -186,7 +222,12 @@ fn calculate_price(tpl: &PricingTemplate, cost_price: f64, retail_price: f64, wh
     };
     let _ = wholesale_price; // 预留：未来策略可支持批发价基准
     let final_price = round2(base_price * multiplier).max(0.0);
-    (final_price, base_price, multiplier, matched_rule.to_string())
+    (
+        final_price,
+        base_price,
+        multiplier,
+        matched_rule.to_string(),
+    )
 }
 
 pub async fn calc_batch(
@@ -218,7 +259,9 @@ pub async fn calc_batch(
         Some(r) => r,
         None => return Ok(Json(ApiResponse::err("客户不存在"))),
     };
-    let bound_tpl_id: Option<String> = cust_row.get::<&str, _>("PricingTemplateID").map(|s| s.to_string());
+    let bound_tpl_id: Option<String> = cust_row
+        .get::<&str, _>("PricingTemplateID")
+        .map(|s| s.to_string());
 
     // 2. 加载所有定价模板（tSys_Parameters 没有 State 字段，启用状态在 PValue JSON.status）
     let tpl_sql = "SELECT CONVERT(varchar(40), ParametersID) AS ParametersID, PCode, PName, PTerm, PValue FROM tSys_Parameters WHERE PKind = 'pricing' ORDER BY EDate DESC";
@@ -230,7 +273,9 @@ pub async fn calc_batch(
         let name = r.get::<&str, _>("PName").unwrap_or("").to_string();
         let pterm = r.get::<&str, _>("PTerm").unwrap_or("ALL").to_string();
         let pvalue = r.get::<&str, _>("PValue").unwrap_or("{}").to_string();
-        if id.is_empty() { continue; }
+        if id.is_empty() {
+            continue;
+        }
         if let Some(tpl) = parse_template(&id, &name, &pterm, &pvalue) {
             all_templates.push(tpl);
         }
@@ -263,7 +308,8 @@ pub async fn calc_batch(
     //    用 IN 子查询，避免逐个查询
     // ★ SQL Server collation gb18030 默认大小写敏感，uniqueidentifier 比较要统一转大写
     //   否则前端传入的小写 UUID 可能匹配不上数据库存储的 GUID 字符串
-    let gds_ids_str: Vec<String> = gds_ids.iter()
+    let gds_ids_str: Vec<String> = gds_ids
+        .iter()
         .map(|s| format!("'{}'", s.to_uppercase().replace('\'', "''")))
         .collect();
     let in_clause = gds_ids_str.join(",");
@@ -280,36 +326,62 @@ pub async fn calc_batch(
     let mut items = Vec::new();
     for gid in &gds_ids {
         let gid_norm = gid.trim();
-        if gid_norm.is_empty() { continue; }
+        if gid_norm.is_empty() {
+            continue;
+        }
         // ★ 大小写不敏感比较（UUID 在 SQL Server 返回大写，前端可能传小写）
         let gid_upper = gid_norm.to_uppercase();
         let gds_row = gds_rows.iter().find(|r| {
             let v = r.get::<&str, _>("GDSID").unwrap_or("");
             v.to_uppercase() == gid_upper
         });
-        let (final_price, base_price, multiplier, matched_rule, gds_no, gds_desc, brand_id) = if let Some(r) = gds_row {
-            let gds_no = r.get::<&str, _>("GDSNO").unwrap_or("").to_string();
-            let gds_desc = r.get::<&str, _>("GDSDesc").unwrap_or("").to_string();
-            let brand_id = r.get::<&str, _>("BrandID").unwrap_or("").to_string();
-            let cost_price = row_get_f64(r, "AInPrice");
-            let retail_price = row_get_f64(r, "SPrice");
-            let wholesale_price = row_get_f64(r, "BPrice");
-            if let Some(tpl) = matched_template {
-                let (fp, bp, m, rule) = calculate_price(tpl, cost_price, retail_price, wholesale_price, gid_norm, &brand_id);
-                (fp, bp, m, rule, gds_no, gds_desc, brand_id)
+        let (final_price, base_price, multiplier, matched_rule, gds_no, gds_desc, brand_id) =
+            if let Some(r) = gds_row {
+                let gds_no = r.get::<&str, _>("GDSNO").unwrap_or("").to_string();
+                let gds_desc = r.get::<&str, _>("GDSDesc").unwrap_or("").to_string();
+                let brand_id = r.get::<&str, _>("BrandID").unwrap_or("").to_string();
+                let cost_price = row_get_f64(r, "AInPrice");
+                let retail_price = row_get_f64(r, "SPrice");
+                let wholesale_price = row_get_f64(r, "BPrice");
+                if let Some(tpl) = matched_template {
+                    let (fp, bp, m, rule) = calculate_price(
+                        tpl,
+                        cost_price,
+                        retail_price,
+                        wholesale_price,
+                        gid_norm,
+                        &brand_id,
+                    );
+                    (fp, bp, m, rule, gds_no, gds_desc, brand_id)
+                } else {
+                    // 无模板：返回默认价（price_field 指定）
+                    let default_price = match price_field {
+                        "BPrice" => wholesale_price,
+                        "AInPrice" => cost_price,
+                        _ => retail_price,
+                    };
+                    (
+                        round2(default_price).max(0.0),
+                        default_price,
+                        1.0,
+                        "默认价".to_string(),
+                        gds_no,
+                        gds_desc,
+                        brand_id,
+                    )
+                }
             } else {
-                // 无模板：返回默认价（price_field 指定）
-                let default_price = match price_field {
-                    "BPrice" => wholesale_price,
-                    "AInPrice" => cost_price,
-                    _ => retail_price,
-                };
-                (round2(default_price).max(0.0), default_price, 1.0, "默认价".to_string(), gds_no, gds_desc, brand_id)
-            }
-        } else {
-            // 商品不存在
-            (0.0, 0.0, 1.0, "商品不存在".to_string(), String::new(), String::new(), String::new())
-        };
+                // 商品不存在
+                (
+                    0.0,
+                    0.0,
+                    1.0,
+                    "商品不存在".to_string(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                )
+            };
         items.push(serde_json::json!({
             "gdsId": gid_norm,
             "gdsNo": gds_no,

@@ -1,16 +1,16 @@
+use crate::config::Config;
+use crate::db::get_pool;
+use crate::handlers::base_data::try_get_value;
 use axum::{
-    extract::{Query, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode},
-    response::{IntoResponse, Response},
     Json,
+    extract::{Query, State},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use tiberius::Row;
-use crate::config::Config;
-use crate::db::get_pool;
-use crate::handlers::base_data::try_get_value;
 
 static SERVER_START: once_cell::sync::Lazy<Instant> = once_cell::sync::Lazy::new(Instant::now);
 static TOTAL_REQUESTS: AtomicU64 = AtomicU64::new(0);
@@ -92,14 +92,21 @@ pub async fn health_check() -> Response {
         Ok(mut conn) => {
             let latency = start.elapsed().as_millis() as u64;
             // 探测性查询：取当前数据库名
-            let result = conn.simple_query("SELECT @@SERVERNAME AS svr, DB_NAME() AS db").await;
+            let result = conn
+                .simple_query("SELECT @@SERVERNAME AS svr, DB_NAME() AS db")
+                .await;
             match result {
                 Ok(stream) => {
                     let rows: Vec<Row> = stream.into_first_result().await.unwrap_or_default();
-                    let (svr, db) = rows.first().map(|r| {
-                        (try_get_value(r, "svr").as_str().map(|s| s.to_string()),
-                         try_get_value(r, "db").as_str().map(|s| s.to_string()))
-                    }).unwrap_or((None, None));
+                    let (svr, db) = rows
+                        .first()
+                        .map(|r| {
+                            (
+                                try_get_value(r, "svr").as_str().map(|s| s.to_string()),
+                                try_get_value(r, "db").as_str().map(|s| s.to_string()),
+                            )
+                        })
+                        .unwrap_or((None, None));
                     DatabaseHealth {
                         status: "up",
                         latency_ms: latency,
@@ -114,7 +121,7 @@ pub async fn health_check() -> Response {
                     server: None,
                     database: None,
                     active_connections: None,
-                }
+                },
             }
         }
         Err(_e) => DatabaseHealth {
@@ -123,7 +130,7 @@ pub async fn health_check() -> Response {
             server: None,
             database: None,
             active_connections: None,
-        }
+        },
     };
 
     // D5 修复：DB 故障时返回 503，让 K8s readiness probe 自动摘除该实例
@@ -162,16 +169,44 @@ pub async fn metrics(
     let total = TOTAL_REQUESTS.load(Ordering::Relaxed);
     let failed = FAILED_REQUESTS.load(Ordering::Relaxed);
     let uptime = SERVER_START.elapsed().as_secs();
-    let error_rate = if total > 0 { (failed as f64 / total as f64) * 100.0 } else { 0.0 };
+    let error_rate = if total > 0 {
+        (failed as f64 / total as f64) * 100.0
+    } else {
+        0.0
+    };
     let (rss, virt) = read_memory_usage().unwrap_or((0, 0));
     let (pool_max, pool_active, pool_idle) = crate::db::get_pool_stats();
 
     match params.format.as_deref() {
-        Some("json") => render_metrics_json(total, failed, uptime, error_rate, rss, virt, pool_max, pool_active, pool_idle).into_response(),
-        Some("prom") | None => render_metrics_prom(total, failed, uptime, error_rate, rss, virt, pool_max, pool_active, pool_idle).into_response(),
-        Some(other) => {
-            (StatusCode::BAD_REQUEST, format!("unsupported format: {}", other)).into_response()
-        }
+        Some("json") => render_metrics_json(
+            total,
+            failed,
+            uptime,
+            error_rate,
+            rss,
+            virt,
+            pool_max,
+            pool_active,
+            pool_idle,
+        )
+        .into_response(),
+        Some("prom") | None => render_metrics_prom(
+            total,
+            failed,
+            uptime,
+            error_rate,
+            rss,
+            virt,
+            pool_max,
+            pool_active,
+            pool_idle,
+        )
+        .into_response(),
+        Some(other) => (
+            StatusCode::BAD_REQUEST,
+            format!("unsupported format: {}", other),
+        )
+            .into_response(),
     }
 }
 
@@ -198,8 +233,8 @@ fn render_metrics_json(
         error_rate_percent: (error_rate * 100.0).round() / 100.0,
         database: DatabaseMetrics {
             pool_max_size: pool_max,
-            pool_active: pool_active,
-            pool_idle: pool_idle,
+            pool_active,
+            pool_idle,
         },
         memory: MemoryMetrics {
             rss_bytes: rss,

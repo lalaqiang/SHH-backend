@@ -35,13 +35,20 @@ const LEGACY_XOR_KEY: [u8; 8] = [0xFC, 0xAA, 0x62, 0xA0, 0x30, 0x9C, 0xF1, 0xD4]
 /// 此处显式检查以避免静默截断导致的安全风险。
 pub fn hash_password(password: &str) -> Option<String> {
     if password.len() > 72 {
-        tracing::warn!("密码长度 {} 字节超过 bcrypt 72 字节限制，拒绝哈希", password.len());
+        tracing::warn!(
+            "密码长度 {} 字节超过 bcrypt 72 字节限制，拒绝哈希",
+            password.len()
+        );
         return None;
     }
     match bcrypt_hash(password, BCRYPT_COST) {
         Ok(h) => Some(format!("{}{}", BCRYPT_PREFIX, h)),
         Err(e) => {
-            tracing::error!("bcrypt 哈希失败: {:?}（密码长度 {} 字节）", e, password.len());
+            tracing::error!(
+                "bcrypt 哈希失败: {:?}（密码长度 {} 字节）",
+                e,
+                password.len()
+            );
             None
         }
     }
@@ -136,7 +143,7 @@ pub fn decrypt_legacy_password(stored: &str) -> Option<String> {
 
 /// 旧 SHA256+静态盐验证（仅用于向后兼容）
 fn verify_sha256_legacy(password: &str, stored: &str) -> bool {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(format!("{}{}", password, PASSWORD_SALT).as_bytes());
     let result = hasher.finalize();
@@ -147,7 +154,7 @@ fn verify_sha256_legacy(password: &str, stored: &str) -> bool {
 /// 仅供测试用：生成旧 SHA256 格式哈希（模拟数据库中的旧密码）
 #[cfg(test)]
 pub fn hash_sha256_legacy_for_test(password: &str) -> String {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(format!("{}{}", password, PASSWORD_SALT).as_bytes());
     let result = hasher.finalize();
@@ -238,7 +245,7 @@ mod tests {
     #[test]
     fn test_verify_sha256_legacy_distinct_from_pure_sha256() {
         // 旧哈希含静态盐，与纯 sha256(password) 不同
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(b"123456");
         let pure_hash = format!("{}{}", SHA256_PREFIX, hex::encode(hasher.finalize()));
@@ -331,9 +338,9 @@ mod tests {
     fn test_is_legacy_encrypted_password() {
         assert!(is_legacy_encrypted_password("CD98519405AAF1D4"));
         assert!(is_legacy_encrypted_password("cd98519405aaf1d4")); // 小写
-        assert!(!is_legacy_encrypted_password("CD98519405AAF1D"));   // 15 位
+        assert!(!is_legacy_encrypted_password("CD98519405AAF1D")); // 15 位
         assert!(!is_legacy_encrypted_password("CD98519405AAF1D44")); // 17 位
-        assert!(!is_legacy_encrypted_password("CD98519405AAF1DG"));  // 含非 hex
+        assert!(!is_legacy_encrypted_password("CD98519405AAF1DG")); // 含非 hex
         assert!(!is_legacy_encrypted_password(""));
     }
 

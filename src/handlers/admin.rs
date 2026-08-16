@@ -1,17 +1,17 @@
 // ============== 库存安全网触发器 / 约束 状态查询 ==============
 // 用于运维检查 DB 端的兜底机制是否安装
 
-use axum::{extract::State, Json};
-use serde::Serialize;
 use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
 use crate::utils::ApiResponse;
+use axum::{Json, extract::State};
+use serde::Serialize;
 
 #[derive(Serialize)]
 pub struct TriggerStatus {
     pub name: String,
-    pub kind: String,           // "TRIGGER" / "CHECK_CONSTRAINT"
+    pub kind: String, // "TRIGGER" / "CHECK_CONSTRAINT"
     pub is_installed: bool,
     pub details: Option<String>,
 }
@@ -34,13 +34,13 @@ pub async fn check_triggers(
 
     // 期望的对象清单（与 init_db_triggers.sql 保持一致）
     let expected: Vec<(&str, &str)> = vec![
-        ("trg_IODetail_SafetyStock",      "TRIGGER"),
-        ("trg_MoveDetail_SafetyStock",    "TRIGGER"),
-        ("trg_TranDetail_SafetyStock",    "TRIGGER"),
-        ("trg_Stock_AfterChange",         "TRIGGER"),
-        ("CK_Stock_Qty_NonNeg",           "CHECK_CONSTRAINT"),
-        ("CK_Stock_Qty_GE_QQty",          "CHECK_CONSTRAINT"),
-        ("CK_IODetail_Qty_NotZero",       "CHECK_CONSTRAINT"),
+        ("trg_IODetail_SafetyStock", "TRIGGER"),
+        ("trg_MoveDetail_SafetyStock", "TRIGGER"),
+        ("trg_TranDetail_SafetyStock", "TRIGGER"),
+        ("trg_Stock_AfterChange", "TRIGGER"),
+        ("CK_Stock_Qty_NonNeg", "CHECK_CONSTRAINT"),
+        ("CK_Stock_Qty_GE_QQty", "CHECK_CONSTRAINT"),
+        ("CK_IODetail_Qty_NotZero", "CHECK_CONSTRAINT"),
     ];
 
     let mut items: Vec<TriggerStatus> = Vec::new();

@@ -10,11 +10,11 @@
 //!
 //! 表覆盖与字段映射严格以 doc_graph.rs 为单一事实源。
 
-pub const STATE_DRAFT: &str = "D";        // D=删除/作废（保留常量名向后兼容，但语义为"已删除"）
+pub const STATE_DRAFT: &str = "D"; // D=删除/作废（保留常量名向后兼容，但语义为"已删除"）
 pub const STATE_EDITING: &str = "E";
 pub const STATE_REVIEWED: &str = "S";
 pub const STATE_CONFIRMED: &str = "Y";
-pub const STATE_NEW: &str = "N";          // 新建单据初始状态
+pub const STATE_NEW: &str = "N"; // 新建单据初始状态
 pub const STATE_CANCELLED: &str = "C";
 
 /// 判断状态是否为"已生效"（影响库存/财务）
@@ -72,7 +72,11 @@ pub fn detail_meta(table: &str) -> Option<(&'static str, &'static str, &'static 
         "tStk_Move" => Some(("tStk_MoveDetail", "MoveDetailID", "MoveID")),
         "tStk_StockCycle" => Some(("tStk_StockCycleDetail", "CycleDetailID", "CycleID")),
         "tStk_Tran" => Some(("tStk_TranDetail", "TranDetailID", "TranID")),
-        "tStk_ReplenishApply" => Some(("tStk_ReplenishApplyDtl", "ReplenishApplyDtlID", "ReplenishApplyID")),
+        "tStk_ReplenishApply" => Some((
+            "tStk_ReplenishApplyDtl",
+            "ReplenishApplyDtlID",
+            "ReplenishApplyID",
+        )),
         "tFin_Receipt" => Some(("tFin_ReceiptDtl", "ReceiptDtlID", "RecID")),
         "tFin_Payment" => Some(("tFin_PaymentDtl", "PaymentDtlID", "PayID")),
         // tSal_EmpSales / tFin_CashFlow 无明细表
@@ -160,14 +164,22 @@ pub fn date_field(table: &str) -> Option<&'static str> {
 pub fn is_reviewable_table(table: &str) -> bool {
     matches!(
         table,
-        "tSal_Quote" | "tPur_Quote" | "tPur_AdjPrice"
-        | "tSal_Order" | "tPur_Order"
-        | "tSal_Inv" | "tPur_Inv" | "tPur_Return"
-        | "tStk_IO" | "tStk_Move"
-        | "tStk_StockCycle"
-        | "tStk_Tran"
-        | "tStk_ReplenishApply"
-        | "tFin_Receipt" | "tFin_Payment" | "tFin_CashFlow"
+        "tSal_Quote"
+            | "tPur_Quote"
+            | "tPur_AdjPrice"
+            | "tSal_Order"
+            | "tPur_Order"
+            | "tSal_Inv"
+            | "tPur_Inv"
+            | "tPur_Return"
+            | "tStk_IO"
+            | "tStk_Move"
+            | "tStk_StockCycle"
+            | "tStk_Tran"
+            | "tStk_ReplenishApply"
+            | "tFin_Receipt"
+            | "tFin_Payment"
+            | "tFin_CashFlow"
     )
 }
 
@@ -180,8 +192,13 @@ pub fn is_reviewable_table(table: &str) -> bool {
 pub fn affects_stock(table: &str) -> bool {
     matches!(
         table,
-        "tStk_IO" | "tStk_Move" | "tStk_StockCycle" | "tStk_Tran"
-        | "tSal_Order" | "tSal_Inv"
-        | "tPur_Inv" | "tPur_Return"
+        "tStk_IO"
+            | "tStk_Move"
+            | "tStk_StockCycle"
+            | "tStk_Tran"
+            | "tSal_Order"
+            | "tSal_Inv"
+            | "tPur_Inv"
+            | "tPur_Return"
     )
 }

@@ -5,17 +5,17 @@
 //! - 明细报表：按门店+员工+品牌+提成比例分组
 //! - 数据源：tSal_Inv + tSal_InvDetail（State IN ('S','Y')）
 
-use axum::extract::{State, Json};
-use axum::response::Response;
-use axum::body::Body;
-use serde::Deserialize;
-use tiberius::{Row, ToSql};
-use rust_xlsxwriter::{Workbook, Format};
 use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
-use crate::utils::{ApiResponse, row_get_f64};
 use crate::services::commission_service;
+use crate::utils::{ApiResponse, row_get_f64};
+use axum::body::Body;
+use axum::extract::{Json, State};
+use axum::response::Response;
+use rust_xlsxwriter::{Format, Workbook};
+use serde::Deserialize;
+use tiberius::{Row, ToSql};
 
 // =====================================================================
 // 重算销售单提成
@@ -53,14 +53,14 @@ pub async fn recalc_invoice(
 pub struct CommissionReportParams {
     pub start_date: Option<String>,
     pub end_date: Option<String>,
-    pub warehouse_id: Option<String>,   // 门店 ID
-    pub emp_id: Option<String>,         // 员工 ID
-    pub brand_id: Option<String>,       // 品牌 ID
-    pub brand_level: Option<String>,    // 品牌分类 A/B/C/D
-    pub doc_no: Option<String>,         // 单据号模糊查询
+    pub warehouse_id: Option<String>,      // 门店 ID
+    pub emp_id: Option<String>,            // 员工 ID
+    pub brand_id: Option<String>,          // 品牌 ID
+    pub brand_level: Option<String>,       // 品牌分类 A/B/C/D
+    pub doc_no: Option<String>,            // 单据号模糊查询
     pub sales_person_name: Option<String>, // 销售员姓名模糊查询
-    pub product_keyword: Option<String>, // 商品编码/名称模糊查询
-    pub category_id: Option<String>,     // 商品分类 ID
+    pub product_keyword: Option<String>,   // 商品编码/名称模糊查询
+    pub category_id: Option<String>,       // 商品分类 ID
     // 分页参数（仅 commission-detail 接口使用，默认不分页）
     pub page: Option<u32>,
     pub page_size: Option<u32>,
@@ -93,7 +93,8 @@ pub async fn get_commission_summary(
         LEFT JOIN tBas_Stock s ON i.StkID = s.StkID
         LEFT JOIN tSys_Parameters p ON s.CommissionTemplateID = p.ParametersID
         WHERE i.State IN ('S', 'Y')
-    "#.to_string();
+    "#
+    .to_string();
 
     let mut query_params: Vec<Option<String>> = Vec::new();
     let mut pidx = 1;
@@ -114,21 +115,30 @@ pub async fn get_commission_summary(
     }
     if let Some(wid) = &params.warehouse_id {
         if !wid.is_empty() {
-            sql.push_str(&format!(" AND i.StkID = CAST(@p{} AS uniqueidentifier)", pidx));
+            sql.push_str(&format!(
+                " AND i.StkID = CAST(@p{} AS uniqueidentifier)",
+                pidx
+            ));
             pidx += 1;
             query_params.push(Some(wid.clone()));
         }
     }
     if let Some(eid) = &params.emp_id {
         if !eid.is_empty() {
-            sql.push_str(&format!(" AND i.EmpID = CAST(@p{} AS uniqueidentifier)", pidx));
+            sql.push_str(&format!(
+                " AND i.EmpID = CAST(@p{} AS uniqueidentifier)",
+                pidx
+            ));
             pidx += 1;
             query_params.push(Some(eid.clone()));
         }
     }
     if let Some(bid) = &params.brand_id {
         if !bid.is_empty() {
-            sql.push_str(&format!(" AND g.BrandID = CAST(@p{} AS uniqueidentifier)", pidx));
+            sql.push_str(&format!(
+                " AND g.BrandID = CAST(@p{} AS uniqueidentifier)",
+                pidx
+            ));
             pidx += 1;
             query_params.push(Some(bid.clone()));
         }
@@ -143,9 +153,7 @@ pub async fn get_commission_summary(
     sql.push_str(" GROUP BY i.EmpID, e.EmpName, i.StkID, s.StkName, p.PName");
     sql.push_str(" ORDER BY e.EmpName, s.StkName");
 
-    let param_refs: Vec<&dyn ToSql> = query_params.iter()
-        .map(|v| v as &dyn ToSql)
-        .collect();
+    let param_refs: Vec<&dyn ToSql> = query_params.iter().map(|v| v as &dyn ToSql).collect();
     let stream = conn.query(&sql, &param_refs).await?;
     let rows: Vec<Row> = stream.into_first_result().await?;
 
@@ -227,7 +235,8 @@ pub async fn get_commission_detail(
         LEFT JOIN tBas_Emp e ON i.EmpID = e.EmpID
         LEFT JOIN tBas_Stock s ON i.StkID = s.StkID
         WHERE i.State IN ('S', 'Y')
-    "#.to_string();
+    "#
+    .to_string();
 
     let mut query_params: Vec<Option<String>> = Vec::new();
     let mut pidx = 1;
@@ -248,21 +257,30 @@ pub async fn get_commission_detail(
     }
     if let Some(wid) = &params.warehouse_id {
         if !wid.is_empty() {
-            sql.push_str(&format!(" AND i.StkID = CAST(@p{} AS uniqueidentifier)", pidx));
+            sql.push_str(&format!(
+                " AND i.StkID = CAST(@p{} AS uniqueidentifier)",
+                pidx
+            ));
             pidx += 1;
             query_params.push(Some(wid.clone()));
         }
     }
     if let Some(eid) = &params.emp_id {
         if !eid.is_empty() {
-            sql.push_str(&format!(" AND i.EmpID = CAST(@p{} AS uniqueidentifier)", pidx));
+            sql.push_str(&format!(
+                " AND i.EmpID = CAST(@p{} AS uniqueidentifier)",
+                pidx
+            ));
             pidx += 1;
             query_params.push(Some(eid.clone()));
         }
     }
     if let Some(bid) = &params.brand_id {
         if !bid.is_empty() {
-            sql.push_str(&format!(" AND g.BrandID = CAST(@p{} AS uniqueidentifier)", pidx));
+            sql.push_str(&format!(
+                " AND g.BrandID = CAST(@p{} AS uniqueidentifier)",
+                pidx
+            ));
             pidx += 1;
             query_params.push(Some(bid.clone()));
         }
@@ -290,14 +308,20 @@ pub async fn get_commission_detail(
     }
     if let Some(pk) = &params.product_keyword {
         if !pk.is_empty() {
-            sql.push_str(&format!(" AND (g.GDSNO LIKE '%' + @p{} + '%' OR g.GDSDesc LIKE '%' + @p{} + '%')", pidx, pidx));
+            sql.push_str(&format!(
+                " AND (g.GDSNO LIKE '%' + @p{} + '%' OR g.GDSDesc LIKE '%' + @p{} + '%')",
+                pidx, pidx
+            ));
             pidx += 1;
             query_params.push(Some(pk.clone()));
         }
     }
     if let Some(cid) = &params.category_id {
         if !cid.is_empty() {
-            sql.push_str(&format!(" AND g.GDSTypeID = CAST(@p{} AS uniqueidentifier)", pidx));
+            sql.push_str(&format!(
+                " AND g.GDSTypeID = CAST(@p{} AS uniqueidentifier)",
+                pidx
+            ));
             query_params.push(Some(cid.clone()));
         }
     }
@@ -341,14 +365,16 @@ pub async fn get_commission_detail(
             }
         );
 
-        let agg_param_refs: Vec<&dyn ToSql> = query_params.iter()
-            .map(|v| v as &dyn ToSql)
-            .collect();
+        let agg_param_refs: Vec<&dyn ToSql> =
+            query_params.iter().map(|v| v as &dyn ToSql).collect();
         let agg_stream = conn.query(&agg_sql, &agg_param_refs).await?;
         if let Some(agg_row) = agg_stream.into_row().await? {
             // SQL Server COUNT(*) 返回 i32；兼容 i32/i64 两种情况，避免类型转换 panic
-            total_count = agg_row.try_get::<i32, _>("TotalCount")
-                .ok().flatten().map(|v| v as i64)
+            total_count = agg_row
+                .try_get::<i32, _>("TotalCount")
+                .ok()
+                .flatten()
+                .map(|v| v as i64)
                 .or_else(|| agg_row.try_get::<i64, _>("TotalCount").ok().flatten())
                 .unwrap_or(0);
             total_sales = row_get_f64(&agg_row, "TotalSales");
@@ -359,12 +385,13 @@ pub async fn get_commission_detail(
         // 添加分页（OFFSET/FETCH，整数内联无注入风险）
         let offset = ((page - 1) * page_size) as i64;
         let fetch = page_size as i64;
-        sql.push_str(&format!(" OFFSET {} ROWS FETCH NEXT {} ROWS ONLY", offset, fetch));
+        sql.push_str(&format!(
+            " OFFSET {} ROWS FETCH NEXT {} ROWS ONLY",
+            offset, fetch
+        ));
     }
 
-    let param_refs: Vec<&dyn ToSql> = query_params.iter()
-        .map(|v| v as &dyn ToSql)
-        .collect();
+    let param_refs: Vec<&dyn ToSql> = query_params.iter().map(|v| v as &dyn ToSql).collect();
     let stream = conn.query(&sql, &param_refs).await?;
     let rows: Vec<Row> = stream.into_first_result().await?;
 
@@ -419,7 +446,11 @@ pub async fn get_commission_detail(
     }
 
     // 分页时 total_count 从聚合查询获取；不分页时从 items 长度获取
-    let row_count = if is_paged { total_count } else { items.len() as i64 };
+    let row_count = if is_paged {
+        total_count
+    } else {
+        items.len() as i64
+    };
 
     Ok(Json(ApiResponse::ok(serde_json::json!({
         "items": items,
@@ -467,21 +498,30 @@ pub async fn get_commission_unified(
     }
     if let Some(wid) = &params.warehouse_id {
         if !wid.is_empty() {
-            where_sql.push_str(&format!(" AND i.StkID = CAST(@p{} AS uniqueidentifier)", pidx));
+            where_sql.push_str(&format!(
+                " AND i.StkID = CAST(@p{} AS uniqueidentifier)",
+                pidx
+            ));
             query_params.push(Some(wid.clone()));
             pidx += 1;
         }
     }
     if let Some(eid) = &params.emp_id {
         if !eid.is_empty() {
-            where_sql.push_str(&format!(" AND i.EmpID = CAST(@p{} AS uniqueidentifier)", pidx));
+            where_sql.push_str(&format!(
+                " AND i.EmpID = CAST(@p{} AS uniqueidentifier)",
+                pidx
+            ));
             query_params.push(Some(eid.clone()));
             pidx += 1;
         }
     }
     if let Some(bid) = &params.brand_id {
         if !bid.is_empty() {
-            where_sql.push_str(&format!(" AND g.BrandID = CAST(@p{} AS uniqueidentifier)", pidx));
+            where_sql.push_str(&format!(
+                " AND g.BrandID = CAST(@p{} AS uniqueidentifier)",
+                pidx
+            ));
             query_params.push(Some(bid.clone()));
             pidx += 1;
         }
@@ -529,7 +569,8 @@ pub async fn get_commission_unified(
         where_sql = where_sql
     );
 
-    let summary_param_refs: Vec<&dyn ToSql> = owned_params.iter().map(|s| s as &dyn ToSql).collect();
+    let summary_param_refs: Vec<&dyn ToSql> =
+        owned_params.iter().map(|s| s as &dyn ToSql).collect();
     let summary_stream = conn.query(&summary_sql, &summary_param_refs).await?;
     let summary_rows: Vec<Row> = summary_stream.into_first_result().await?;
 
@@ -639,7 +680,12 @@ pub async fn get_commission_unified(
 fn rfc5987_encode(s: &str) -> String {
     let mut result = String::new();
     for byte in s.as_bytes() {
-        if byte.is_ascii_alphanumeric() || *byte == b'-' || *byte == b'_' || *byte == b'.' || *byte == b'~' {
+        if byte.is_ascii_alphanumeric()
+            || *byte == b'-'
+            || *byte == b'_'
+            || *byte == b'.'
+            || *byte == b'~'
+        {
             result.push(*byte as char);
         } else {
             result.push_str(&format!("%{:02X}", byte));
@@ -653,7 +699,9 @@ fn build_xlsx_response(mut workbook: Workbook, filename: &str) -> Response {
     let buf = match workbook.save_to_buffer() {
         Ok(b) => b,
         Err(e) => {
-            let body = serde_json::json!({"success":false,"message":&format!("生成Excel失败: {}", e)}).to_string();
+            let body =
+                serde_json::json!({"success":false,"message":&format!("生成Excel失败: {}", e)})
+                    .to_string();
             return axum::response::Response::builder()
                 .status(500)
                 .header("Content-Type", "application/json")
@@ -664,17 +712,21 @@ fn build_xlsx_response(mut workbook: Workbook, filename: &str) -> Response {
     let encoded = rfc5987_encode(filename);
     axum::response::Response::builder()
         .status(200)
-        .header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        .header("Content-Disposition", format!("attachment; filename*=UTF-8''{}", encoded))
+        .header(
+            "Content-Type",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        .header(
+            "Content-Disposition",
+            format!("attachment; filename*=UTF-8''{}", encoded),
+        )
         .body(Body::from(buf))
         .unwrap()
 }
 
 /// 构建表头格式（加粗 + 灰底）
 fn header_format() -> Format {
-    Format::new()
-        .set_bold()
-        .set_background_color("E0E0E0")
+    Format::new().set_bold().set_background_color("E0E0E0")
 }
 
 /// 构建通用 WHERE 条件片段和参数（复用筛选逻辑）
@@ -702,21 +754,30 @@ fn build_report_where(params: &CommissionReportParams) -> (String, Vec<String>) 
     }
     if let Some(wid) = &params.warehouse_id {
         if !wid.is_empty() {
-            where_sql.push_str(&format!(" AND i.StkID = CAST(@p{} AS uniqueidentifier)", pidx));
+            where_sql.push_str(&format!(
+                " AND i.StkID = CAST(@p{} AS uniqueidentifier)",
+                pidx
+            ));
             query_params.push(wid.clone());
             pidx += 1;
         }
     }
     if let Some(eid) = &params.emp_id {
         if !eid.is_empty() {
-            where_sql.push_str(&format!(" AND i.EmpID = CAST(@p{} AS uniqueidentifier)", pidx));
+            where_sql.push_str(&format!(
+                " AND i.EmpID = CAST(@p{} AS uniqueidentifier)",
+                pidx
+            ));
             query_params.push(eid.clone());
             pidx += 1;
         }
     }
     if let Some(bid) = &params.brand_id {
         if !bid.is_empty() {
-            where_sql.push_str(&format!(" AND g.BrandID = CAST(@p{} AS uniqueidentifier)", pidx));
+            where_sql.push_str(&format!(
+                " AND g.BrandID = CAST(@p{} AS uniqueidentifier)",
+                pidx
+            ));
             query_params.push(bid.clone());
             pidx += 1;
         }
@@ -752,14 +813,20 @@ fn build_detail_where(params: &CommissionReportParams) -> (String, Vec<String>) 
     }
     if let Some(pk) = &params.product_keyword {
         if !pk.is_empty() {
-            where_sql.push_str(&format!(" AND (g.GDSNO LIKE '%' + @p{} + '%' OR g.GDSDesc LIKE '%' + @p{} + '%')", pidx, pidx));
+            where_sql.push_str(&format!(
+                " AND (g.GDSNO LIKE '%' + @p{} + '%' OR g.GDSDesc LIKE '%' + @p{} + '%')",
+                pidx, pidx
+            ));
             query_params.push(pk.clone());
             pidx += 1;
         }
     }
     if let Some(cid) = &params.category_id {
         if !cid.is_empty() {
-            where_sql.push_str(&format!(" AND g.GDSTypeID = CAST(@p{} AS uniqueidentifier)", pidx));
+            where_sql.push_str(&format!(
+                " AND g.GDSTypeID = CAST(@p{} AS uniqueidentifier)",
+                pidx
+            ));
             query_params.push(cid.clone());
         }
     }
@@ -824,7 +891,14 @@ pub async fn export_commission_unified_summary(
     let _ = worksheet.set_name("提成汇总表");
 
     let hfmt = header_format();
-    let headers = ["序号", "负责人", "门店名称", "提成模板", "总销售额", "总提成"];
+    let headers = [
+        "序号",
+        "负责人",
+        "门店名称",
+        "提成模板",
+        "总销售额",
+        "总提成",
+    ];
     for (col, h) in headers.iter().enumerate() {
         let _ = worksheet.write_string_with_format(0, col as u16, *h, &hfmt);
     }
@@ -852,12 +926,12 @@ pub async fn export_commission_unified_summary(
     let _ = worksheet.write_number(summary_row, 5, total_comm);
 
     // 列宽
-    let _ = worksheet.set_column_width(0, 8);   // A 序号
-    let _ = worksheet.set_column_width(1, 15);  // B 负责人
-    let _ = worksheet.set_column_width(2, 15);  // C 门店名称
-    let _ = worksheet.set_column_width(3, 15);  // D 提成模板
-    let _ = worksheet.set_column_width(4, 12);  // E 总销售额
-    let _ = worksheet.set_column_width(5, 12);  // F 总提成
+    let _ = worksheet.set_column_width(0, 8); // A 序号
+    let _ = worksheet.set_column_width(1, 15); // B 负责人
+    let _ = worksheet.set_column_width(2, 15); // C 门店名称
+    let _ = worksheet.set_column_width(3, 15); // D 提成模板
+    let _ = worksheet.set_column_width(4, 12); // E 总销售额
+    let _ = worksheet.set_column_width(5, 12); // F 总提成
 
     let now = chrono::Local::now().format("%Y%m%d").to_string();
     let filename = format!("提成汇总表_{}.xlsx", now);
@@ -922,7 +996,16 @@ pub async fn export_commission_unified_detail(
     let _ = worksheet.set_name("提成明细表");
 
     let hfmt = header_format();
-    let headers = ["序号", "负责人", "门店", "品牌分类", "品牌", "提成比例", "销售金额", "提成金额"];
+    let headers = [
+        "序号",
+        "负责人",
+        "门店",
+        "品牌分类",
+        "品牌",
+        "提成比例",
+        "销售金额",
+        "提成金额",
+    ];
     for (col, h) in headers.iter().enumerate() {
         let _ = worksheet.write_string_with_format(0, col as u16, *h, &hfmt);
     }
@@ -951,14 +1034,14 @@ pub async fn export_commission_unified_detail(
     let _ = worksheet.write_number(summary_row, 6, total_sales);
     let _ = worksheet.write_number(summary_row, 7, total_comm);
 
-    let _ = worksheet.set_column_width(0, 8);   // A 序号
-    let _ = worksheet.set_column_width(1, 12);  // B 负责人
-    let _ = worksheet.set_column_width(2, 12);  // C 门店
-    let _ = worksheet.set_column_width(3, 12);  // D 品牌分类
-    let _ = worksheet.set_column_width(4, 12);  // E 品牌
-    let _ = worksheet.set_column_width(5, 10);  // F 提成比例
-    let _ = worksheet.set_column_width(6, 10);  // G 销售金额
-    let _ = worksheet.set_column_width(7, 10);  // H 提成金额
+    let _ = worksheet.set_column_width(0, 8); // A 序号
+    let _ = worksheet.set_column_width(1, 12); // B 负责人
+    let _ = worksheet.set_column_width(2, 12); // C 门店
+    let _ = worksheet.set_column_width(3, 12); // D 品牌分类
+    let _ = worksheet.set_column_width(4, 12); // E 品牌
+    let _ = worksheet.set_column_width(5, 10); // F 提成比例
+    let _ = worksheet.set_column_width(6, 10); // G 销售金额
+    let _ = worksheet.set_column_width(7, 10); // H 提成金额
 
     let now = chrono::Local::now().format("%Y%m%d").to_string();
     let filename = format!("提成明细表_{}.xlsx", now);
@@ -1030,7 +1113,14 @@ pub async fn export_commission_report_excel(
     // Sheet1: 单据明细
     let ws1 = workbook.add_worksheet();
     let _ = ws1.set_name("Commission Details");
-    let headers1 = ["单据编号", "门店", "销售员", "销售日期", "销售金额", "提成金额"];
+    let headers1 = [
+        "单据编号",
+        "门店",
+        "销售员",
+        "销售日期",
+        "销售金额",
+        "提成金额",
+    ];
     for (col, h) in headers1.iter().enumerate() {
         let _ = ws1.write_string(0, col as u16, *h);
     }
@@ -1038,14 +1128,22 @@ pub async fn export_commission_report_excel(
     let mut total_sales = 0.0f64;
     let mut total_comm = 0.0f64;
     // 同时收集门店/销售员汇总数据
-    let mut wh_map: std::collections::HashMap<String, (i64, f64, f64)> = std::collections::HashMap::new();
-    let mut sp_map: std::collections::HashMap<String, (i64, f64, f64)> = std::collections::HashMap::new();
+    let mut wh_map: std::collections::HashMap<String, (i64, f64, f64)> =
+        std::collections::HashMap::new();
+    let mut sp_map: std::collections::HashMap<String, (i64, f64, f64)> =
+        std::collections::HashMap::new();
 
     for (i, row) in rows.iter().enumerate() {
         let r = (i + 2) as u32;
         let doc_no = row.get::<&str, _>("DocNo").unwrap_or("").to_string();
-        let wh_name = row.get::<&str, _>("WarehouseName").unwrap_or("").to_string();
-        let sp_name = row.get::<&str, _>("SalesPersonName").unwrap_or("").to_string();
+        let wh_name = row
+            .get::<&str, _>("WarehouseName")
+            .unwrap_or("")
+            .to_string();
+        let sp_name = row
+            .get::<&str, _>("SalesPersonName")
+            .unwrap_or("")
+            .to_string();
         let sales_date = row.get::<&str, _>("SalesDate").unwrap_or("").to_string();
         let amt = row_get_f64(row, "TotalAmount");
         let comm = row_get_f64(row, "TotalCommission");
@@ -1204,9 +1302,24 @@ pub async fn export_commission_detail_excel(
 
     let hfmt = header_format();
     let headers = [
-        "单据编号", "销售日期", "门店", "负责人", "商品编码", "商品名称",
-        "品牌", "品牌分类", "分类", "数量", "单价", "金额",
-        "成本单价", "成本金额", "毛利", "提成类型", "提成比例", "提成金额",
+        "单据编号",
+        "销售日期",
+        "门店",
+        "负责人",
+        "商品编码",
+        "商品名称",
+        "品牌",
+        "品牌分类",
+        "分类",
+        "数量",
+        "单价",
+        "金额",
+        "成本单价",
+        "成本金额",
+        "毛利",
+        "提成类型",
+        "提成比例",
+        "提成金额",
     ];
     for (col, h) in headers.iter().enumerate() {
         let _ = worksheet.write_string_with_format(0, col as u16, *h, &hfmt);
@@ -1225,7 +1338,11 @@ pub async fn export_commission_detail_excel(
         let cost = row_get_f64(row, "CostAmount");
         let profit = row_get_f64(row, "Profit");
         let comm = row_get_f64(row, "Commission");
-        let ctype: i32 = row.try_get::<i32, _>("CommissionType").ok().flatten().unwrap_or(0);
+        let ctype: i32 = row
+            .try_get::<i32, _>("CommissionType")
+            .ok()
+            .flatten()
+            .unwrap_or(0);
         let ctype_str = match ctype {
             1 => "商品规则",
             2 => "品牌规则",
@@ -1329,25 +1446,31 @@ pub async fn export_product_rules(
 
     // 解析 JSON 获取商品规则列表
     let template_json: serde_json::Value = serde_json::from_str(&pvalue).unwrap_or_default();
-    let product_rules = template_json.get("product_rules")
+    let product_rules = template_json
+        .get("product_rules")
         .or_else(|| template_json.get("productRules"))
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
 
     // 收集所有 product_id 用于批量查询商品信息
-    let product_ids: Vec<String> = product_rules.iter()
+    let product_ids: Vec<String> = product_rules
+        .iter()
         .filter_map(|r| {
-            r.get("product_id").or_else(|| r.get("productId"))
+            r.get("product_id")
+                .or_else(|| r.get("productId"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
         })
         .collect();
 
     // 批量查询商品编码和名称
-    let mut product_map: std::collections::HashMap<String, (String, String)> = std::collections::HashMap::new();
+    let mut product_map: std::collections::HashMap<String, (String, String)> =
+        std::collections::HashMap::new();
     if !product_ids.is_empty() {
-        let placeholders: Vec<String> = (1..=product_ids.len()).map(|i| format!("@p{}", i)).collect();
+        let placeholders: Vec<String> = (1..=product_ids.len())
+            .map(|i| format!("@p{}", i))
+            .collect();
         let in_clause = placeholders.join(", ");
         let goods_sql = format!(
             "SELECT CONVERT(varchar(40), GDSID) AS GDSID, GDSNO, GDSDesc FROM tBas_Goods WHERE GDSID IN ({})",
@@ -1378,9 +1501,13 @@ pub async fn export_product_rules(
 
     let mut row_idx = 1u32;
     for rule in &product_rules {
-        let pid = rule.get("product_id").or_else(|| rule.get("productId"))
-            .and_then(|v| v.as_str()).unwrap_or("");
-        let commission = rule.get("commission")
+        let pid = rule
+            .get("product_id")
+            .or_else(|| rule.get("productId"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let commission = rule
+            .get("commission")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0);
 
@@ -1431,15 +1558,18 @@ pub async fn export_brand_rules(
     let pvalue = rows[0].get::<&str, _>("PValue").unwrap_or("").to_string();
 
     let template_json: serde_json::Value = serde_json::from_str(&pvalue).unwrap_or_default();
-    let brand_rules = template_json.get("brand_rules")
+    let brand_rules = template_json
+        .get("brand_rules")
         .or_else(|| template_json.get("brandRules"))
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
 
-    let brand_ids: Vec<String> = brand_rules.iter()
+    let brand_ids: Vec<String> = brand_rules
+        .iter()
         .filter_map(|r| {
-            r.get("brand_id").or_else(|| r.get("brandId"))
+            r.get("brand_id")
+                .or_else(|| r.get("brandId"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
         })
@@ -1477,9 +1607,13 @@ pub async fn export_brand_rules(
 
     let mut row_idx = 1u32;
     for rule in &brand_rules {
-        let bid = rule.get("brand_id").or_else(|| rule.get("brandId"))
-            .and_then(|v| v.as_str()).unwrap_or("");
-        let commission = rule.get("commission")
+        let bid = rule
+            .get("brand_id")
+            .or_else(|| rule.get("brandId"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let commission = rule
+            .get("commission")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0);
 

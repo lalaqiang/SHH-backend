@@ -17,11 +17,7 @@ use erp_server::middleware::rate_limit::{check_rate_limit, presets};
 #[test]
 fn rate_limit_under_threshold_all_pass() {
     for i in 0..5 {
-        assert!(
-            check_rate_limit("1.2.3.4", 5),
-            "第 {} 次应该通过",
-            i
-        );
+        assert!(check_rate_limit("1.2.3.4", 5), "第 {} 次应该通过", i);
     }
 }
 
@@ -32,10 +28,7 @@ fn rate_limit_over_threshold_returns_false() {
         assert!(check_rate_limit("2.3.4.5", 3), "第 {} 次应通过", i);
     }
     // 第 4 次被限流
-    assert!(
-        !check_rate_limit("2.3.4.5", 3),
-        "超出阈值应返回 false"
-    );
+    assert!(!check_rate_limit("2.3.4.5", 3), "超出阈值应返回 false");
 }
 
 #[test]
@@ -43,16 +36,10 @@ fn rate_limit_different_ips_independent() {
     // IP-A 用满
     assert!(check_rate_limit("10.0.0.1", 2));
     assert!(check_rate_limit("10.0.0.1", 2));
-    assert!(
-        !check_rate_limit("10.0.0.1", 2),
-        "IP-A 第 3 次应被限流"
-    );
+    assert!(!check_rate_limit("10.0.0.1", 2), "IP-A 第 3 次应被限流");
 
     // IP-B 仍可正常
-    assert!(
-        check_rate_limit("10.0.0.2", 2),
-        "IP-B 不应受 IP-A 影响"
-    );
+    assert!(check_rate_limit("10.0.0.2", 2), "IP-B 不应受 IP-A 影响");
 }
 
 #[test]
@@ -85,11 +72,12 @@ fn rate_limit_preset_values() {
     assert_eq!(presets::WRITE.max_requests, 120);
     assert_eq!(presets::READ.max_requests, 600);
 
-    // 防御性：确保预设的级别排序（READ 最宽，LOGIN 最严）
-    assert!(presets::LOGIN.max_requests < presets::EXPORT.max_requests);
-    assert!(presets::EXPORT.max_requests < presets::PRINT.max_requests);
-    assert!(presets::PRINT.max_requests < presets::WRITE.max_requests);
-    assert!(presets::WRITE.max_requests < presets::READ.max_requests);
+    // 防御性：确保预设的级别排序（READ 最宽，LOGIN 最严）。
+    // 预设为编译期常量，比较结果可静态求值，用 const 断言在编译期锁住该约定。
+    const _: () = assert!(presets::LOGIN.max_requests < presets::EXPORT.max_requests);
+    const _: () = assert!(presets::EXPORT.max_requests < presets::PRINT.max_requests);
+    const _: () = assert!(presets::PRINT.max_requests < presets::WRITE.max_requests);
+    const _: () = assert!(presets::WRITE.max_requests < presets::READ.max_requests);
 }
 
 #[test]

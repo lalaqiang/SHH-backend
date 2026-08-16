@@ -1,12 +1,12 @@
-use axum::extract::{Request, ConnectInfo, State};
+use axum::extract::{ConnectInfo, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use once_cell::sync::Lazy;
 use tracing::warn;
 
 /// 滑动窗口：记录每个 IP 的请求时间戳列表
@@ -67,7 +67,10 @@ pub struct RateLimitState {
 
 impl RateLimitConfig {
     pub const fn new(max_requests: usize, description: &'static str) -> Self {
-        Self { max_requests, description }
+        Self {
+            max_requests,
+            description,
+        }
     }
 }
 
@@ -172,7 +175,10 @@ pub async fn smart_rate_limit(
     if let Some(c) = cfg {
         let client_ip = extract_client_ip(&request, state.trust_proxy);
         if !check_rate_limit(&client_ip, c.max_requests) {
-            warn!("[RateLimit] 限流触发 ip={} desc={} path={}", client_ip, c.description, path);
+            warn!(
+                "[RateLimit] 限流触发 ip={} desc={} path={}",
+                client_ip, c.description, path
+            );
             return Err(rate_limited_response(c.description, c.max_requests));
         }
     }
@@ -193,7 +199,10 @@ async fn rate_limit_layer(
             "[RateLimit] 限流触发 ip={} desc={} max={}/min",
             client_ip, config.description, config.max_requests
         );
-        return Err(rate_limited_response(config.description, config.max_requests));
+        return Err(rate_limited_response(
+            config.description,
+            config.max_requests,
+        ));
     }
 
     Ok(next.run(request).await)

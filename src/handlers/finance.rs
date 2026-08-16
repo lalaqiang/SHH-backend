@@ -1,12 +1,12 @@
-use axum::extract::{State, Json, Extension};
-use serde::Deserialize;
-use tiberius::Row;
 use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
-use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
 use crate::handlers::base_data::row_to_json;
 use crate::middleware::auth::Claims;
+use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
+use axum::extract::{Extension, Json, State};
+use serde::Deserialize;
+use tiberius::Row;
 
 #[derive(Deserialize)]
 pub struct PaginationParams {
@@ -78,7 +78,8 @@ pub async fn get_receipt_list(
         if !kw.is_empty() {
             base_query.push_str(&format!(
                 " AND (r.RecNO LIKE @p{} OR r.Remark LIKE @p{})",
-                pidx, pidx + 1
+                pidx,
+                pidx + 1
             ));
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
@@ -148,13 +149,16 @@ pub async fn create_receipt(
     }
     // 修复 P2：插入前校验 RecNO 重复，避免唯一约束冲突或数据混乱
     // 仅检查未删除单（State <> 'D'），已删除的单号允许复用
-    let dup_check = conn.query(
-        "SELECT TOP 1 1 FROM tFin_Receipt WHERE RecNO = @p1 AND State <> 'D'",
-        &[&rec_no],
-    ).await?;
+    let dup_check = conn
+        .query(
+            "SELECT TOP 1 1 FROM tFin_Receipt WHERE RecNO = @p1 AND State <> 'D'",
+            &[&rec_no],
+        )
+        .await?;
     if dup_check.into_row().await?.is_some() {
         return Ok(Json(ApiResponse::err(&format!(
-            "收款单号 {} 已存在，请重新生成", rec_no
+            "收款单号 {} 已存在，请重新生成",
+            rec_no
         ))));
     }
     let rec_date = body.RecDate.as_deref().unwrap_or(&now_naive);
@@ -163,15 +167,35 @@ pub async fn create_receipt(
     //   解决：空值统一转为 ZERO_UUID（与 inventory.rs::empty_or_zero 风格一致），让数据库存 NULL
     //   需要进一步改造为 Option<&str> 才能让数据库真正存 NULL，目前用 ZERO_UUID 占位
     const ZERO_UUID: &str = "00000000-0000-0000-0000-000000000000";
-    let cust_id = body.CustID.as_deref().filter(|s| !s.is_empty()).unwrap_or(ZERO_UUID);
-    let dept_id = body.DeptID.as_deref().filter(|s| !s.is_empty()).unwrap_or(ZERO_UUID);
-    let emp_id = body.EmpID.as_deref().filter(|s| !s.is_empty()).unwrap_or(ZERO_UUID);
-    let stk_id = body.StkID.as_deref().filter(|s| !s.is_empty()).unwrap_or(ZERO_UUID);
+    let cust_id = body
+        .CustID
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(ZERO_UUID);
+    let dept_id = body
+        .DeptID
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(ZERO_UUID);
+    let emp_id = body
+        .EmpID
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(ZERO_UUID);
+    let stk_id = body
+        .StkID
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(ZERO_UUID);
     let rec_amt = body.RecAmt.unwrap_or(0.0);
     let rec_type = body.RecType.as_deref().unwrap_or("cash");
     let bank_name = body.BankName.as_deref().unwrap_or("");
     let bank_account = body.BankAccount.as_deref().unwrap_or("");
-    let doc_id = body.DocID.as_deref().filter(|s| !s.is_empty()).unwrap_or(ZERO_UUID);
+    let doc_id = body
+        .DocID
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(ZERO_UUID);
     let doc_no = body.DocNo.as_deref().unwrap_or("");
     let remark = body.Remark.as_deref().unwrap_or("");
     // 修复 P0：EUser 从认证 token 提取当前登录用户 EmpID（原硬编码 "system"）
@@ -181,12 +205,28 @@ pub async fn create_receipt(
                  RecAmt, RecType, BankName, BankAccount, DocID, DocNo, Remark, State, EDate, EUser)
                  VALUES (NEWID(), @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16)"#;
 
-    conn.execute(sql, &[
-        &rec_no, &rec_date, &cust_id, &dept_id, &emp_id, &stk_id,
-        &rec_amt, &rec_type, &bank_name, &bank_account, &doc_id, &doc_no, &remark,
-        &crate::handlers::doc_state::STATE_NEW,
-        &now_naive, &e_user,
-    ]).await?;
+    conn.execute(
+        sql,
+        &[
+            &rec_no,
+            &rec_date,
+            &cust_id,
+            &dept_id,
+            &emp_id,
+            &stk_id,
+            &rec_amt,
+            &rec_type,
+            &bank_name,
+            &bank_account,
+            &doc_id,
+            &doc_no,
+            &remark,
+            &crate::handlers::doc_state::STATE_NEW,
+            &now_naive,
+            &e_user,
+        ],
+    )
+    .await?;
 
     Ok(Json(ApiResponse::msg("收款单创建成功")))
 }
@@ -228,11 +268,19 @@ pub async fn update_receipt(
     let mut conn = get_pool().get().await?;
     // 编辑锁：只允许 N/E 状态编辑
     {
-        let state_check = conn.query("SELECT State FROM tFin_Receipt WHERE RecID=@p1", &[&body.RecID]).await?;
+        let state_check = conn
+            .query(
+                "SELECT State FROM tFin_Receipt WHERE RecID=@p1",
+                &[&body.RecID],
+            )
+            .await?;
         if let Some(row) = state_check.into_row().await? {
             let state: String = row.get::<&str, _>(0).unwrap_or("").to_string();
             if !crate::handlers::doc_state::is_editable(&state) {
-                let msg = format!("单据已{}，不可编辑，请先反审", crate::handlers::doc_state::label(&state));
+                let msg = format!(
+                    "单据已{}，不可编辑，请先反审",
+                    crate::handlers::doc_state::label(&state)
+                );
                 return Ok(Json(ApiResponse::err(&msg)));
             }
         }
@@ -259,11 +307,27 @@ pub async fn update_receipt(
                  RecAmt=@p6, RecType=@p7, BankName=@p8, BankAccount=@p9, DocID=@p10, DocNo=@p11, Remark=@p12,
                  EDate=@p13, EUser=@p14 WHERE RecID=@p15"#;
 
-    conn.execute(sql, &[
-        &rec_date, &cust_id, &dept_id, &emp_id, &stk_id,
-        &rec_amt, &rec_type, &bank_name, &bank_account, &doc_id, &doc_no, &remark,
-        &now_naive, &e_user, &rec_id,
-    ]).await?;
+    conn.execute(
+        sql,
+        &[
+            &rec_date,
+            &cust_id,
+            &dept_id,
+            &emp_id,
+            &stk_id,
+            &rec_amt,
+            &rec_type,
+            &bank_name,
+            &bank_account,
+            &doc_id,
+            &doc_no,
+            &remark,
+            &now_naive,
+            &e_user,
+            &rec_id,
+        ],
+    )
+    .await?;
 
     Ok(Json(ApiResponse::msg("收款单更新成功")))
 }
@@ -288,15 +352,23 @@ pub async fn delete_receipt(
     let result = conn.execute(del_sql, &[&rec_id]).await?;
     let rows = result.rows_affected().first().copied().unwrap_or(0);
     if rows == 0 {
-        return Ok(Json(ApiResponse::err("收款单不存在或状态不允许删除（仅新建/编辑中可删除）")));
+        return Ok(Json(ApiResponse::err(
+            "收款单不存在或状态不允许删除（仅新建/编辑中可删除）",
+        )));
     }
 
     // P1-9 审计日志：记录删除操作者和单据 ID
     let audit_remark = format!("删除收款单：RecID={}", rec_id);
     crate::services::inventory_ledger::record_oper(
-        &mut conn, "DELETE", "tFin_Receipt", rec_id,
-        &claims.user_code, None, Some(&audit_remark),
-    ).await;
+        &mut conn,
+        "DELETE",
+        "tFin_Receipt",
+        rec_id,
+        &claims.user_code,
+        None,
+        Some(&audit_remark),
+    )
+    .await;
 
     Ok(Json(ApiResponse::msg("收款单删除成功")))
 }
@@ -321,14 +393,12 @@ pub async fn audit_receipt(
     // 审核：N/E → S
     let sql = r#"UPDATE [tFin_Receipt] SET State = 'S', SDate = @p1, SUser = @p2 WHERE RecID = @p3 AND State IN ('N','E')"#;
     // 修复 P1-8：检查 rows_affected，避免单据不存在或已审核时仍返回"审核成功"
-    let result = conn.execute(sql, &[
-        &now_naive,
-        &s_user,
-        &rec_id,
-    ]).await?;
+    let result = conn.execute(sql, &[&now_naive, &s_user, &rec_id]).await?;
     let rows = result.rows_affected().first().copied().unwrap_or(0);
     if rows == 0 {
-        return Ok(Json(ApiResponse::err("收款单不存在或状态不允许审核（仅新建/编辑中可审核）")));
+        return Ok(Json(ApiResponse::err(
+            "收款单不存在或状态不允许审核（仅新建/编辑中可审核）",
+        )));
     }
 
     Ok(Json(ApiResponse::msg("收款单审核成功")))
@@ -486,7 +556,8 @@ pub async fn get_customer_ar(
             // 否则用户输入中文姓名会让整个查询失败
             base_query.push_str(&format!(
                 " AND (c.CustName LIKE @p{} OR io.CustID = TRY_CAST(@p{} AS uniqueidentifier))",
-                pidx, pidx + 1
+                pidx,
+                pidx + 1
             ));
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(kw.clone()));
@@ -524,7 +595,12 @@ pub async fn get_customer_ar(
     let rows: Vec<Row> = data_stream.into_first_result().await?;
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Ok(Json(ApiResponse::ok_paginated(data, total as u64, page, page_size)))
+    Ok(Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 /// 单客户应收明细（单据级）
@@ -623,7 +699,8 @@ pub async fn get_supplier_ap(
             // 修复 P1-10：用 TRY_CAST 替代 CAST，非 UUID 字符串时返回 NULL 而非报错
             base_query.push_str(&format!(
                 " AND (s.SuppName LIKE @p{} OR io.SuppID = TRY_CAST(@p{} AS uniqueidentifier))",
-                pidx, pidx + 1
+                pidx,
+                pidx + 1
             ));
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(kw.clone()));
@@ -635,7 +712,7 @@ pub async fn get_supplier_ap(
         " GROUP BY io.SuppID, s.SuppName, pm.PaidAmt \
           HAVING ABS(ISNULL(SUM(CASE WHEN io.Kind = 'PD' THEN io.SumAmt ELSE 0 END), 0) - \
                   ISNULL(SUM(CASE WHEN io.Kind = 'PR' THEN io.SumAmt ELSE 0 END), 0) - \
-                  ISNULL(pm.PaidAmt, 0)) > 0.01"
+                  ISNULL(pm.PaidAmt, 0)) > 0.01",
     );
 
     let count_sql = format!("SELECT COUNT(*) AS cnt FROM ({}) t", base_query);
@@ -661,7 +738,12 @@ pub async fn get_supplier_ap(
     let rows: Vec<Row> = data_stream.into_first_result().await?;
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Ok(Json(ApiResponse::ok_paginated(data, total as u64, page, page_size)))
+    Ok(Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 /// 单供应商应付明细
@@ -712,10 +794,10 @@ pub async fn get_supplier_ap_detail(
 
 #[derive(Deserialize)]
 pub struct StatementParams {
-    pub cust_id: Option<String>,     // 客户（或供应商）ID
-    pub start_date: Option<String>,  // 期间开始（YYYY-MM-DD）
-    pub end_date: Option<String>,    // 期间结束（YYYY-MM-DD）
-    pub include_void: Option<bool>,  // 是否包含作废单据（默认 false，仅查询 S/Y）
+    pub cust_id: Option<String>,    // 客户（或供应商）ID
+    pub start_date: Option<String>, // 期间开始（YYYY-MM-DD）
+    pub end_date: Option<String>,   // 期间结束（YYYY-MM-DD）
+    pub include_void: Option<bool>, // 是否包含作废单据（默认 false，仅查询 S/Y）
 }
 
 pub async fn get_customer_statement(
@@ -741,7 +823,8 @@ pub async fn get_customer_statement(
     //    注意：SQL Server 的 SUM(DECIMAL) 返回 NUMERIC，tiberius 无法直接转 f64，需 CAST AS FLOAT
     let mut opening: f64 = 0.0;
     if !start_date.is_empty() {
-        let opening_sql = format!(r#"
+        let opening_sql = format!(
+            r#"
             SELECT CAST(
                 ISNULL(SUM(CASE WHEN io.Kind IN ('SD','SI','POS') THEN io.SumAmt ELSE 0 END), 0) -
                 ISNULL(SUM(CASE WHEN io.Kind = 'SR' THEN io.SumAmt ELSE 0 END), 0) -
@@ -753,9 +836,14 @@ pub async fn get_customer_statement(
               AND io.CustID = @p1
               AND io.Kind IN ('SD','SI','POS','SR')
               AND io.IoDate < @p2
-        "#, state_filter, state_filter);
-        let row = conn.query(&opening_sql, &[&cust_id.as_str(), &start_date]).await?
-            .into_row().await?;
+        "#,
+            state_filter, state_filter
+        );
+        let row = conn
+            .query(&opening_sql, &[&cust_id.as_str(), &start_date])
+            .await?
+            .into_row()
+            .await?;
         if let Some(r) = row {
             opening = r.get::<f64, _>("OpeningBalance").unwrap_or(0.0);
         }
@@ -764,7 +852,8 @@ pub async fn get_customer_statement(
     // 2) 期间交易明细（销售/退货/收款 UNION ALL）
     // 修复 P1-3：end_date 边界用 < DATEADD(DAY, 1, @p3)，避免当天 00:00 之后的交易被漏算
     // 原因：SQL Server 将 'YYYY-MM-DD' 隐式转为 YYYY-MM-DD 00:00:00.000，<= 会漏掉当天非 0 点交易
-    let tx_sql = format!(r#"
+    let tx_sql = format!(
+        r#"
         SELECT * FROM (
             SELECT
                 io.IoDate AS TxDate,
@@ -805,8 +894,12 @@ pub async fn get_customer_statement(
               AND (@p3 = '' OR r.RecDate < DATEADD(DAY, 1, @p3))
         ) t
         ORDER BY TxDate ASC, DocNo ASC
-    "#, state_filter, state_filter);
-    let stream = conn.query(&tx_sql, &[&cust_id.as_str(), &start_date, &end_date]).await?;
+    "#,
+        state_filter, state_filter
+    );
+    let stream = conn
+        .query(&tx_sql, &[&cust_id.as_str(), &start_date, &end_date])
+        .await?;
     let rows: Vec<Row> = stream.into_first_result().await?;
     let mut transactions: Vec<serde_json::Value> = Vec::with_capacity(rows.len());
     let mut running = opening;
@@ -823,17 +916,27 @@ pub async fn get_customer_statement(
     }
 
     // 3) 汇总：期间借方/贷方/期末余额
-    let period_debit: f64 = transactions.iter()
-        .map(|v| v.get("Debit").and_then(|x| x.as_f64()).unwrap_or(0.0)).sum();
-    let period_credit: f64 = transactions.iter()
-        .map(|v| v.get("Credit").and_then(|x| x.as_f64()).unwrap_or(0.0)).sum();
+    let period_debit: f64 = transactions
+        .iter()
+        .map(|v| v.get("Debit").and_then(|x| x.as_f64()).unwrap_or(0.0))
+        .sum();
+    let period_credit: f64 = transactions
+        .iter()
+        .map(|v| v.get("Credit").and_then(|x| x.as_f64()).unwrap_or(0.0))
+        .sum();
     let ending_balance = opening + period_debit - period_credit;
 
     // 4) 客户信息
     let mut cust_name = String::new();
     {
-        let nrow = conn.query("SELECT CustName FROM tBas_Cust WHERE CustID=@p1", &[&cust_id.as_str()])
-            .await?.into_row().await?;
+        let nrow = conn
+            .query(
+                "SELECT CustName FROM tBas_Cust WHERE CustID=@p1",
+                &[&cust_id.as_str()],
+            )
+            .await?
+            .into_row()
+            .await?;
         if let Some(r) = nrow {
             cust_name = r.get::<&str, _>("CustName").unwrap_or("").to_string();
         }
@@ -876,7 +979,8 @@ pub async fn get_supplier_statement(
     //    注意：SQL Server 的 SUM(DECIMAL) 返回 NUMERIC，tiberius 无法直接转 f64，需 CAST AS FLOAT
     let mut opening: f64 = 0.0;
     if !start_date.is_empty() {
-        let opening_sql = format!(r#"
+        let opening_sql = format!(
+            r#"
             SELECT CAST(
                 ISNULL(SUM(CASE WHEN io.Kind = 'PD' THEN io.SumAmt ELSE 0 END), 0) -
                 ISNULL(SUM(CASE WHEN io.Kind = 'PR' THEN io.SumAmt ELSE 0 END), 0) -
@@ -888,9 +992,14 @@ pub async fn get_supplier_statement(
               AND io.SuppID = @p1
               AND io.Kind IN ('PD','PR')
               AND io.IoDate < @p2
-        "#, state_filter, state_filter);
-        let row = conn.query(&opening_sql, &[&supp_id.as_str(), &start_date]).await?
-            .into_row().await?;
+        "#,
+            state_filter, state_filter
+        );
+        let row = conn
+            .query(&opening_sql, &[&supp_id.as_str(), &start_date])
+            .await?
+            .into_row()
+            .await?;
         if let Some(r) = row {
             opening = r.get::<f64, _>("OpeningBalance").unwrap_or(0.0);
         }
@@ -899,7 +1008,8 @@ pub async fn get_supplier_statement(
     // 2) 期间交易明细（采购入库/采购退货/付款 UNION ALL）
     //    贷方 = 增加应付（采购入库 PD）
     //    借方 = 减少应付（采购退货 PR + 付款单 Payment）
-    let tx_sql = format!(r#"
+    let tx_sql = format!(
+        r#"
         SELECT * FROM (
             SELECT
                 io.IoDate AS TxDate,
@@ -938,8 +1048,12 @@ pub async fn get_supplier_statement(
               AND (@p3 = '' OR p.PayDate < DATEADD(DAY, 1, @p3))
         ) t
         ORDER BY TxDate ASC, DocNo ASC
-    "#, state_filter, state_filter);
-    let stream = conn.query(&tx_sql, &[&supp_id.as_str(), &start_date, &end_date]).await?;
+    "#,
+        state_filter, state_filter
+    );
+    let stream = conn
+        .query(&tx_sql, &[&supp_id.as_str(), &start_date, &end_date])
+        .await?;
     let rows: Vec<Row> = stream.into_first_result().await?;
     let mut transactions: Vec<serde_json::Value> = Vec::with_capacity(rows.len());
     let mut running = opening;
@@ -957,17 +1071,27 @@ pub async fn get_supplier_statement(
     }
 
     // 3) 汇总
-    let period_debit: f64 = transactions.iter()
-        .map(|v| v.get("Debit").and_then(|x| x.as_f64()).unwrap_or(0.0)).sum();
-    let period_credit: f64 = transactions.iter()
-        .map(|v| v.get("Credit").and_then(|x| x.as_f64()).unwrap_or(0.0)).sum();
+    let period_debit: f64 = transactions
+        .iter()
+        .map(|v| v.get("Debit").and_then(|x| x.as_f64()).unwrap_or(0.0))
+        .sum();
+    let period_credit: f64 = transactions
+        .iter()
+        .map(|v| v.get("Credit").and_then(|x| x.as_f64()).unwrap_or(0.0))
+        .sum();
     let ending_balance = opening + period_credit - period_debit;
 
     // 4) 供应商信息
     let mut supp_name = String::new();
     {
-        let nrow = conn.query("SELECT SuppName FROM tBas_Supp WHERE SuppID=@p1", &[&supp_id.as_str()])
-            .await?.into_row().await?;
+        let nrow = conn
+            .query(
+                "SELECT SuppName FROM tBas_Supp WHERE SuppID=@p1",
+                &[&supp_id.as_str()],
+            )
+            .await?
+            .into_row()
+            .await?;
         if let Some(r) = nrow {
             supp_name = r.get::<&str, _>("SuppName").unwrap_or("").to_string();
         }
@@ -994,9 +1118,9 @@ pub async fn get_supplier_statement(
 
 #[derive(Deserialize)]
 pub struct WriteoffDetailQuery {
-    pub table: Option<String>,       // 'tFin_ReceiptDtl' | 'tFin_PaymentDtl'，不传则按 doc_type 推断
-    pub doc_type: Option<String>,   // 'receipt' | 'payment'，与 table 二选一
-    pub master_id: String,          // 主表 ID（RecID 或 PayID）
+    pub table: Option<String>, // 'tFin_ReceiptDtl' | 'tFin_PaymentDtl'，不传则按 doc_type 推断
+    pub doc_type: Option<String>, // 'receipt' | 'payment'，与 table 二选一
+    pub master_id: String,     // 主表 ID（RecID 或 PayID）
 }
 
 pub async fn get_writeoff_details(
@@ -1018,7 +1142,7 @@ pub async fn get_writeoff_details(
         _ => {
             return Ok(Json(ApiResponse::err(
                 "请指定 table（tFin_ReceiptDtl 或 tFin_PaymentDtl）或 doc_type（receipt 或 payment）",
-            )))
+            )));
         }
     };
 

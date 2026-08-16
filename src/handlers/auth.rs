@@ -1,17 +1,13 @@
-use axum::{
-    extract::State,
-    Json,
-    Extension,
-};
-use serde::{Deserialize, Serialize};
 use crate::config::Config;
 use crate::db::get_pool;
-use crate::utils::ApiResponse;
-use crate::utils::password::{hash_password, verify_password, needs_upgrade};
-use crate::utils::jwt::{create_token, make_claims};
-use crate::utils::error_codes::*;
 use crate::middleware::auth::Claims;
 use crate::services::inventory_ledger::record_oper;
+use crate::utils::ApiResponse;
+use crate::utils::error_codes::*;
+use crate::utils::jwt::{create_token, make_claims};
+use crate::utils::password::{hash_password, needs_upgrade, verify_password};
+use axum::{Extension, Json, extract::State};
+use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
@@ -39,12 +35,20 @@ pub async fn login(
     Json(body): Json<LoginRequest>,
 ) -> Json<ApiResponse<LoginResponse>> {
     if body.username.is_empty() {
-        return Json(ApiResponse::<LoginResponse>::err_with_code("请输入工号", VALIDATION_FIELD_REQUIRED));
+        return Json(ApiResponse::<LoginResponse>::err_with_code(
+            "请输入工号",
+            VALIDATION_FIELD_REQUIRED,
+        ));
     }
 
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::<LoginResponse>::err_with_code(&format!("数据库连接失败: {}", e), SYS_DB_UNAVAILABLE)),
+        Err(e) => {
+            return Json(ApiResponse::<LoginResponse>::err_with_code(
+                &format!("数据库连接失败: {}", e),
+                SYS_DB_UNAVAILABLE,
+            ));
+        }
     };
 
     // 合并查询：EmpID 是 uniqueidentifier，必须 CAST 成 nvarchar 才能用 row.get::<&str,_> 读出
@@ -58,13 +62,28 @@ pub async fn login(
                ORDER BY CASE WHEN EmpNo = @p1 THEN 0 ELSE 1 END";
     let stream = match conn.query(sql, &[&body.username.as_str()]).await {
         Ok(s) => s,
-        Err(e) => return Json(ApiResponse::<LoginResponse>::err_with_code(&format!("查询用户失败: {}", e), SYS_DB_ERROR)),
+        Err(e) => {
+            return Json(ApiResponse::<LoginResponse>::err_with_code(
+                &format!("查询用户失败: {}", e),
+                SYS_DB_ERROR,
+            ));
+        }
     };
 
     let row = match stream.into_row().await {
         Ok(Some(r)) => r,
-        Ok(None) => return Json(ApiResponse::<LoginResponse>::err_with_code("账号不存在或已停用/离职", AUTH_USER_NOT_FOUND)),
-        Err(e) => return Json(ApiResponse::<LoginResponse>::err_with_code(&format!("读取用户数据失败: {}", e), SYS_DB_ERROR)),
+        Ok(None) => {
+            return Json(ApiResponse::<LoginResponse>::err_with_code(
+                "账号不存在或已停用/离职",
+                AUTH_USER_NOT_FOUND,
+            ));
+        }
+        Err(e) => {
+            return Json(ApiResponse::<LoginResponse>::err_with_code(
+                &format!("读取用户数据失败: {}", e),
+                SYS_DB_ERROR,
+            ));
+        }
     };
 
     let emp_no: &str = row.get::<&str, _>("EmpNo").unwrap_or("");
@@ -74,7 +93,10 @@ pub async fn login(
 
     // 密码为空，可能是NULL或字段不存在
     if stored_password.is_empty() || !verify_password(&body.password, &stored_password) {
-        return Json(ApiResponse::<LoginResponse>::err_with_code("密码错误", AUTH_PASSWORD_WRONG));
+        return Json(ApiResponse::<LoginResponse>::err_with_code(
+            "密码错误",
+            AUTH_PASSWORD_WRONG,
+        ));
     }
 
     // 密码验证成功 — 自动升级旧格式（SHA256/XOR）为 bcrypt
@@ -97,7 +119,12 @@ pub async fn login(
 
     let token = match create_token(&config.jwt_secret, &claims) {
         Ok(t) => t,
-        Err(e) => return Json(ApiResponse::<LoginResponse>::err(&format!("生成Token失败: {}", e))),
+        Err(e) => {
+            return Json(ApiResponse::<LoginResponse>::err(&format!(
+                "生成Token失败: {}",
+                e
+            )));
+        }
     };
 
     let resp = LoginResponse {
@@ -111,7 +138,16 @@ pub async fn login(
     };
 
     // 记录登录审计日志
-    let _ = record_oper(&mut conn, "LOGIN", "tBas_Emp", emp_id, emp_no, None, Some(&format!("用户登录：{}", emp_name))).await;
+    let _ = record_oper(
+        &mut conn,
+        "LOGIN",
+        "tBas_Emp",
+        emp_id,
+        emp_no,
+        None,
+        Some(&format!("用户登录：{}", emp_name)),
+    )
+    .await;
 
     Json(ApiResponse::ok(resp))
 }
@@ -128,12 +164,14 @@ pub async fn user_info(
                 "user_code": claims.user_code,
                 "user_name": claims.user_name,
                 "emp_id": "",
-            })))
+            })));
         }
     };
     let stream = conn
-        .query("SELECT TOP 1 CAST(EmpID AS NVARCHAR(64)) AS EmpID FROM tBas_Emp WHERE EmpNo = @p1",
-               &[&claims.user_code.as_str()])
+        .query(
+            "SELECT TOP 1 CAST(EmpID AS NVARCHAR(64)) AS EmpID FROM tBas_Emp WHERE EmpNo = @p1",
+            &[&claims.user_code.as_str()],
+        )
         .await;
     let emp_id = match stream {
         Ok(s) => match s.into_row().await {
@@ -149,14 +187,21 @@ pub async fn user_info(
     })))
 }
 
-pub async fn logout(
-    Extension(claims): Extension<Claims>,
-) -> Json<ApiResponse<serde_json::Value>> {
+pub async fn logout(Extension(claims): Extension<Claims>) -> Json<ApiResponse<serde_json::Value>> {
     // P2-17 修复：将 token 加入黑名单，登出后立即失效（原仅记录审计日志，token 仍可使用 24h）
     crate::utils::jwt::revoke_token(&claims);
     // 记录登出审计日志
     if let Ok(mut conn) = get_pool().get().await {
-        let _ = record_oper(&mut conn, "LOGOUT", "tBas_Emp", &claims.emp_id, &claims.user_code, None, Some("用户登出")).await;
+        let _ = record_oper(
+            &mut conn,
+            "LOGOUT",
+            "tBas_Emp",
+            &claims.emp_id,
+            &claims.user_code,
+            None,
+            Some("用户登出"),
+        )
+        .await;
     }
     Json(ApiResponse::msg("登出成功"))
 }
@@ -181,13 +226,23 @@ pub async fn change_password(
 
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err_with_code(&format!("数据库连接失败: {}", e), SYS_DB_UNAVAILABLE)),
+        Err(e) => {
+            return Json(ApiResponse::err_with_code(
+                &format!("数据库连接失败: {}", e),
+                SYS_DB_UNAVAILABLE,
+            ));
+        }
     };
 
     let sql = "SELECT TOP 1 EmpNo, PassWordStr FROM tBas_Emp WHERE EmpNo = @p1";
     let stream = match conn.query(sql, &[&emp_no.as_str()]).await {
         Ok(s) => s,
-        Err(e) => return Json(ApiResponse::err_with_code(&format!("查询用户失败: {}", e), SYS_DB_ERROR)),
+        Err(e) => {
+            return Json(ApiResponse::err_with_code(
+                &format!("查询用户失败: {}", e),
+                SYS_DB_ERROR,
+            ));
+        }
     };
 
     match stream.into_row().await {
@@ -198,7 +253,10 @@ pub async fn change_password(
                 Err(_) => "",
             };
             if !verify_password(&params.old_password, stored_password) {
-                return Json(ApiResponse::err_with_code("旧密码错误", AUTH_PASSWORD_WRONG));
+                return Json(ApiResponse::err_with_code(
+                    "旧密码错误",
+                    AUTH_PASSWORD_WRONG,
+                ));
             }
             let hashed = match hash_password(&params.new_password) {
                 Some(h) => h,
@@ -212,17 +270,38 @@ pub async fn change_password(
                 }
             };
             let update_sql = "UPDATE tBas_Emp SET PassWordStr = @p1 WHERE EmpNo = @p2";
-            match conn.execute(update_sql, &[&hashed.as_str(), &emp_no.as_str()]).await {
+            match conn
+                .execute(update_sql, &[&hashed.as_str(), &emp_no.as_str()])
+                .await
+            {
                 Ok(_) => {
                     // 记录改密审计日志
-                    let _ = record_oper(&mut conn, "PWD", "tBas_Emp", &claims.emp_id, emp_no, None, Some("修改密码")).await;
+                    let _ = record_oper(
+                        &mut conn,
+                        "PWD",
+                        "tBas_Emp",
+                        &claims.emp_id,
+                        emp_no,
+                        None,
+                        Some("修改密码"),
+                    )
+                    .await;
                     Json(ApiResponse::msg("密码修改成功"))
-                },
-                Err(e) => Json(ApiResponse::err_with_code(&format!("更新密码失败: {}", e), SYS_DB_ERROR)),
+                }
+                Err(e) => Json(ApiResponse::err_with_code(
+                    &format!("更新密码失败: {}", e),
+                    SYS_DB_ERROR,
+                )),
             }
         }
-        Ok(None) => Json(ApiResponse::err_with_code("未找到该用户", AUTH_USER_NOT_FOUND)),
-        Err(e) => Json(ApiResponse::err_with_code(&format!("读取用户数据失败: {}", e), SYS_DB_ERROR)),
+        Ok(None) => Json(ApiResponse::err_with_code(
+            "未找到该用户",
+            AUTH_USER_NOT_FOUND,
+        )),
+        Err(e) => Json(ApiResponse::err_with_code(
+            &format!("读取用户数据失败: {}", e),
+            SYS_DB_ERROR,
+        )),
     }
 }
 
@@ -242,27 +321,50 @@ pub async fn admin_reset_password(
     Json(params): Json<AdminResetPasswordParams>,
 ) -> Json<ApiResponse<serde_json::Value>> {
     if params.emp_no.is_empty() {
-        return Json(ApiResponse::err_with_code("请指定目标员工工号", VALIDATION_FIELD_REQUIRED));
+        return Json(ApiResponse::err_with_code(
+            "请指定目标员工工号",
+            VALIDATION_FIELD_REQUIRED,
+        ));
     }
 
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err_with_code(&format!("数据库连接失败: {}", e), SYS_DB_UNAVAILABLE)),
+        Err(e) => {
+            return Json(ApiResponse::err_with_code(
+                &format!("数据库连接失败: {}", e),
+                SYS_DB_UNAVAILABLE,
+            ));
+        }
     };
 
     // 校验目标员工存在
     let check_sql = "SELECT TOP 1 CAST(EmpID AS NVARCHAR(64)) AS EmpID, EmpName FROM tBas_Emp WHERE EmpNo = @p1";
     let stream = match conn.query(check_sql, &[&params.emp_no.as_str()]).await {
         Ok(s) => s,
-        Err(e) => return Json(ApiResponse::err_with_code(&format!("查询用户失败: {}", e), SYS_DB_ERROR)),
+        Err(e) => {
+            return Json(ApiResponse::err_with_code(
+                &format!("查询用户失败: {}", e),
+                SYS_DB_ERROR,
+            ));
+        }
     };
     let (target_emp_id, target_emp_name): (String, String) = match stream.into_row().await {
         Ok(Some(r)) => (
             r.get::<&str, _>("EmpID").unwrap_or("").to_string(),
             r.get::<&str, _>("EmpName").unwrap_or("").to_string(),
         ),
-        Ok(None) => return Json(ApiResponse::err_with_code("目标员工不存在", AUTH_USER_NOT_FOUND)),
-        Err(e) => return Json(ApiResponse::err_with_code(&format!("读取用户数据失败: {}", e), SYS_DB_ERROR)),
+        Ok(None) => {
+            return Json(ApiResponse::err_with_code(
+                "目标员工不存在",
+                AUTH_USER_NOT_FOUND,
+            ));
+        }
+        Err(e) => {
+            return Json(ApiResponse::err_with_code(
+                &format!("读取用户数据失败: {}", e),
+                SYS_DB_ERROR,
+            ));
+        }
     };
 
     // 空密码直接写空串；非空则哈希
@@ -281,7 +383,10 @@ pub async fn admin_reset_password(
     };
 
     let update_sql = "UPDATE tBas_Emp SET PassWordStr = @p1 WHERE EmpNo = @p2";
-    match conn.execute(update_sql, &[&hashed.as_str(), &params.emp_no.as_str()]).await {
+    match conn
+        .execute(update_sql, &[&hashed.as_str(), &params.emp_no.as_str()])
+        .await
+    {
         Ok(_) => {
             // 记录审计日志：管理员重置他人密码
             let _ = record_oper(
@@ -291,11 +396,18 @@ pub async fn admin_reset_password(
                 &target_emp_id,
                 &params.emp_no,
                 None,
-                Some(&format!("管理员 {} 重置员工 {}({}) 的密码", claims.user_code, target_emp_name, params.emp_no)),
-            ).await;
+                Some(&format!(
+                    "管理员 {} 重置员工 {}({}) 的密码",
+                    claims.user_code, target_emp_name, params.emp_no
+                )),
+            )
+            .await;
             Json(ApiResponse::msg("密码重置成功"))
-        },
-        Err(e) => Json(ApiResponse::err_with_code(&format!("更新密码失败: {}", e), SYS_DB_ERROR)),
+        }
+        Err(e) => Json(ApiResponse::err_with_code(
+            &format!("更新密码失败: {}", e),
+            SYS_DB_ERROR,
+        )),
     }
 }
 
@@ -342,7 +454,10 @@ pub async fn get_user_prefs(
     let rows = stream.into_first_result().await.unwrap_or_default();
     let mut prefs = serde_json::Map::new();
     for row in rows {
-        if let (Some(k), Some(v)) = (row.get::<&str, _>("PrefKey"), row.get::<&str, _>("PrefValue")) {
+        if let (Some(k), Some(v)) = (
+            row.get::<&str, _>("PrefKey"),
+            row.get::<&str, _>("PrefValue"),
+        ) {
             prefs.insert(k.to_string(), serde_json::Value::String(v.to_string()));
         }
     }
@@ -362,18 +477,32 @@ pub async fn set_user_pref(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let emp_id = &claims.emp_id;
     if emp_id.is_empty() {
-        return Json(ApiResponse::err_with_code("未登录或用户身份缺失", AUTH_USER_NOT_FOUND));
+        return Json(ApiResponse::err_with_code(
+            "未登录或用户身份缺失",
+            AUTH_USER_NOT_FOUND,
+        ));
     }
     if params.key.is_empty() || params.key.len() > 64 {
-        return Json(ApiResponse::err_with_code("偏好 key 非法（1-64 字符）", VALIDATION_FIELD_REQUIRED));
+        return Json(ApiResponse::err_with_code(
+            "偏好 key 非法（1-64 字符）",
+            VALIDATION_FIELD_REQUIRED,
+        ));
     }
     if params.value.len() > 255 {
-        return Json(ApiResponse::err_with_code("偏好 value 过长（>255 字符）", VALIDATION_FIELD_REQUIRED));
+        return Json(ApiResponse::err_with_code(
+            "偏好 value 过长（>255 字符）",
+            VALIDATION_FIELD_REQUIRED,
+        ));
     }
 
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
-        Err(e) => return Json(ApiResponse::err_with_code(&format!("数据库连接失败: {}", e), SYS_DB_UNAVAILABLE)),
+        Err(e) => {
+            return Json(ApiResponse::err_with_code(
+                &format!("数据库连接失败: {}", e),
+                SYS_DB_UNAVAILABLE,
+            ));
+        }
     };
 
     // upsert：通过唯一索引 (EmpID, PrefKey) 实现
@@ -395,7 +524,14 @@ pub async fn set_user_pref(
                END CATCH";
 
     let result: Option<(i32, Option<String>)> = match conn
-        .query(sql, &[&emp_id.as_str(), &params.key.as_str(), &params.value.as_str()])
+        .query(
+            sql,
+            &[
+                &emp_id.as_str(),
+                &params.key.as_str(),
+                &params.value.as_str(),
+            ],
+        )
         .await
     {
         Ok(stream) => stream.into_row().await.ok().flatten().map(|row| {
@@ -410,10 +546,14 @@ pub async fn set_user_pref(
         Some((1, _)) => Json(ApiResponse::ok(serde_json::json!({ "ok": true }))),
         Some((_, Some(msg))) => {
             // 表不存在或权限不足等：静默返回错误，前端会保留 localStorage 兜底
-            tracing::warn!("[set_user_pref] 保存失败 emp_id={} key={} msg={}", emp_id, params.key, msg);
+            tracing::warn!(
+                "[set_user_pref] 保存失败 emp_id={} key={} msg={}",
+                emp_id,
+                params.key,
+                msg
+            );
             Json(ApiResponse::err(&format!("保存偏好失败: {}", msg)))
         }
         _ => Json(ApiResponse::err("保存偏好失败：未知错误")),
     }
 }
-

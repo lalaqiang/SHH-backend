@@ -18,10 +18,10 @@ use tiberius::ToSql;
 
 use crate::metadata::doc_graph::{self, DocMeta};
 use crate::services::inventory_ledger::{
-    self, post_ledger_with_period, reverse_stock_delta_only,
-    apply_qqty_delta, query_stock_qty, query_qqty, check_period_closed,
-    fill_detail_stock_snapshot, fill_io_detail_stock_snapshot,
-    fill_move_detail_stock_snapshot, fill_tran_detail_stock_snapshot, record_oper_with_data, update_doc_state_with_cas, query_doc_state,
+    self, apply_qqty_delta, check_period_closed, fill_detail_stock_snapshot,
+    fill_io_detail_stock_snapshot, fill_move_detail_stock_snapshot,
+    fill_tran_detail_stock_snapshot, post_ledger_with_period, query_doc_state, query_qqty,
+    query_stock_qty, record_oper_with_data, reverse_stock_delta_only, update_doc_state_with_cas,
 };
 
 pub type Conn = PooledConnection<'static, ConnectionManager>;
@@ -29,9 +29,9 @@ pub type Conn = PooledConnection<'static, ConnectionManager>;
 const ZERO_UUID: &str = "00000000-0000-0000-0000-000000000000";
 const STATE_REVIEWED: &str = "S";
 const STATE_NEW: &str = "N";
-const STATE_DELETED: &str = "D";   // D=删除/作废，不可审核
+const STATE_DELETED: &str = "D"; // D=删除/作废，不可审核
 const STATE_EDIT: &str = "E";
-const STATE_VOID: &str = "C";      // C=已作废，终态
+const STATE_VOID: &str = "C"; // C=已作废，终态
 const STATE_CONFIRMED: &str = "Y"; // Y=已确认，下游已使用
 
 /// 根据表名获取默认 doc_type（与前端 docGraph.js 的 DOC_TYPE_MAP 严格一致）
@@ -64,7 +64,8 @@ fn default_doc_type_for_table(meta: &DocMeta) -> String {
         "CF" => "cash_flow",
         // 兜底：用 biz_type
         _ => &meta.biz_type,
-    }.to_string()
+    }
+    .to_string()
 }
 
 // ============== 请求 / 响应结构 ==============
@@ -89,10 +90,10 @@ pub struct SaveDocParams {
 pub struct SaveDocResponse {
     pub id: String,
     pub doc_no: String,
-    pub operation: String,  // CREATE / UPDATE
-    pub partial_success: Option<bool>,  // 保存成功但审核失败时为 Some(true)
-    pub approve_error: Option<String>,  // 审核失败原因
-    pub shortage_list: Option<Vec<StockShortageItem>>,  // 库存不足明细（前端表格展示 + 一键删除）
+    pub operation: String,                             // CREATE / UPDATE
+    pub partial_success: Option<bool>,                 // 保存成功但审核失败时为 Some(true)
+    pub approve_error: Option<String>,                 // 审核失败原因
+    pub shortage_list: Option<Vec<StockShortageItem>>, // 库存不足明细（前端表格展示 + 一键删除）
 }
 
 #[derive(Debug, Deserialize)]
@@ -204,18 +205,27 @@ const RETAIL_SALE_INV_BTPID: &str = "A4BA71AE-E908-4C97-9148-E4A26AD66373";
 /// 判断是否为门店销售单（从 JSON data 读 BTPID）
 /// 门店销售单是门店（商场）自卖，不进库存流水、不校验库存、不验证客户
 fn is_retail_sale_inv_by_data(meta: &DocMeta, data: &serde_json::Value) -> bool {
-    if meta.table != "tSal_Inv" { return false; }
+    if meta.table != "tSal_Inv" {
+        return false;
+    }
     data.get("BTPID").and_then(|v| v.as_str()).unwrap_or("") == RETAIL_SALE_INV_BTPID
 }
 
 /// 判断是否为门店销售单（从数据库查 BTPID）
 /// 用于审核/反审流程：此时只有 master_id，需查 DB 获取 BTPID
 async fn is_retail_sale_inv_by_db(conn: &mut Conn, table: &str, pk: &str, master_id: &str) -> bool {
-    if table != "tSal_Inv" { return false; }
-    let sql = format!("SELECT CAST(BTPID AS NVARCHAR(40)) AS B FROM [{}] WHERE [{}] = @p1", table, pk);
+    if table != "tSal_Inv" {
+        return false;
+    }
+    let sql = format!(
+        "SELECT CAST(BTPID AS NVARCHAR(40)) AS B FROM [{}] WHERE [{}] = @p1",
+        table, pk
+    );
     match conn.query(&sql, &[&master_id]).await {
         Ok(s) => match s.into_first_result().await {
-            Ok(rs) => rs.iter().next()
+            Ok(rs) => rs
+                .iter()
+                .next()
                 .and_then(|r| r.get::<&str, _>("B"))
                 .map(|b| b == RETAIL_SALE_INV_BTPID)
                 .unwrap_or(false),
@@ -273,7 +283,10 @@ fn validate_details_nonempty(meta: &DocMeta, details: &[serde_json::Value]) -> R
 }
 
 /// 校验明细商品不重复（detail_unique_gds=true 时）
-fn validate_details_unique_gds(meta: &DocMeta, details: &[serde_json::Value]) -> Result<(), String> {
+fn validate_details_unique_gds(
+    meta: &DocMeta,
+    details: &[serde_json::Value],
+) -> Result<(), String> {
     if !meta.detail_unique_gds {
         return Ok(());
     }
@@ -284,13 +297,22 @@ fn validate_details_unique_gds(meta: &DocMeta, details: &[serde_json::Value]) ->
             return Err(format!("明细第 {} 行 GDSID 必填", idx + 1));
         }
         if let Some(&prev) = seen.get(gdsid) {
-            return Err(format!("明细商品 {} 重复（第 {} 行与第 {} 行）", gdsid, prev + 1, idx + 1));
+            return Err(format!(
+                "明细商品 {} 重复（第 {} 行与第 {} 行）",
+                gdsid,
+                prev + 1,
+                idx + 1
+            ));
         }
         // 校验数量（仅当明细行含 Qty 字段时；盘点单用 DiffQty，跳过此校验）
         if d.get("Qty").is_some() {
             let qty = json_to_f64(d.get("Qty"));
             if qty <= 0.0 {
-                return Err(format!("明细第 {} 行数量必须 > 0（当前值: {:?}）", idx + 1, d.get("Qty")));
+                return Err(format!(
+                    "明细第 {} 行数量必须 > 0（当前值: {:?}）",
+                    idx + 1,
+                    d.get("Qty")
+                ));
             }
         }
         seen.insert(gdsid.to_string(), idx);
@@ -326,11 +348,23 @@ async fn validate_writeoff_details(
 
     // 主表的客户/供应商 ID（用于跨客户校验）
     let party_field = if is_receipt { "CustID" } else { "SuppID" };
-    let party_id = data.get(party_field).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let party_id = data
+        .get(party_field)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     // 源单 Kind 白名单
-    let allowed_kinds = if is_receipt { vec!["SD", "SI", "POS", "SR"] } else { vec!["PD", "PR"] };
-    let allowed_kinds_str = allowed_kinds.iter().map(|k| format!("'{}'", k)).collect::<Vec<_>>().join(", ");
+    let allowed_kinds = if is_receipt {
+        vec!["SD", "SI", "POS", "SR"]
+    } else {
+        vec!["PD", "PR"]
+    };
+    let allowed_kinds_str = allowed_kinds
+        .iter()
+        .map(|k| format!("'{}'", k))
+        .collect::<Vec<_>>()
+        .join(", ");
 
     // 明细表名 + 主表关联字段（用于查"其他已审核单据"的核销合计）
     let (dtl_table, dtl_fk, master_table, master_pk) = if is_receipt {
@@ -340,10 +374,14 @@ async fn validate_writeoff_details(
     };
 
     for (idx, d) in details.iter().enumerate() {
-        let source_doc_id = d.get("SourceDocID").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let source_doc_id = d
+            .get("SourceDocID")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let amt = json_to_f64(d.get("Amt"));
         if source_doc_id.is_empty() || amt <= 0.0 {
-            continue;  // 空行跳过
+            continue; // 空行跳过
         }
 
         // 1+2+3) 查源单：必须存在、State IN ('S','Y')、Kind 匹配、CustID/SuppID 匹配
@@ -369,15 +407,20 @@ async fn validate_writeoff_details(
                         Ok(Some(row)) => {
                             let sum_amt: f64 = row.get::<f64, _>("SumAmt").unwrap_or(0.0);
                             let kind: String = row.get::<&str, _>("Kind").unwrap_or("").to_string();
-                            let src_party: String = row.get::<&str, _>("PartyID").unwrap_or("").to_string();
+                            let src_party: String =
+                                row.get::<&str, _>("PartyID").unwrap_or("").to_string();
                             if kind.is_empty() {
                                 return Err(ApproveError::msg(format!(
                                     "明细第 {} 行：源单 {} 不存在或状态不允许核销（必须已审核/已确认）",
-                                    idx + 1, source_doc_id
+                                    idx + 1,
+                                    source_doc_id
                                 )));
                             }
                             // 跨客户/供应商校验
-                            if !party_id.is_empty() && !src_party.is_empty() && src_party != party_id {
+                            if !party_id.is_empty()
+                                && !src_party.is_empty()
+                                && src_party != party_id
+                            {
                                 return Err(ApproveError::msg(format!(
                                     "明细第 {} 行：源单的客户/供应商与单据不匹配，禁止跨客户核销",
                                     idx + 1
@@ -388,17 +431,21 @@ async fn validate_writeoff_details(
                         _ => {
                             return Err(ApproveError::msg(format!(
                                 "明细第 {} 行：源单 {} 不存在或 Kind/状态不匹配",
-                                idx + 1, source_doc_id
+                                idx + 1,
+                                source_doc_id
                             )));
                         }
                     }
                 }
                 Err(e) => {
-                    return Err(ApproveError::msg(format!("校验核销明细时查询源单失败: {}", e)));
+                    return Err(ApproveError::msg(format!(
+                        "校验核销明细时查询源单失败: {}",
+                        e
+                    )));
                 }
             }
         };
-        let _ = src_party;  // 已在循环内使用
+        let _ = src_party; // 已在循环内使用
 
         // 4) 金额超分配校验：
         // 已审核单据（不含当前单据）对该源单的核销合计 + 当前行 Amt 不得超过源单 SumAmt
@@ -418,24 +465,37 @@ async fn validate_writeoff_details(
             dtl_table, master_table, master_pk, dtl_fk, exclude_clause
         );
         let already_woff: f64 = if is_update && !current_master_id.is_empty() {
-            let s = conn.query(&sql_sum, &[&source_doc_id, &current_master_id]).await
+            let s = conn
+                .query(&sql_sum, &[&source_doc_id, &current_master_id])
+                .await
                 .map_err(|e| ApproveError::msg(format!("查询已核销金额失败: {}", e)))?;
-            let row = s.into_row().await
+            let row = s
+                .into_row()
+                .await
                 .map_err(|e| ApproveError::msg(format!("读取已核销金额失败: {}", e)))?;
-            row.map(|r| r.get::<f64, _>("AlreadyWoff").unwrap_or(0.0)).unwrap_or(0.0)
+            row.map(|r| r.get::<f64, _>("AlreadyWoff").unwrap_or(0.0))
+                .unwrap_or(0.0)
         } else {
-            let s = conn.query(&sql_sum, &[&source_doc_id]).await
+            let s = conn
+                .query(&sql_sum, &[&source_doc_id])
+                .await
                 .map_err(|e| ApproveError::msg(format!("查询已核销金额失败: {}", e)))?;
-            let row = s.into_row().await
+            let row = s
+                .into_row()
+                .await
                 .map_err(|e| ApproveError::msg(format!("读取已核销金额失败: {}", e)))?;
-            row.map(|r| r.get::<f64, _>("AlreadyWoff").unwrap_or(0.0)).unwrap_or(0.0)
+            row.map(|r| r.get::<f64, _>("AlreadyWoff").unwrap_or(0.0))
+                .unwrap_or(0.0)
         };
 
         let total_after = already_woff + amt;
         if total_after > sum_amt + 0.01 {
             return Err(ApproveError::msg(format!(
                 "明细第 {} 行：核销金额 {} 超过源单剩余可核销金额（源单金额 {}，其他已核销 {}）",
-                idx + 1, amt, sum_amt, already_woff
+                idx + 1,
+                amt,
+                sum_amt,
+                already_woff
             )));
         }
     }
@@ -456,7 +516,8 @@ async fn query_gds_info(conn: &mut Conn, gdsid: &str) -> (String, String) {
     if gdsid.is_empty() {
         return (String::new(), String::new());
     }
-    let sql = "SELECT ISNULL(GDSNO,'') AS NO, ISNULL(GDSDesc,'') AS NM FROM tBas_Goods WHERE GDSID = @p1";
+    let sql =
+        "SELECT ISNULL(GDSNO,'') AS NO, ISNULL(GDSDesc,'') AS NM FROM tBas_Goods WHERE GDSID = @p1";
     if let Ok(stream) = conn.query(sql, &[&gdsid]).await {
         if let Ok(Some(row)) = stream.into_row().await {
             let no = row.get::<&str, _>("NO").unwrap_or("").to_string();
@@ -541,14 +602,20 @@ async fn validate_outbound_stock(
     //   stock_move(调拨) = 由 approve 路径的 validate_move_outbound_stock 处理，save 路径跳过
     let need_check = if !meta.kind_field.is_empty() {
         // tStk_IO / tStk_Move：按 Kind 判断方向
-        let kind = data.get(meta.kind_field.as_str()).and_then(|v| v.as_str()).unwrap_or("");
+        let kind = data
+            .get(meta.kind_field.as_str())
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let dir = doc_graph::kind_direction(kind);
         tracing::info!(table = %meta.table, kind = %kind, direction = dir, "[validate_outbound_stock] kind_field 分支");
         dir == doc_graph::DIR_OUTBOUND
     } else {
         // 无 Kind 字段的单据表：按 doc_type 判断固定方向
         let doc_type = default_doc_type_for_table(meta);
-        let matched = matches!(doc_type.as_str(), "sales_outbound" | "sales_inv" | "purchase_return");
+        let matched = matches!(
+            doc_type.as_str(),
+            "sales_outbound" | "sales_inv" | "purchase_return"
+        );
         tracing::info!(table = %meta.table, doc_type = %doc_type, matched = matched, "[validate_outbound_stock] doc_type 分支");
         matched
     };
@@ -563,14 +630,25 @@ async fn validate_outbound_stock(
     let doc_type = default_doc_type_for_table(meta);
     let is_sales_outbound = matches!(doc_type.as_str(), "sales_outbound" | "sales_inv");
     let source_soid = if is_sales_outbound {
-        data.get("SOID").and_then(|v| v.as_str()).unwrap_or("").to_string()
+        data.get("SOID")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
     } else {
         String::new()
     };
     let is_sales_outbound_with_reserve = is_sales_outbound && !source_soid.is_empty();
     for (idx, d) in details.iter().enumerate() {
-        let gdsid = d.get("GDSID").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let stkid = d.get("StkID").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let gdsid = d
+            .get("GDSID")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let stkid = d
+            .get("StkID")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let qty = json_to_f64(d.get("Qty"));
         if gdsid.is_empty() || stkid.is_empty() || qty <= 0.0 {
             continue;
@@ -612,14 +690,31 @@ async fn validate_outbound_stock(
     if !shortage.is_empty() {
         // 持久化缺货记录到 tStk_Shortage（save 场景：单据号从 data 读取，master_id 用 pk_value）
         let doc_no = if !meta.no_field.is_empty() {
-            data.get(meta.no_field.as_str()).and_then(|v| v.as_str()).unwrap_or("").to_string()
+            data.get(meta.no_field.as_str())
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
         } else {
             String::new()
         };
         // 读取客户/门店（销售类单据有 CustID；调拨/盘点等无客户则留空）
         let (cust_id, cust_name) = query_cust_info_from_data(conn, meta, data).await;
         // 销售类单据无独立门店字段，门店列为空（门店信息在调拨单 ZP 场景才填充）
-        log_shortage_to_db(conn, &shortage, &meta.table, &doc_no, pk_value, user_code, emp_id, "doc_save", &cust_id, &cust_name, "", "").await;
+        log_shortage_to_db(
+            conn,
+            &shortage,
+            &meta.table,
+            &doc_no,
+            pk_value,
+            user_code,
+            emp_id,
+            "doc_save",
+            &cust_id,
+            &cust_name,
+            "",
+            "",
+        )
+        .await;
         return Err(ApproveError::Shortage(shortage));
     }
     Ok(())
@@ -636,7 +731,9 @@ pub async fn save_doc(
     let meta = doc_graph::get_doc_meta(&params.table)
         .ok_or_else(|| format!("未知业务单据表: {}", params.table))?
         .clone();
-    let pk_value = params.data.get(&params.primary_key)
+    let pk_value = params
+        .data
+        .get(&params.primary_key)
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
@@ -652,13 +749,20 @@ pub async fn save_doc(
     let mut resolved_emp_id = String::new();
     {
         let obj = params.data.as_object_mut().ok_or("data 必须是 JSON 对象")?;
-        let euser_val = obj.get("EUser").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let euser_val = obj
+            .get("EUser")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let need_inject_euser = euser_val.is_empty();
         if need_inject_euser {
             // 通过 user_code 查询 EmpID
             let emp_id = query_emp_id_by_code(conn, user_code).await;
             if !emp_id.is_empty() {
-                obj.insert("EUser".to_string(), serde_json::Value::String(emp_id.clone()));
+                obj.insert(
+                    "EUser".to_string(),
+                    serde_json::Value::String(emp_id.clone()),
+                );
                 resolved_emp_id = emp_id;
             } else {
                 // P1-6 修复：原逻辑静默写入零 UUID，导致 EUser 字段污染，影响数据完整性
@@ -678,7 +782,10 @@ pub async fn save_doc(
             // EUser 不是 UUID 格式（如 'admin'），替换为对应 EmpID
             let emp_id = query_emp_id_by_code(conn, &euser_val).await;
             if !emp_id.is_empty() {
-                obj.insert("EUser".to_string(), serde_json::Value::String(emp_id.clone()));
+                obj.insert(
+                    "EUser".to_string(),
+                    serde_json::Value::String(emp_id.clone()),
+                );
                 resolved_emp_id = emp_id;
             } else {
                 // P1-6 修复：同上，返回错误而非写入零 UUID
@@ -695,10 +802,21 @@ pub async fn save_doc(
             // 前端已传 UUID 格式的 EUser，直接复用作为缺货记录的 EmpID
             resolved_emp_id = euser_val;
         }
-        if !obj.contains_key("EDate") || obj.get("EDate").and_then(|v| v.as_str()).unwrap_or("").is_empty() {
+        if !obj.contains_key("EDate")
+            || obj
+                .get("EDate")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .is_empty()
+        {
             // ★ 用 Local::now()（本地时区 UTC+8），不能用 Utc::now()（会差 8 小时）。
             //   格式用 "YYYY-MM-DD HH:MM:SS"（与 generic.rs 一致，SQL Server DATETIME 隐式转换无歧义）。
-            obj.insert("EDate".to_string(), serde_json::Value::String(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()));
+            obj.insert(
+                "EDate".to_string(),
+                serde_json::Value::String(
+                    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+                ),
+            );
         }
     }
 
@@ -708,23 +826,45 @@ pub async fn save_doc(
     validate_details_unique_gds(&meta, &params.details)?;
     // 门店销售单是门店自卖，不进库存流水、不校验库存
     if !is_retail_sale_inv_by_data(&meta, &params.data) {
-        validate_outbound_stock(conn, &meta, &params.data, &params.details, user_code, &resolved_emp_id, &pk_value).await?;
+        validate_outbound_stock(
+            conn,
+            &meta,
+            &params.data,
+            &params.details,
+            user_code,
+            &resolved_emp_id,
+            &pk_value,
+        )
+        .await?;
     }
 
     // 修复 P0-1：更新模式下校验当前 DB 状态，仅 N/E 可修改
     // 否则已审核（S）/已确认（Y）/已作废（C）/已删除（D）单据仍可被覆盖，
     // 特别是 receipt/payment 的明细 Amt 变化会立即影响 finance.rs 的 OpenAmt 派生计算
     if is_update {
-        let cur_state = inventory_ledger::query_doc_state(conn, &params.table, &params.primary_key, &pk_value).await;
+        let cur_state =
+            inventory_ledger::query_doc_state(conn, &params.table, &params.primary_key, &pk_value)
+                .await;
         if !matches!(cur_state.as_str(), "" | "N" | "E") {
             // 先反审或新单据才能修改
-            return Err(ApproveError::msg(format!("单据状态为 {}，不允许修改（仅新建/编辑中可修改）", cur_state)));
+            return Err(ApproveError::msg(format!(
+                "单据状态为 {}，不允许修改（仅新建/编辑中可修改）",
+                cur_state
+            )));
         }
     }
 
     // 修复 P0-3/P0-4：核销明细金额超分配 + 源单存在性/Kind/客户校验
     // 防止绕过前端直接调 /generic/create 让 OpenAmt 变负或污染 AR/AP 报表
-    validate_writeoff_details(conn, &meta, &params.data, &params.details, is_update, &pk_value).await?;
+    validate_writeoff_details(
+        conn,
+        &meta,
+        &params.data,
+        &params.details,
+        is_update,
+        &pk_value,
+    )
+    .await?;
 
     // 基于表结构过滤主表字段并补全 NOT NULL 默认值（统一处理所有单据类型）
     {
@@ -744,7 +884,16 @@ pub async fn save_doc(
     // 修复 M-6：before_snapshot 在事务内查询，避免与其他事务并发修改产生快照漂移
     // （原实现查询在 begin_tran 之前，期间若有其他事务提交更新，before 快照将过时）
     let before_snapshot: Option<serde_json::Value> = if is_update {
-        query_doc_snapshot(conn, &params.table, &params.primary_key, &pk_value, &meta.detail_table, &meta.detail_foreign_key, &meta.detail_primary_key).await
+        query_doc_snapshot(
+            conn,
+            &params.table,
+            &params.primary_key,
+            &pk_value,
+            &meta.detail_table,
+            &meta.detail_foreign_key,
+            &meta.detail_primary_key,
+        )
+        .await
     } else {
         None
     };
@@ -752,12 +901,18 @@ pub async fn save_doc(
     let id = if is_update {
         match update_master(conn, &params.table, &params.primary_key, &params.data).await {
             Ok(_) => pk_value.clone(),
-            Err(e) => { tx_err = Some(e); String::new() }
+            Err(e) => {
+                tx_err = Some(e);
+                String::new()
+            }
         }
     } else {
         match insert_master(conn, &params.table, &params.primary_key, &params.data).await {
             Ok(id) => id,
-            Err(e) => { tx_err = Some(e); String::new() }
+            Err(e) => {
+                tx_err = Some(e);
+                String::new()
+            }
         }
     };
 
@@ -777,9 +932,17 @@ pub async fn save_doc(
             for (row_idx, d) in params.details.iter_mut().enumerate() {
                 if let Some(obj) = d.as_object_mut() {
                     // 先过滤掉数据库不存在的字段（_isNew/_rowKey/AInPrice/前端展示字段等）
-                    filter_to_db_columns(obj, &det_columns, &[&meta.detail_primary_key, &meta.detail_foreign_key, "RowNO"]);
+                    filter_to_db_columns(
+                        obj,
+                        &det_columns,
+                        &[&meta.detail_primary_key, &meta.detail_foreign_key, "RowNO"],
+                    );
                     // 再补全 NOT NULL 字段默认值
-                    fill_not_null_defaults(obj, &det_columns, &[&meta.detail_primary_key, &meta.detail_foreign_key, "RowNO"]);
+                    fill_not_null_defaults(
+                        obj,
+                        &det_columns,
+                        &[&meta.detail_primary_key, &meta.detail_foreign_key, "RowNO"],
+                    );
                 }
                 if let Err(e) = insert_detail(conn, &meta, &id, d, row_idx as i32).await {
                     tx_err = Some(e);
@@ -803,7 +966,9 @@ pub async fn save_doc(
     }
 
     // 4) 取单据号
-    let doc_no = params.data.get(meta.no_field.as_str())
+    let doc_no = params
+        .data
+        .get(meta.no_field.as_str())
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
@@ -819,20 +984,36 @@ pub async fn save_doc(
         // 把保存前的快照传给审核，作为日志的 before（修改前数据）
         // 保存已提交，若审核失败不回滚保存，返回 partial_success 让前端切换为编辑模式
         match approve_doc_internal(
-            conn, user_code, user_name, approve_params,
+            conn,
+            user_code,
+            user_name,
+            approve_params,
             before_snapshot.clone(),
-        ).await {
+        )
+        .await
+        {
             Ok(_) => {
                 // ★ 门店销售单审核成功后自动计算提成（对齐 88 项目 storesales.go）
                 //   审核路径与保存路径都会触发提成重算，保证数据一致
                 if params.table == "tSal_Inv" {
-                    if let Err(e) = crate::services::commission_service::recalc_invoice_commission(conn, &id).await {
-                        tracing::warn!("[save_doc/approve] 门店销售单 {} 提成重算失败（不影响审核）: {}", id, e);
+                    if let Err(e) =
+                        crate::services::commission_service::recalc_invoice_commission(conn, &id)
+                            .await
+                    {
+                        tracing::warn!(
+                            "[save_doc/approve] 门店销售单 {} 提成重算失败（不影响审核）: {}",
+                            id,
+                            e
+                        );
                     }
                 }
                 return Ok(SaveDocResponse {
-                    id, doc_no, operation: "APPROVE".to_string(),
-                    partial_success: None, approve_error: None, shortage_list: None,
+                    id,
+                    doc_no,
+                    operation: "APPROVE".to_string(),
+                    partial_success: None,
+                    approve_error: None,
+                    shortage_list: None,
                 });
             }
             Err(approve_err) => {
@@ -845,7 +1026,9 @@ pub async fn save_doc(
                     _ => None,
                 };
                 return Ok(SaveDocResponse {
-                    id, doc_no, operation: "SAVE_ONLY".to_string(),
+                    id,
+                    doc_no,
+                    operation: "SAVE_ONLY".to_string(),
                     partial_success: Some(true),
                     approve_error: Some(err_msg),
                     shortage_list,
@@ -857,22 +1040,37 @@ pub async fn save_doc(
     // 6) 写操作日志（含数据快照，日志失败不影响单据保存，仅记录）
     // after 快照重新查询 DB：保证 before/after 都是完整行（含 Items），避免请求体只有部分字段导致对比失真
     let after_snapshot: Option<serde_json::Value> = query_doc_snapshot(
-        conn, &params.table, &params.primary_key, &id,
-        &meta.detail_table, &meta.detail_foreign_key, &meta.detail_primary_key,
-    ).await;
+        conn,
+        &params.table,
+        &params.primary_key,
+        &id,
+        &meta.detail_table,
+        &meta.detail_foreign_key,
+        &meta.detail_primary_key,
+    )
+    .await;
     let after_data = after_snapshot.unwrap_or_else(|| params.data.clone());
     let (before_json, after_json): (Option<String>, Option<String>) = if is_update {
-        let before_str = before_snapshot.as_ref().map(|v| serde_json::to_string(v).unwrap_or_default());
+        let before_str = before_snapshot
+            .as_ref()
+            .map(|v| serde_json::to_string(v).unwrap_or_default());
         let after_str = serde_json::to_string(&after_data).ok();
         (before_str, after_str)
     } else {
         (None, serde_json::to_string(&after_data).ok())
     };
     let _ = record_oper_with_data(
-        conn, operation, &params.table, &id, user_code,
-        Some(&doc_no), Some(&format!("{}{}", oper_cn, meta.title)),
-        before_json.as_deref(), after_json.as_deref(),
-    ).await;
+        conn,
+        operation,
+        &params.table,
+        &id,
+        user_code,
+        Some(&doc_no),
+        Some(&format!("{}{}", oper_cn, meta.title)),
+        before_json.as_deref(),
+        after_json.as_deref(),
+    )
+    .await;
 
     // ★ 门店销售单保存成功后自动计算提成（对齐 88 项目 storesales.go）
     //   - 88 项目在 CreateStoreSalesOrder/UpdateStoreSalesOrder 中直接调用 CalculateOrderCommission
@@ -880,12 +1078,25 @@ pub async fn save_doc(
     //   - 仅对 tSal_Inv 表生效（其他单据表跳过）
     //   - 提成计算失败不影响单据保存（仅记录日志），保证主流程稳定
     if params.table == "tSal_Inv" {
-        if let Err(e) = crate::services::commission_service::recalc_invoice_commission(conn, &id).await {
-            tracing::warn!("[save_doc] 门店销售单 {} 提成重算失败（不影响保存）: {}", id, e);
+        if let Err(e) =
+            crate::services::commission_service::recalc_invoice_commission(conn, &id).await
+        {
+            tracing::warn!(
+                "[save_doc] 门店销售单 {} 提成重算失败（不影响保存）: {}",
+                id,
+                e
+            );
         }
     }
 
-    Ok(SaveDocResponse { id, doc_no, operation: operation.to_string(), partial_success: None, approve_error: None, shortage_list: None })
+    Ok(SaveDocResponse {
+        id,
+        doc_no,
+        operation: operation.to_string(),
+        partial_success: None,
+        approve_error: None,
+        shortage_list: None,
+    })
 }
 
 /// 查询单据快照（主表 + 明细行），用于操作日志变更明细对比
@@ -908,9 +1119,15 @@ async fn query_doc_snapshot(
     // 查主表（应用 JOIN 配置，让结果含 Name 字段供前端 UUID→名称解析）
     let (master_select, master_join) = get_joins_for_table(table);
     let master_sql = if master_join.is_empty() {
-        format!("SELECT {} FROM [{}] t WHERE t.[{}] = @p1", master_select, table, primary_key)
+        format!(
+            "SELECT {} FROM [{}] t WHERE t.[{}] = @p1",
+            master_select, table, primary_key
+        )
     } else {
-        format!("SELECT {} FROM [{}] t {} WHERE t.[{}] = @p1", master_select, table, master_join, primary_key)
+        format!(
+            "SELECT {} FROM [{}] t {} WHERE t.[{}] = @p1",
+            master_select, table, master_join, primary_key
+        )
     };
     let master_val = match conn.query(&master_sql, &[&pk_value]).await {
         Ok(stream) => match stream.into_row().await {
@@ -959,7 +1176,8 @@ async fn update_master(
     data: &serde_json::Value,
 ) -> Result<String, String> {
     let obj = data.as_object().ok_or("data 必须是 JSON 对象")?;
-    let pk_value = obj.get(primary_key)
+    let pk_value = obj
+        .get(primary_key)
         .and_then(|v| v.as_str())
         .ok_or("缺少主键")?
         .to_string();
@@ -968,14 +1186,29 @@ async fn update_master(
     let mut params: Vec<Box<dyn ToSql + Send + Sync>> = Vec::new();
     let mut idx = 1;
     for (k, v) in obj {
-        if k == primary_key { continue; }
+        if k == primary_key {
+            continue;
+        }
         // 过滤前端内部字段（以 _ 开头，如 _isNew/_rowKey）
-        if k.starts_with('_') { continue; }
-        if k.ends_with("Name") && !k.starts_with("GDS") { continue; }
+        if k.starts_with('_') {
+            continue;
+        }
+        if k.ends_with("Name") && !k.starts_with("GDS") {
+            continue;
+        }
         // 业务单号、PK 不修改
-        if k == "PoNo" || k == "PiNo" || k == "PrNo" || k == "SoNo"
-            || k == "SINo" || k == "IONo" || k == "MoveNO" || k == "TranNo"
-            || k == "ReplenishApplyNo" || k == "ReceiptNo" || k == "PaymentNo" {
+        if k == "PoNo"
+            || k == "PiNo"
+            || k == "PrNo"
+            || k == "SoNo"
+            || k == "SINo"
+            || k == "IONo"
+            || k == "MoveNO"
+            || k == "TranNo"
+            || k == "ReplenishApplyNo"
+            || k == "ReceiptNo"
+            || k == "PaymentNo"
+        {
             continue;
         }
         sets.push(format!("[{}] = @p{}", k, idx));
@@ -991,19 +1224,27 @@ async fn update_master(
         .collect();
     let sql = format!(
         "UPDATE [{}] SET {} WHERE [{}] = @p{} AND (State IS NULL OR State IN ({}))",
-        table, sets.join(", "), primary_key, idx, cas_placeholders.join(", ")
+        table,
+        sets.join(", "),
+        primary_key,
+        idx,
+        cas_placeholders.join(", ")
     );
     params.push(Box::new(pk_value.clone()));
     for s in cas_states.iter() {
         params.push(Box::new(s.to_string()));
     }
     let p_refs: Vec<&dyn ToSql> = params.iter().map(|b| b.as_ref() as &dyn ToSql).collect();
-    let result = conn.execute(&sql, &p_refs).await
+    let result = conn
+        .execute(&sql, &p_refs)
+        .await
         .map_err(|e| format!("更新主表失败: {}", e))?;
     let rows = result.rows_affected().first().copied().unwrap_or(0);
     if rows == 0 {
         // 状态被并发请求改掉（如已审核 S），返回错误让外层 ROLLBACK
-        return Err(format!("单据状态已变更，修改失败（仅新建/编辑中状态可修改）"));
+        return Err(format!(
+            "单据状态已变更，修改失败（仅新建/编辑中状态可修改）"
+        ));
     }
     Ok(pk_value)
 }
@@ -1035,8 +1276,12 @@ async fn insert_master(
             new_pk = v.as_str().map(|s| s.to_string());
         }
         // 过滤前端内部字段（以 _ 开头，如 _isNew/_rowKey）
-        if k.starts_with('_') { continue; }
-        if k.ends_with("Name") && !k.starts_with("GDS") { continue; }
+        if k.starts_with('_') {
+            continue;
+        }
+        if k.ends_with("Name") && !k.starts_with("GDS") {
+            continue;
+        }
         cols.push(format!("[{}]", k));
         placeholders.push(format!("@p{}", idx));
         params.push(json_to_sql_for_field(k, v));
@@ -1052,23 +1297,30 @@ async fn insert_master(
         params.push(Box::new(uuid.clone()));
         uuid
     };
-    let sql = format!("INSERT INTO [{}] ({}) VALUES ({})", table, cols.join(", "), placeholders.join(", "));
+    let sql = format!(
+        "INSERT INTO [{}] ({}) VALUES ({})",
+        table,
+        cols.join(", "),
+        placeholders.join(", ")
+    );
     let p_refs: Vec<&dyn ToSql> = params.iter().map(|b| b.as_ref() as &dyn ToSql).collect();
-    conn.execute(&sql, &p_refs).await
+    conn.execute(&sql, &p_refs)
+        .await
         .map_err(|e| format!("插入主表失败: {}", e))?;
     Ok(new_pk)
 }
 
-async fn delete_details(
-    conn: &mut Conn,
-    meta: &DocMeta,
-    master_id: &str,
-) -> Result<(), String> {
+async fn delete_details(conn: &mut Conn, meta: &DocMeta, master_id: &str) -> Result<(), String> {
     if meta.detail_table.is_empty() {
         return Ok(());
     }
-    let sql = format!("DELETE FROM [{}] WHERE [{}] = @p1", meta.detail_table, meta.detail_foreign_key);
-    let _ = conn.execute(&sql, &[&master_id]).await
+    let sql = format!(
+        "DELETE FROM [{}] WHERE [{}] = @p1",
+        meta.detail_table, meta.detail_foreign_key
+    );
+    let _ = conn
+        .execute(&sql, &[&master_id])
+        .await
         .map_err(|e| format!("删除明细失败: {}", e))?;
     Ok(())
 }
@@ -1102,7 +1354,10 @@ async fn insert_detail(
     // ★ 财务明细表（tFin_ReceiptDtl/tFin_PaymentDtl）的 Rowno 是 IDENTITY(1,1) 自增列，
     //   不能显式插入（否则报 "Cannot insert explicit value for identity column"）。
     //   其他明细表的 RowNO 是普通 int 列，需要前端传入。
-    let is_finance_detail = matches!(meta.detail_table.as_str(), "tFin_ReceiptDtl" | "tFin_PaymentDtl");
+    let is_finance_detail = matches!(
+        meta.detail_table.as_str(),
+        "tFin_ReceiptDtl" | "tFin_PaymentDtl"
+    );
     if !is_finance_detail {
         cols.push("[RowNO]".to_string());
         placeholders.push(format!("@p{}", idx));
@@ -1115,27 +1370,35 @@ async fn insert_detail(
             continue;
         }
         // 过滤前端内部字段（以 _ 开头，如 _isNew/_rowKey）
-        if k.starts_with('_') { continue; }
-        if k.ends_with("Name") && !k.starts_with("GDS") { continue; }
+        if k.starts_with('_') {
+            continue;
+        }
+        if k.ends_with("Name") && !k.starts_with("GDS") {
+            continue;
+        }
         // 过滤前端展示用字段（非明细表列）
-        if k == "StkQty" || k == "StockQty" || k == "QQty" { continue; }
+        if k == "StkQty" || k == "StockQty" || k == "QQty" {
+            continue;
+        }
         cols.push(format!("[{}]", k));
         placeholders.push(format!("@p{}", idx));
         params.push(json_to_sql_for_field(k, v));
         idx += 1;
     }
-    let sql = format!("INSERT INTO [{}] ({}) VALUES ({})", meta.detail_table, cols.join(", "), placeholders.join(", "));
+    let sql = format!(
+        "INSERT INTO [{}] ({}) VALUES ({})",
+        meta.detail_table,
+        cols.join(", "),
+        placeholders.join(", ")
+    );
     let p_refs: Vec<&dyn ToSql> = params.iter().map(|b| b.as_ref() as &dyn ToSql).collect();
-    conn.execute(&sql, &p_refs).await
+    conn.execute(&sql, &p_refs)
+        .await
         .map_err(|e| format!("插入明细失败: {}", e))?;
     Ok(())
 }
 
-async fn post_save_fill_snapshot(
-    conn: &mut Conn,
-    meta: &DocMeta,
-    master_id: &str,
-) {
+async fn post_save_fill_snapshot(conn: &mut Conn, meta: &DocMeta, master_id: &str) {
     match meta.table.as_str() {
         "tStk_IO" => fill_io_detail_stock_snapshot(conn, master_id).await,
         "tStk_Move" => fill_move_detail_stock_snapshot(conn, master_id).await,
@@ -1170,8 +1433,17 @@ async fn approve_doc_internal(
     // doc_type 默认值：基于 doc_no_prefix 映射（与前端 DOC_TYPE_MAP 一致），
     // 确保 post_stock_on_approve/reverse_stock_on_unapprove 分支能正确匹配
     let default_doc_type = default_doc_type_for_table(&meta);
-    let doc_type = params.doc_type.clone().unwrap_or_else(|| default_doc_type.clone());
-    tracing::info!("approve_doc start: table={} id={} doc_type={} (default={})", params.table, params.id, doc_type, default_doc_type);
+    let doc_type = params
+        .doc_type
+        .clone()
+        .unwrap_or_else(|| default_doc_type.clone());
+    tracing::info!(
+        "approve_doc start: table={} id={} doc_type={} (default={})",
+        params.table,
+        params.id,
+        doc_type,
+        default_doc_type
+    );
 
     // 1) 校验状态
     let cur_state = query_doc_state(conn, &params.table, &params.primary_key, &params.id).await;
@@ -1181,25 +1453,44 @@ async fn approve_doc_internal(
         return Err(ApproveError::msg("单据不存在或状态字段为空，无法审核"));
     }
     if !matches!(cur_state.as_str(), STATE_NEW | STATE_EDIT) {
-        return Err(ApproveError::msg(format!("单据状态 {} 不允许审核（仅 N/E 状态可审核）", cur_state)));
+        return Err(ApproveError::msg(format!(
+            "单据状态 {} 不允许审核（仅 N/E 状态可审核）",
+            cur_state
+        )));
     }
 
     // 修改前查旧数据快照（用于操作日志变更明细）
     // 优先使用外部传入的 override（保存并审核场景：用保存前的旧数据作为 before）
-    let before_snapshot: Option<serde_json::Value> = if let Some(override_val) = before_snapshot_override {
-        Some(override_val)
-    } else {
-        query_doc_snapshot(
-            conn, &params.table, &params.primary_key, &params.id,
-            &meta.detail_table, &meta.detail_foreign_key, &meta.detail_primary_key,
-        ).await
-    };
+    let before_snapshot: Option<serde_json::Value> =
+        if let Some(override_val) = before_snapshot_override {
+            Some(override_val)
+        } else {
+            query_doc_snapshot(
+                conn,
+                &params.table,
+                &params.primary_key,
+                &params.id,
+                &meta.detail_table,
+                &meta.detail_foreign_key,
+                &meta.detail_primary_key,
+            )
+            .await
+        };
 
     // 1.5) 会计期间检查（仅影响库存的单据）
     // 门店销售单不进库存流水，跳过期间检查、库存校验和库存过账
-    let is_retail_sale = is_retail_sale_inv_by_db(conn, &meta.table, &meta.primary_key, &params.id).await;
+    let is_retail_sale =
+        is_retail_sale_inv_by_db(conn, &meta.table, &meta.primary_key, &params.id).await;
     if meta.affects_stock && !is_retail_sale {
-        if let Some(action_date) = query_doc_date(conn, &params.table, &meta.date_field, &params.primary_key, &params.id).await {
+        if let Some(action_date) = query_doc_date(
+            conn,
+            &params.table,
+            &meta.date_field,
+            &params.primary_key,
+            &params.id,
+        )
+        .await
+        {
             if let Some(err) = check_period_closed(conn, action_date).await {
                 return Err(ApproveError::msg(err.replace("反审核", "审核")));
             }
@@ -1217,12 +1508,19 @@ async fn approve_doc_internal(
     if matches!(meta.table.as_str(), "tFin_Receipt" | "tFin_Payment") {
         // 复用 query_doc_snapshot 一次取主表 + 明细行，避免重复实现
         let snapshot = query_doc_snapshot(
-            conn, &meta.table, &meta.primary_key, &params.id,
-            &meta.detail_table, &meta.detail_foreign_key, &meta.detail_primary_key,
-        ).await;
+            conn,
+            &meta.table,
+            &meta.primary_key,
+            &params.id,
+            &meta.detail_table,
+            &meta.detail_foreign_key,
+            &meta.detail_primary_key,
+        )
+        .await;
         if let Some(snap) = snapshot {
             let master_data = &snap;
-            let details: Vec<serde_json::Value> = snap.get("Items")
+            let details: Vec<serde_json::Value> = snap
+                .get("Items")
                 .and_then(|v| v.as_array())
                 .cloned()
                 .unwrap_or_default();
@@ -1254,10 +1552,15 @@ async fn approve_doc_internal(
         // 修复 M-4：把工号解析为 EmpID 后再写入 AUser
         let auser = resolve_auser_id(conn, user_code).await;
         let cas_ok = inventory_ledger::update_doc_state_with_cas(
-            conn, &params.table, &params.primary_key, &params.id,
-            STATE_REVIEWED, &auser,
+            conn,
+            &params.table,
+            &params.primary_key,
+            &params.id,
+            STATE_REVIEWED,
+            &auser,
             Some(&[STATE_NEW, STATE_EDIT]),
-        ).await;
+        )
+        .await;
         if !cas_ok {
             // 状态已被其他请求改掉（非 N/E），回滚事务
             tx_err = Some("单据状态已变更（非 N/E），审核失败".to_string());
@@ -1268,22 +1571,43 @@ async fn approve_doc_internal(
     // after 快照重新查询 DB：保证 before/after 都是完整行（含 Items），便于变更明细展示
     if tx_err.is_none() {
         let after_snapshot: Option<serde_json::Value> = query_doc_snapshot(
-            conn, &params.table, &params.primary_key, &params.id,
-            &meta.detail_table, &meta.detail_foreign_key, &meta.detail_primary_key,
-        ).await;
-        let before_json = before_snapshot.as_ref().and_then(|v| serde_json::to_string(v).ok());
-        let after_json = after_snapshot.as_ref().and_then(|v| serde_json::to_string(v).ok());
+            conn,
+            &params.table,
+            &params.primary_key,
+            &params.id,
+            &meta.detail_table,
+            &meta.detail_foreign_key,
+            &meta.detail_primary_key,
+        )
+        .await;
+        let before_json = before_snapshot
+            .as_ref()
+            .and_then(|v| serde_json::to_string(v).ok());
+        let after_json = after_snapshot
+            .as_ref()
+            .and_then(|v| serde_json::to_string(v).ok());
         // 从 after_snapshot 提取单据号，用于日志 Remark 显示
-        let doc_no_str = after_snapshot.as_ref()
+        let doc_no_str = after_snapshot
+            .as_ref()
             .and_then(|v| v.get(meta.no_field.as_str()))
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let _ = record_oper_with_data(
-            conn, "APPROVE", &params.table, &params.id, user_code,
-            if doc_no_str.is_empty() { None } else { Some(doc_no_str) },
+            conn,
+            "APPROVE",
+            &params.table,
+            &params.id,
+            user_code,
+            if doc_no_str.is_empty() {
+                None
+            } else {
+                Some(doc_no_str)
+            },
             Some(&format!("审核{}", meta.title)),
-            before_json.as_deref(), after_json.as_deref(),
-        ).await;
+            before_json.as_deref(),
+            after_json.as_deref(),
+        )
+        .await;
     }
 
     if let Some(e) = tx_err {
@@ -1321,19 +1645,24 @@ async fn validate_outbound_stock_for_approve(
     }
 
     // 取明细
-    let detail_sql = format!("SELECT CAST(GDSID AS NVARCHAR(40)) AS GDSID, CAST(StkID AS NVARCHAR(40)) AS StkID, \
+    let detail_sql = format!(
+        "SELECT CAST(GDSID AS NVARCHAR(40)) AS GDSID, CAST(StkID AS NVARCHAR(40)) AS StkID, \
                               ISNULL(CAST(Qty AS NVARCHAR(50)),'0') AS Q \
                               FROM [{}] WHERE [{}] = @p1",
-                             meta.detail_table, meta.detail_foreign_key);
+        meta.detail_table, meta.detail_foreign_key
+    );
     let rows: Vec<(String, String, f64)> = match conn.query(&detail_sql, &[&master_id]).await {
         Ok(s) => match s.into_first_result().await {
-            Ok(rs) => rs.iter().map(|r| {
-                let gdsid = r.get::<&str, _>("GDSID").unwrap_or("").to_string();
-                let stkid = r.get::<&str, _>("StkID").unwrap_or("").to_string();
-                let q_str = r.get::<&str, _>("Q").unwrap_or("0");
-                let q: f64 = q_str.parse().unwrap_or(0.0);
-                (gdsid, stkid, q)
-            }).collect(),
+            Ok(rs) => rs
+                .iter()
+                .map(|r| {
+                    let gdsid = r.get::<&str, _>("GDSID").unwrap_or("").to_string();
+                    let stkid = r.get::<&str, _>("StkID").unwrap_or("").to_string();
+                    let q_str = r.get::<&str, _>("Q").unwrap_or("0");
+                    let q: f64 = q_str.parse().unwrap_or(0.0);
+                    (gdsid, stkid, q)
+                })
+                .collect(),
             Err(_) => Vec::new(),
         },
         Err(_) => Vec::new(),
@@ -1347,12 +1676,20 @@ async fn validate_outbound_stock_for_approve(
     let rows: Vec<(String, String, f64)> = if rows.iter().any(|(_, s, _)| is_invalid_stkid(s)) {
         let master_stkid = read_master_stkid(conn, meta, master_id).await;
         if is_invalid_stkid(&master_stkid) {
-            return Err(ApproveError::msg("无法确定仓库：明细行和主表的 StkID 均为空"));
+            return Err(ApproveError::msg(
+                "无法确定仓库：明细行和主表的 StkID 均为空",
+            ));
         }
-        rows.into_iter().map(|(g, s, q)| {
-            let final_s = if is_invalid_stkid(&s) { master_stkid.clone() } else { s };
-            (g, final_s, q)
-        }).collect()
+        rows.into_iter()
+            .map(|(g, s, q)| {
+                let final_s = if is_invalid_stkid(&s) {
+                    master_stkid.clone()
+                } else {
+                    s
+                };
+                (g, final_s, q)
+            })
+            .collect()
     } else {
         rows
     };
@@ -1364,28 +1701,29 @@ async fn validate_outbound_stock_for_approve(
     // - stock_io 出库类 Kind（SD/SI/POS/PR/OTO/RI/ADJ）: 校验库存
     // - stock_io 调拨类 Kind（DB/ZP/TH/OT）: 由 stock_move 分支处理或按行符号处理，此处跳过
     // - stock_io 入库类 Kind（PD/SR/OTI/DBI）: 不校验
-    let need_check = if doc_type == "sales_order" || doc_type == "sales_outbound" || doc_type == "sales_inv" {
-        // 销售类：校验可用量
-        true
-    } else if doc_type == "purchase_return" {
-        // 采购退货：校验库存
-        true
-    } else if doc_type == "stock_io" {
-        // 入出库单：按 Kind 判断方向
-        let kind = read_kind(conn, meta, master_id).await;
-        let dir = doc_graph::kind_direction(&kind);
-        // 出库类需要校验；调拨类（DB/ZP/TH/OT）按行 Qty 符号决定，负数行需校验
-        if dir == doc_graph::DIR_OUTBOUND {
+    let need_check =
+        if doc_type == "sales_order" || doc_type == "sales_outbound" || doc_type == "sales_inv" {
+            // 销售类：校验可用量
             true
-        } else if dir == doc_graph::DIR_TRANSFER {
-            // 调拨类：按行符号判断，有负数行（出库）就需校验
-            rows.iter().any(|(_, _, q)| *q < 0.0)
+        } else if doc_type == "purchase_return" {
+            // 采购退货：校验库存
+            true
+        } else if doc_type == "stock_io" {
+            // 入出库单：按 Kind 判断方向
+            let kind = read_kind(conn, meta, master_id).await;
+            let dir = doc_graph::kind_direction(&kind);
+            // 出库类需要校验；调拨类（DB/ZP/TH/OT）按行 Qty 符号决定，负数行需校验
+            if dir == doc_graph::DIR_OUTBOUND {
+                true
+            } else if dir == doc_graph::DIR_TRANSFER {
+                // 调拨类：按行符号判断，有负数行（出库）就需校验
+                rows.iter().any(|(_, _, q)| *q < 0.0)
+            } else {
+                false
+            }
         } else {
             false
-        }
-    } else {
-        false
-    };
+        };
 
     if !need_check {
         return Ok(());
@@ -1401,11 +1739,16 @@ async fn validate_outbound_stock_for_approve(
     } else {
         String::new()
     };
-    let is_sales_outbound_with_reserve = (doc_type == "sales_outbound" || doc_type == "sales_inv") && !source_soid.is_empty();
+    let is_sales_outbound_with_reserve =
+        (doc_type == "sales_outbound" || doc_type == "sales_inv") && !source_soid.is_empty();
     for (idx, (gdsid, stkid, qty)) in rows.iter().enumerate() {
-        if gdsid.is_empty() || stkid.is_empty() { continue; }
+        if gdsid.is_empty() || stkid.is_empty() {
+            continue;
+        }
         let abs_qty = qty.abs();
-        if abs_qty <= 0.0 { continue; }
+        if abs_qty <= 0.0 {
+            continue;
+        }
 
         let stock = query_stock_qty(conn, gdsid, stkid).await;
         let qqty = query_qqty(conn, gdsid, stkid).await;
@@ -1433,15 +1776,23 @@ async fn validate_outbound_stock_for_approve(
                 reserved: qqty,
                 available,
                 qty: abs_qty,
-                shortage: (abs_qty - if is_sales_outbound_with_reserve { stock } else { available }).ceil(),
+                shortage: (abs_qty
+                    - if is_sales_outbound_with_reserve {
+                        stock
+                    } else {
+                        available
+                    })
+                .ceil(),
             });
         }
     }
     if !shortage.is_empty() {
         // 持久化缺货记录到 tStk_Shortage（approve 场景：单据号从 DB 查询）
         let doc_no = if !meta.no_field.is_empty() {
-            let sql = format!("SELECT CAST([{}] AS NVARCHAR(50)) AS NO FROM [{}] WHERE [{}] = @p1",
-                              meta.no_field, meta.table, meta.primary_key);
+            let sql = format!(
+                "SELECT CAST([{}] AS NVARCHAR(50)) AS NO FROM [{}] WHERE [{}] = @p1",
+                meta.no_field, meta.table, meta.primary_key
+            );
             match conn.query(&sql, &[&master_id]).await {
                 Ok(s) => match s.into_row().await {
                     Ok(Some(row)) => row.get::<&str, _>("NO").unwrap_or("").to_string(),
@@ -1456,14 +1807,32 @@ async fn validate_outbound_stock_for_approve(
         // 读取客户/门店（审核路径：从 DB 查询单据主表的 CustID）
         let (cust_id, cust_name) = query_cust_info_from_db(conn, meta, master_id).await;
         // 销售类单据无独立门店字段，门店列为空（门店信息在调拨单 ZP 场景才填充）
-        log_shortage_to_db(conn, &shortage, &meta.table, &doc_no, master_id, user_code, &emp_id, "doc_approve", &cust_id, &cust_name, "", "").await;
+        log_shortage_to_db(
+            conn,
+            &shortage,
+            &meta.table,
+            &doc_no,
+            master_id,
+            user_code,
+            &emp_id,
+            "doc_approve",
+            &cust_id,
+            &cust_name,
+            "",
+            "",
+        )
+        .await;
         return Err(ApproveError::Shortage(shortage));
     }
     Ok(())
 }
 
 /// 调拨单出库预校验：校验调出仓库存是否足够（不允许负库存）
-async fn validate_move_outbound_stock(conn: &mut Conn, move_id: &str, user_code: &str) -> Result<(), ApproveError> {
+async fn validate_move_outbound_stock(
+    conn: &mut Conn,
+    move_id: &str,
+    user_code: &str,
+) -> Result<(), ApproveError> {
     // 读取调拨单 Kind：DB=内部调拨, TH=门店退仓, ZP=门店直配
     // - DB（内部调拨）：仓库间移库，不算缺货
     // - TH（门店退仓）：门店退到总仓，总仓是收货方（入库方向），不算缺货
@@ -1487,17 +1856,24 @@ async fn validate_move_outbound_stock(conn: &mut Conn, move_id: &str, user_code:
 
     let (from_id, to_id) = query_move_stk(conn, move_id).await;
     if from_id.is_empty() || to_id.is_empty() {
-        return Err(ApproveError::msg("调拨单仓库信息不完整（调出仓/调入仓未设置）"));
+        return Err(ApproveError::msg(
+            "调拨单仓库信息不完整（调出仓/调入仓未设置）",
+        ));
     }
     let detail_sql = "SELECT CAST(GDSID AS NVARCHAR(40)) AS GDSID, \
                       ISNULL(CAST(Qty AS NVARCHAR(50)),'0') AS Q \
                       FROM tStk_MoveDetail WHERE MoveID = @p1";
     let rows: Vec<(String, f64)> = match conn.query(detail_sql, &[&move_id]).await {
         Ok(s) => match s.into_first_result().await {
-            Ok(rs) => rs.iter().map(|r| (
-                r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
-                r.get::<&str, _>("Q").unwrap_or("0").parse().unwrap_or(0.0),
-            )).collect(),
+            Ok(rs) => rs
+                .iter()
+                .map(|r| {
+                    (
+                        r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
+                        r.get::<&str, _>("Q").unwrap_or("0").parse().unwrap_or(0.0),
+                    )
+                })
+                .collect(),
             Err(_) => Vec::new(),
         },
         Err(_) => Vec::new(),
@@ -1508,7 +1884,9 @@ async fn validate_move_outbound_stock(conn: &mut Conn, move_id: &str, user_code:
     let (from_no, from_name) = query_stk_info(conn, &from_id).await;
     let mut shortage: Vec<StockShortageItem> = Vec::new();
     for (idx, (gdsid, qty)) in rows.iter().enumerate() {
-        if gdsid.is_empty() || *qty <= 0.0 { continue; }
+        if gdsid.is_empty() || *qty <= 0.0 {
+            continue;
+        }
         let stock = query_stock_qty(conn, gdsid, &from_id).await;
         let qqty = query_qqty(conn, gdsid, &from_id).await;
         let available = stock - qqty;
@@ -1533,7 +1911,8 @@ async fn validate_move_outbound_stock(conn: &mut Conn, move_id: &str, user_code:
     }
     if !shortage.is_empty() {
         // 持久化缺货记录到 tStk_Shortage（调拨场景：单据号从 DB 查询）
-        let doc_no_sql = "SELECT CAST(MoveNo AS NVARCHAR(50)) AS NO FROM tStk_Move WHERE MoveID = @p1";
+        let doc_no_sql =
+            "SELECT CAST(MoveNo AS NVARCHAR(50)) AS NO FROM tStk_Move WHERE MoveID = @p1";
         let doc_no = match conn.query(doc_no_sql, &[&move_id]).await {
             Ok(s) => match s.into_row().await {
                 Ok(Some(row)) => row.get::<&str, _>("NO").unwrap_or("").to_string(),
@@ -1546,7 +1925,21 @@ async fn validate_move_outbound_stock(conn: &mut Conn, move_id: &str, user_code:
         // - 客户列为空（调拨单无客户字段）
         // - 门店列 = ToStkID（调入仓，即门店仓库）
         let (_, shop_name) = query_stk_info(conn, &to_id).await;
-        log_shortage_to_db(conn, &shortage, "tStk_Move:ZP", &doc_no, move_id, user_code, &emp_id, "doc_approve", "", "", &to_id, &shop_name).await;
+        log_shortage_to_db(
+            conn,
+            &shortage,
+            "tStk_Move:ZP",
+            &doc_no,
+            move_id,
+            user_code,
+            &emp_id,
+            "doc_approve",
+            "",
+            "",
+            &to_id,
+            &shop_name,
+        )
+        .await;
         return Err(ApproveError::Shortage(shortage));
     }
     Ok(())
@@ -1561,34 +1954,51 @@ async fn post_stock_on_approve(
 ) -> Result<(), String> {
     // 取主表 Kind
     let kind = read_kind(conn, meta, master_id).await;
-    tracing::info!("post_stock_on_approve: table={} doc_type={} kind={} affects_stock={} master_id={}", meta.table, doc_type, kind, meta.affects_stock, master_id);
+    tracing::info!(
+        "post_stock_on_approve: table={} doc_type={} kind={} affects_stock={} master_id={}",
+        meta.table,
+        doc_type,
+        kind,
+        meta.affects_stock,
+        master_id
+    );
     tracing::info!(table = %meta.table, doc_type = %doc_type, kind = %kind, affects_stock = meta.affects_stock, master_id = %master_id, "[post_stock_on_approve] 入口");
 
     // 销售订单：QQty 预占 + 写 tStk_Reserve 预占记录
     if doc_type == "sales_order" {
-        let detail_sql = format!("SELECT CAST(GDSID AS NVARCHAR(40)) AS GDSID, CAST(StkID AS NVARCHAR(40)) AS StkID, \
+        let detail_sql = format!(
+            "SELECT CAST(GDSID AS NVARCHAR(40)) AS GDSID, CAST(StkID AS NVARCHAR(40)) AS StkID, \
                                   ISNULL(CAST(Qty AS NVARCHAR(50)),'0') AS Q, \
                                   CAST([{}] AS NVARCHAR(40)) AS DID \
                                   FROM [{}] WHERE [{}] = @p1",
-                                 meta.detail_primary_key, meta.detail_table, meta.detail_foreign_key);
-        let rows: Vec<(String, String, f64, String)> = match conn.query(&detail_sql, &[&master_id]).await {
-            Ok(s) => match s.into_first_result().await {
-                Ok(rs) => rs.iter().map(|r| {
-                    (
-                        r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
-                        r.get::<&str, _>("StkID").unwrap_or("").to_string(),
-                        r.get::<&str, _>("Q").unwrap_or("0").parse().unwrap_or(0.0),
-                        r.get::<&str, _>("DID").unwrap_or("").to_string(),
-                    )
-                }).collect(),
+            meta.detail_primary_key, meta.detail_table, meta.detail_foreign_key
+        );
+        let rows: Vec<(String, String, f64, String)> =
+            match conn.query(&detail_sql, &[&master_id]).await {
+                Ok(s) => match s.into_first_result().await {
+                    Ok(rs) => rs
+                        .iter()
+                        .map(|r| {
+                            (
+                                r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
+                                r.get::<&str, _>("StkID").unwrap_or("").to_string(),
+                                r.get::<&str, _>("Q").unwrap_or("0").parse().unwrap_or(0.0),
+                                r.get::<&str, _>("DID").unwrap_or("").to_string(),
+                            )
+                        })
+                        .collect(),
+                    Err(_) => Vec::new(),
+                },
                 Err(_) => Vec::new(),
-            },
-            Err(_) => Vec::new(),
-        };
+            };
         let doc_no = query_doc_no(conn, meta, master_id).await;
         let user_uuid = {
             let emp_id = query_emp_id_by_code(conn, user_code).await;
-            if !emp_id.is_empty() { emp_id } else { ZERO_UUID.to_string() }
+            if !emp_id.is_empty() {
+                emp_id
+            } else {
+                ZERO_UUID.to_string()
+            }
         };
         for (gdsid, stkid, qty, did) in &rows {
             let (gds_no, gds_name) = query_gds_info(conn, gdsid).await;
@@ -1597,21 +2007,48 @@ async fn post_stock_on_approve(
             let stk_txt = fmt_stk(stkid, &stk_no, &stk_name);
             // 销售订单审核：增加预占（QQty += qty）
             if !apply_qqty_delta(conn, gdsid, stkid, *qty).await {
-                return Err(format!("预占失败：商品[{}] 仓库[{}] 预占量不足（不允许负库存）", gds_txt, stk_txt));
+                return Err(format!(
+                    "预占失败：商品[{}] 仓库[{}] 预占量不足（不允许负库存）",
+                    gds_txt, stk_txt
+                ));
             }
             // 写预占记录（DocID=SOID，便于出库时按源单释放）
             // ReserveID 是 uniqueidentifier 类型，必须用标准 UUID 格式（带横线，无前缀）
             let rid = uuid::Uuid::new_v4().to_string();
-            if !insert_reserve(conn, &rid, "sales_order", master_id, &doc_no, did, gdsid, stkid, *qty, &user_uuid).await {
-                return Err(format!("写入预占记录失败：商品[{}] 仓库[{}]", gds_txt, stk_txt));
+            if !insert_reserve(
+                conn,
+                &rid,
+                "sales_order",
+                master_id,
+                &doc_no,
+                did,
+                gdsid,
+                stkid,
+                *qty,
+                &user_uuid,
+            )
+            .await
+            {
+                return Err(format!(
+                    "写入预占记录失败：商品[{}] 仓库[{}]",
+                    gds_txt, stk_txt
+                ));
             }
         }
         return Ok(());
     }
 
     // 采购入库/退货/销售出库/销售退货/库存入出库：单边过账（带事务保护）
-    if matches!(doc_type, "purchase_inbound" | "purchase_receipt" | "purchase_return"
-        | "sales_outbound" | "sales_inv" | "sales_return" | "stock_io") {
+    if matches!(
+        doc_type,
+        "purchase_inbound"
+            | "purchase_receipt"
+            | "purchase_return"
+            | "sales_outbound"
+            | "sales_inv"
+            | "sales_return"
+            | "stock_io"
+    ) {
         // stock_io 的 OT/ZP 类按行 Qty 符号决定方向；其他类型用固定方向
         let use_kind_direction = doc_type == "stock_io";
         let fixed_direction: f64 = match doc_type {
@@ -1620,32 +2057,42 @@ async fn post_stock_on_approve(
             _ => 0.0, // stock_io 下面单独处理
         };
         // 对 stock_io 但非 OT/ZP 的情况，用 kind_direction
-        let kind_dir = if use_kind_direction { doc_graph::kind_direction(&kind) } else { 0.0 };
+        let kind_dir = if use_kind_direction {
+            doc_graph::kind_direction(&kind)
+        } else {
+            0.0
+        };
         // OT/ZP 时 kind_dir=0，需要按行 Qty 符号决定；其他 stock_io 用 kind_dir
         let per_row_sign = use_kind_direction && kind_dir == 0.0;
 
         // 取单据日期对应的会计月份
         let doc_ym = query_doc_month(conn, meta, master_id).await;
 
-        let detail_sql = format!("SELECT CAST(GDSID AS NVARCHAR(40)) AS GDSID, CAST(StkID AS NVARCHAR(40)) AS StkID, \
+        let detail_sql = format!(
+            "SELECT CAST(GDSID AS NVARCHAR(40)) AS GDSID, CAST(StkID AS NVARCHAR(40)) AS StkID, \
                                   ISNULL(CAST(Qty AS NVARCHAR(50)),'0') AS Q, \
                                   CAST([{}] AS NVARCHAR(40)) AS DID \
                                   FROM [{}] WHERE [{}] = @p1",
-                                 meta.detail_primary_key, meta.detail_table, meta.detail_foreign_key);
-        let rows: Vec<(String, String, f64, String)> = match conn.query(&detail_sql, &[&master_id]).await {
-            Ok(s) => match s.into_first_result().await {
-                Ok(rs) => rs.iter().map(|r| {
-                    (
-                        r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
-                        r.get::<&str, _>("StkID").unwrap_or("").to_string(),
-                        r.get::<&str, _>("Q").unwrap_or("0").parse().unwrap_or(0.0),
-                        r.get::<&str, _>("DID").unwrap_or("").to_string(),
-                    )
-                }).collect(),
+            meta.detail_primary_key, meta.detail_table, meta.detail_foreign_key
+        );
+        let rows: Vec<(String, String, f64, String)> =
+            match conn.query(&detail_sql, &[&master_id]).await {
+                Ok(s) => match s.into_first_result().await {
+                    Ok(rs) => rs
+                        .iter()
+                        .map(|r| {
+                            (
+                                r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
+                                r.get::<&str, _>("StkID").unwrap_or("").to_string(),
+                                r.get::<&str, _>("Q").unwrap_or("0").parse().unwrap_or(0.0),
+                                r.get::<&str, _>("DID").unwrap_or("").to_string(),
+                            )
+                        })
+                        .collect(),
+                    Err(_) => Vec::new(),
+                },
                 Err(_) => Vec::new(),
-            },
-            Err(_) => Vec::new(),
-        };
+            };
         if rows.is_empty() {
             return Err("单据无明细行".to_string());
         }
@@ -1661,15 +2108,28 @@ async fn post_stock_on_approve(
             String::new()
         };
         let rows: Vec<(String, String, f64, String)> = if !master_stkid.is_empty() {
-            rows.into_iter().map(|(g, s, q, d)| {
-                let final_s = if is_invalid_stkid(&s) { master_stkid.clone() } else { s };
-                (g, final_s, q, d)
-            }).collect()
+            rows.into_iter()
+                .map(|(g, s, q, d)| {
+                    let final_s = if is_invalid_stkid(&s) {
+                        master_stkid.clone()
+                    } else {
+                        s
+                    };
+                    (g, final_s, q, d)
+                })
+                .collect()
         } else {
             rows
         };
-        tracing::info!("post_stock_on_approve single-side: master_id={} rows={} fixed_dir={} kind_dir={} per_row_sign={} ym={}",
-                       master_id, rows.len(), fixed_direction, kind_dir, per_row_sign, doc_ym);
+        tracing::info!(
+            "post_stock_on_approve single-side: master_id={} rows={} fixed_dir={} kind_dir={} per_row_sign={} ym={}",
+            master_id,
+            rows.len(),
+            fixed_direction,
+            kind_dir,
+            per_row_sign,
+            doc_ym
+        );
 
         // 销售出库：查源销售订单 SOID（用于释放 tStk_Reserve 预占）
         let source_soid = if doc_type == "sales_outbound" || doc_type == "sales_inv" {
@@ -1684,7 +2144,9 @@ async fn post_stock_on_approve(
         }
         let mut tx_failed: Option<String> = None;
         for (gdsid, stkid, qty, did) in &rows {
-            if gdsid.is_empty() || stkid.is_empty() || *qty == 0.0 { continue; }
+            if gdsid.is_empty() || stkid.is_empty() || *qty == 0.0 {
+                continue;
+            }
             // 决定本行方向
             let row_dir = if per_row_sign {
                 if *qty > 0.0 { 1.0 } else { -1.0 }
@@ -1707,23 +2169,41 @@ async fn post_stock_on_approve(
             // 注意：post_ledger 现在只动 Qty 不动 QQty，所以出库不会影响 QQty
             // 销售出库时，订单审核已扣 QQty（预占），出库后预占转为实际出库，需释放预占（QQty 减少）
             // 仅在有源销售订单时才释放预占（无源单的直出库未预占，不应释放 QQty 避免变负）
-            if (doc_type == "sales_outbound" || doc_type == "sales_inv") && row_dir < 0.0 && !source_soid.is_empty() {
+            if (doc_type == "sales_outbound" || doc_type == "sales_inv")
+                && row_dir < 0.0
+                && !source_soid.is_empty()
+            {
                 if !apply_qqty_delta(conn, gdsid, stkid, -abs_qty).await {
-                    tx_failed = Some(format!("释放预占失败：商品[{}] 仓库[{}]（预占量不足）", gds_txt, stk_txt));
+                    tx_failed = Some(format!(
+                        "释放预占失败：商品[{}] 仓库[{}]（预占量不足）",
+                        gds_txt, stk_txt
+                    ));
                     break;
                 }
                 // 同步释放 tStk_Reserve 预占记录（按源单 SOID 匹配）
-                if !release_reserve_by_doc(conn, "sales_order", &source_soid, gdsid, stkid, abs_qty).await {
-                    tx_failed = Some(format!("释放预占记录失败：商品[{}] 仓库[{}]", gds_txt, stk_txt));
+                if !release_reserve_by_doc(conn, "sales_order", &source_soid, gdsid, stkid, abs_qty)
+                    .await
+                {
+                    tx_failed = Some(format!(
+                        "释放预占记录失败：商品[{}] 仓库[{}]",
+                        gds_txt, stk_txt
+                    ));
                     break;
                 }
             }
-            let (cur, ok) = post_ledger_with_period(conn, gdsid, stkid, abs_qty, row_dir, master_id, did, doc_ym).await;
+            let (cur, ok) = post_ledger_with_period(
+                conn, gdsid, stkid, abs_qty, row_dir, master_id, did, doc_ym,
+            )
+            .await;
             tracing::debug!(gdsid = %gdsid, stkid = %stkid, abs_qty, row_dir, cur, ok, "[post_stock single-side] 过账");
             if !ok {
                 tx_failed = Some(format!(
                     "库存不足，不允许负库存：商品[{}] 仓库[{}] 现有{} 需求{}（不足 {}）",
-                    gds_txt, stk_txt, cur, abs_qty, (abs_qty - cur).ceil()
+                    gds_txt,
+                    stk_txt,
+                    cur,
+                    abs_qty,
+                    (abs_qty - cur).ceil()
                 ));
                 break;
             }
@@ -1768,8 +2248,10 @@ async fn read_kind(conn: &mut Conn, meta: &DocMeta, master_id: &str) -> String {
     if meta.kind_field.is_empty() {
         return String::new();
     }
-    let sql = format!("SELECT ISNULL(CAST([{}] AS NVARCHAR(40)), '') AS K FROM [{}] WHERE [{}] = @p1",
-                      meta.kind_field, meta.table, meta.primary_key);
+    let sql = format!(
+        "SELECT ISNULL(CAST([{}] AS NVARCHAR(40)), '') AS K FROM [{}] WHERE [{}] = @p1",
+        meta.kind_field, meta.table, meta.primary_key
+    );
     if let Ok(stream) = conn.query(&sql, &[&master_id]).await {
         if let Ok(Some(row)) = stream.into_row().await {
             return row.get::<&str, _>("K").unwrap_or("").to_string();
@@ -1784,8 +2266,10 @@ async fn read_master_stkid(conn: &mut Conn, meta: &DocMeta, master_id: &str) -> 
     if meta.warehouse_field.is_empty() {
         return String::new();
     }
-    let sql = format!("SELECT ISNULL(CAST([{}] AS NVARCHAR(40)), '') AS W FROM [{}] WHERE [{}] = @p1",
-                      meta.warehouse_field, meta.table, meta.primary_key);
+    let sql = format!(
+        "SELECT ISNULL(CAST([{}] AS NVARCHAR(40)), '') AS W FROM [{}] WHERE [{}] = @p1",
+        meta.warehouse_field, meta.table, meta.primary_key
+    );
     if let Ok(stream) = conn.query(&sql, &[&master_id]).await {
         if let Ok(Some(row)) = stream.into_row().await {
             return row.get::<&str, _>("W").unwrap_or("").to_string();
@@ -1794,11 +2278,7 @@ async fn read_master_stkid(conn: &mut Conn, meta: &DocMeta, master_id: &str) -> 
     String::new()
 }
 
-async fn post_stock_move(
-    conn: &mut Conn,
-    move_id: &str,
-    ym: i32,
-) -> Result<(), String> {
+async fn post_stock_move(conn: &mut Conn, move_id: &str, ym: i32) -> Result<(), String> {
     // 调出仓、调入仓
     let (from_id, to_id) = query_move_stk(conn, move_id).await;
     if from_id.is_empty() || to_id.is_empty() {
@@ -1810,11 +2290,16 @@ async fn post_stock_move(
                       FROM tStk_MoveDetail WHERE MoveID = @p1";
     let rows: Vec<(String, f64, String)> = match conn.query(detail_sql, &[&move_id]).await {
         Ok(s) => match s.into_first_result().await {
-            Ok(rs) => rs.iter().map(|r| (
-                r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
-                r.get::<&str, _>("Q").unwrap_or("0").parse().unwrap_or(0.0),
-                r.get::<&str, _>("DID").unwrap_or("").to_string(),
-            )).collect(),
+            Ok(rs) => rs
+                .iter()
+                .map(|r| {
+                    (
+                        r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
+                        r.get::<&str, _>("Q").unwrap_or("0").parse().unwrap_or(0.0),
+                        r.get::<&str, _>("DID").unwrap_or("").to_string(),
+                    )
+                })
+                .collect(),
             Err(_) => Vec::new(),
         },
         Err(_) => Vec::new(),
@@ -1832,20 +2317,28 @@ async fn post_stock_move(
     let to_txt = fmt_stk(&to_id, &to_no, &to_name);
     let mut tx_failed: Option<String> = None;
     for (gdsid, qty, did) in &rows {
-        if gdsid.is_empty() || *qty == 0.0 { continue; }
+        if gdsid.is_empty() || *qty == 0.0 {
+            continue;
+        }
         let (gds_no, gds_name) = query_gds_info(conn, gdsid).await;
         let gds_txt = fmt_gds(gdsid, &gds_no, &gds_name);
         // 调出仓 -qty
-        let (cur, ok1) = post_ledger_with_period(conn, gdsid, &from_id, *qty, -1.0, move_id, did, ym).await;
+        let (cur, ok1) =
+            post_ledger_with_period(conn, gdsid, &from_id, *qty, -1.0, move_id, did, ym).await;
         if !ok1 {
             tx_failed = Some(format!(
                 "调出仓库存不足，不允许负库存：商品[{}] 调出仓[{}] 现有{} 需求{}（不足 {}）",
-                gds_txt, from_txt, cur, qty, (qty - cur).ceil()
+                gds_txt,
+                from_txt,
+                cur,
+                qty,
+                (qty - cur).ceil()
             ));
             break;
         }
         // 调入仓 +qty
-        let (_, ok2) = post_ledger_with_period(conn, gdsid, &to_id, *qty, 1.0, move_id, did, ym).await;
+        let (_, ok2) =
+            post_ledger_with_period(conn, gdsid, &to_id, *qty, 1.0, move_id, did, ym).await;
         if !ok2 {
             tx_failed = Some(format!("调入仓[{}]写入失败：商品[{}]", to_txt, gds_txt));
             break;
@@ -1879,11 +2372,7 @@ async fn query_move_stk(conn: &mut Conn, move_id: &str) -> (String, String) {
     }
 }
 
-async fn post_stock_tran(
-    conn: &mut Conn,
-    tran_id: &str,
-    ym: i32,
-) -> Result<(), String> {
+async fn post_stock_tran(conn: &mut Conn, tran_id: &str, ym: i32) -> Result<(), String> {
     let stk_id = query_tran_stk(conn, tran_id).await;
     if stk_id.is_empty() {
         return Err("盘点单仓库信息缺失".to_string());
@@ -1894,11 +2383,16 @@ async fn post_stock_tran(
                    FROM tStk_TranDetail WHERE TranID = @p1";
     let rows: Vec<(String, f64, String)> = match conn.query(det_sql, &[&tran_id]).await {
         Ok(s) => match s.into_first_result().await {
-            Ok(rs) => rs.iter().map(|r| (
-                r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
-                r.get::<&str, _>("DQ").unwrap_or("0").parse().unwrap_or(0.0),
-                r.get::<&str, _>("DID").unwrap_or("").to_string(),
-            )).collect(),
+            Ok(rs) => rs
+                .iter()
+                .map(|r| {
+                    (
+                        r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
+                        r.get::<&str, _>("DQ").unwrap_or("0").parse().unwrap_or(0.0),
+                        r.get::<&str, _>("DID").unwrap_or("").to_string(),
+                    )
+                })
+                .collect(),
             Err(_) => Vec::new(),
         },
         Err(_) => Vec::new(),
@@ -1914,7 +2408,9 @@ async fn post_stock_tran(
     let stk_txt = fmt_stk(&stk_id, &stk_no, &stk_name);
     let mut tx_failed: Option<String> = None;
     for (gdsid, dq, did) in &rows {
-        if gdsid.is_empty() || *dq == 0.0 { continue; }
+        if gdsid.is_empty() || *dq == 0.0 {
+            continue;
+        }
         let abs_qty = dq.abs();
         let dir = if *dq > 0.0 { 1.0 } else { -1.0 };
         // 负差异（盘亏）需校验扣减后 Qty >= QQty（数据库 CHECK 约束）
@@ -1931,13 +2427,18 @@ async fn post_stock_tran(
                 break;
             }
         }
-        let (cur, ok) = post_ledger_with_period(conn, gdsid, &stk_id, abs_qty, dir, tran_id, did, ym).await;
+        let (cur, ok) =
+            post_ledger_with_period(conn, gdsid, &stk_id, abs_qty, dir, tran_id, did, ym).await;
         if !ok {
             let (gds_no, gds_name) = query_gds_info(conn, gdsid).await;
             let gds_txt = fmt_gds(gdsid, &gds_no, &gds_name);
             tx_failed = Some(format!(
                 "盘点出库库存不足，不允许负库存：商品[{}] 仓库[{}] 现有{} 需求{}（不足 {}）",
-                gds_txt, stk_txt, cur, abs_qty, (abs_qty - cur).ceil()
+                gds_txt,
+                stk_txt,
+                cur,
+                abs_qty,
+                (abs_qty - cur).ceil()
             ));
             break;
         }
@@ -1955,11 +2456,7 @@ async fn post_stock_tran(
 }
 
 /// 周期盘点过账：按 RealQty - StkQty 的差异调整库存
-async fn post_stock_cycle(
-    conn: &mut Conn,
-    cycle_id: &str,
-    ym: i32,
-) -> Result<(), String> {
+async fn post_stock_cycle(conn: &mut Conn, cycle_id: &str, ym: i32) -> Result<(), String> {
     // 周期盘点主表取仓库
     let stk_sql = "SELECT ISNULL(CAST(StkID AS NVARCHAR(40)),'') AS S FROM tStk_StockCycle WHERE CycleID = @p1";
     let stk_id = match conn.query(stk_sql, &[&cycle_id]).await {
@@ -1979,11 +2476,16 @@ async fn post_stock_cycle(
                    FROM tStk_StockCycleDetail WHERE CycleID = @p1";
     let rows: Vec<(String, f64, String)> = match conn.query(det_sql, &[&cycle_id]).await {
         Ok(s) => match s.into_first_result().await {
-            Ok(rs) => rs.iter().map(|r| (
-                r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
-                r.get::<&str, _>("DQ").unwrap_or("0").parse().unwrap_or(0.0),
-                r.get::<&str, _>("DID").unwrap_or("").to_string(),
-            )).collect(),
+            Ok(rs) => rs
+                .iter()
+                .map(|r| {
+                    (
+                        r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
+                        r.get::<&str, _>("DQ").unwrap_or("0").parse().unwrap_or(0.0),
+                        r.get::<&str, _>("DID").unwrap_or("").to_string(),
+                    )
+                })
+                .collect(),
             Err(_) => Vec::new(),
         },
         Err(_) => Vec::new(),
@@ -1999,8 +2501,12 @@ async fn post_stock_cycle(
     let stk_txt = fmt_stk(&stk_id, &stk_no, &stk_name);
     let mut tx_failed: Option<String> = None;
     for (gdsid, diff, did) in &rows {
-        if gdsid.is_empty() { continue; }
-        if diff.abs() < 0.0001 { continue; }
+        if gdsid.is_empty() {
+            continue;
+        }
+        if diff.abs() < 0.0001 {
+            continue;
+        }
         let abs_qty = diff.abs();
         let dir = if *diff > 0.0 { 1.0 } else { -1.0 };
         // 负差异（盘亏）需校验扣减后 Qty >= QQty（数据库 CHECK 约束）
@@ -2017,13 +2523,18 @@ async fn post_stock_cycle(
                 break;
             }
         }
-        let (cur, ok) = post_ledger_with_period(conn, gdsid, &stk_id, abs_qty, dir, cycle_id, did, ym).await;
+        let (cur, ok) =
+            post_ledger_with_period(conn, gdsid, &stk_id, abs_qty, dir, cycle_id, did, ym).await;
         if !ok {
             let (gds_no, gds_name) = query_gds_info(conn, gdsid).await;
             let gds_txt = fmt_gds(gdsid, &gds_no, &gds_name);
             tx_failed = Some(format!(
                 "周期盘点出库库存不足，不允许负库存：商品[{}] 仓库[{}] 现有{} 需求{}（不足 {}）",
-                gds_txt, stk_txt, cur, abs_qty, (abs_qty - cur).ceil()
+                gds_txt,
+                stk_txt,
+                cur,
+                abs_qty,
+                (abs_qty - cur).ceil()
             ));
             break;
         }
@@ -2042,7 +2553,8 @@ async fn post_stock_cycle(
 }
 
 async fn query_tran_stk(conn: &mut Conn, tran_id: &str) -> String {
-    let sql = "SELECT ISNULL(CAST(StkID AS NVARCHAR(40)),'') AS S FROM tStk_Tran WHERE TranID = @p1";
+    let sql =
+        "SELECT ISNULL(CAST(StkID AS NVARCHAR(40)),'') AS S FROM tStk_Tran WHERE TranID = @p1";
     if let Ok(stream) = conn.query(sql, &[&tran_id]).await {
         if let Ok(Some(row)) = stream.into_row().await {
             return row.get::<&str, _>("S").unwrap_or("").to_string();
@@ -2065,25 +2577,51 @@ pub async fn unapprove_doc(
     // doc_type 默认值：基于 doc_no_prefix 映射（与前端 DOC_TYPE_MAP 一致），
     // 确保 post_stock_on_approve/reverse_stock_on_unapprove 分支能正确匹配
     let default_doc_type = default_doc_type_for_table(&meta);
-    let doc_type = params.doc_type.clone().unwrap_or_else(|| default_doc_type.clone());
-    tracing::info!("unapprove_doc start: table={} id={} doc_type={}", params.table, params.id, doc_type);
+    let doc_type = params
+        .doc_type
+        .clone()
+        .unwrap_or_else(|| default_doc_type.clone());
+    tracing::info!(
+        "unapprove_doc start: table={} id={} doc_type={}",
+        params.table,
+        params.id,
+        doc_type
+    );
 
     let cur_state = query_doc_state(conn, &params.table, &params.primary_key, &params.id).await;
     if cur_state != STATE_REVIEWED {
-        return Err(format!("单据状态 {} 不允许反审（仅 S 状态可反审）", cur_state));
+        return Err(format!(
+            "单据状态 {} 不允许反审（仅 S 状态可反审）",
+            cur_state
+        ));
     }
 
     // 修改前查旧数据快照（用于操作日志变更明细）
     let before_snapshot: Option<serde_json::Value> = query_doc_snapshot(
-        conn, &params.table, &params.primary_key, &params.id,
-        &meta.detail_table, &meta.detail_foreign_key, &meta.detail_primary_key,
-    ).await;
+        conn,
+        &params.table,
+        &params.primary_key,
+        &params.id,
+        &meta.detail_table,
+        &meta.detail_foreign_key,
+        &meta.detail_primary_key,
+    )
+    .await;
 
     // 会计期间检查（仅影响库存的单据）
     // 门店销售单不进库存流水，跳过期间检查和反向过账
-    let is_retail_sale = is_retail_sale_inv_by_db(conn, &meta.table, &meta.primary_key, &params.id).await;
+    let is_retail_sale =
+        is_retail_sale_inv_by_db(conn, &meta.table, &meta.primary_key, &params.id).await;
     if meta.affects_stock && !is_retail_sale {
-        if let Some(action_date) = query_doc_date(conn, &params.table, &meta.date_field, &params.primary_key, &params.id).await {
+        if let Some(action_date) = query_doc_date(
+            conn,
+            &params.table,
+            &meta.date_field,
+            &params.primary_key,
+            &params.id,
+        )
+        .await
+        {
             if let Some(err) = check_period_closed(conn, action_date).await {
                 return Err(err);
             }
@@ -2120,10 +2658,15 @@ pub async fn unapprove_doc(
         // 修复 M-4：把工号解析为 EmpID 后再写入 AUser
         let auser = resolve_auser_id(conn, user_code).await;
         let cas_ok = inventory_ledger::update_doc_state_with_cas(
-            conn, &params.table, &params.primary_key, &params.id,
-            STATE_NEW, &auser,
+            conn,
+            &params.table,
+            &params.primary_key,
+            &params.id,
+            STATE_NEW,
+            &auser,
             Some(&[STATE_REVIEWED]),
-        ).await;
+        )
+        .await;
         if !cas_ok {
             tx_err = Some("单据状态已变更（非 S），反审失败".to_string());
         }
@@ -2133,16 +2676,33 @@ pub async fn unapprove_doc(
     // after 快照重新查询 DB：保证 before/after 都是完整行（含 Items），便于变更明细展示
     if tx_err.is_none() {
         let after_snapshot: Option<serde_json::Value> = query_doc_snapshot(
-            conn, &params.table, &params.primary_key, &params.id,
-            &meta.detail_table, &meta.detail_foreign_key, &meta.detail_primary_key,
-        ).await;
-        let before_json = before_snapshot.as_ref().and_then(|v| serde_json::to_string(v).ok());
-        let after_json = after_snapshot.as_ref().and_then(|v| serde_json::to_string(v).ok());
+            conn,
+            &params.table,
+            &params.primary_key,
+            &params.id,
+            &meta.detail_table,
+            &meta.detail_foreign_key,
+            &meta.detail_primary_key,
+        )
+        .await;
+        let before_json = before_snapshot
+            .as_ref()
+            .and_then(|v| serde_json::to_string(v).ok());
+        let after_json = after_snapshot
+            .as_ref()
+            .and_then(|v| serde_json::to_string(v).ok());
         let _ = record_oper_with_data(
-            conn, "UNAPPROVE", &params.table, &params.id, user_code,
-            None, Some(&format!("反审{}", meta.title)),
-            before_json.as_deref(), after_json.as_deref(),
-        ).await;
+            conn,
+            "UNAPPROVE",
+            &params.table,
+            &params.id,
+            user_code,
+            None,
+            Some(&format!("反审{}", meta.title)),
+            before_json.as_deref(),
+            after_json.as_deref(),
+        )
+        .await;
     }
 
     if let Some(e) = tx_err {
@@ -2171,14 +2731,19 @@ async fn query_doc_date(
     if date_col.is_empty() {
         return None;
     }
-    let sql = format!("SELECT CAST([{}] AS DATE) AS D FROM [{}] WHERE [{}] = @p1", date_col, table, primary_key);
+    let sql = format!(
+        "SELECT CAST([{}] AS DATE) AS D FROM [{}] WHERE [{}] = @p1",
+        date_col, table, primary_key
+    );
     if let Ok(stream) = conn.query(&sql, &[&id]).await {
         if let Ok(Some(row)) = stream.into_row().await {
             // 常量日期 unwrap 安全：from_ymd_opt(1970,1,1) 永远返回 Some
             let default_date = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
             let d = row.get::<chrono::NaiveDate, _>("D").unwrap_or(default_date);
             let year_2000 = chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-            if d < year_2000 { return None; }
+            if d < year_2000 {
+                return None;
+            }
             return Some(d);
         }
     }
@@ -2187,14 +2752,26 @@ async fn query_doc_date(
 
 /// 查询单据日期对应的会计月份（YYYYMM），失败则回退到当前月
 async fn query_doc_month(conn: &mut Conn, meta: &DocMeta, master_id: &str) -> i32 {
-    if let Some(d) = query_doc_date(conn, &meta.table, &meta.date_field, &meta.primary_key, master_id).await {
+    if let Some(d) = query_doc_date(
+        conn,
+        &meta.table,
+        &meta.date_field,
+        &meta.primary_key,
+        master_id,
+    )
+    .await
+    {
         let ym: i32 = d.format("%Y%m").to_string().parse().unwrap_or(0);
         if ym >= 200001 {
             return ym;
         }
     }
     // 回退到当前月
-    chrono::Local::now().format("%Y%m").to_string().parse().unwrap_or(202501)
+    chrono::Local::now()
+        .format("%Y%m")
+        .to_string()
+        .parse()
+        .unwrap_or(202501)
 }
 
 // ============== tStk_Reserve 预占表辅助 ==============
@@ -2204,8 +2781,10 @@ async fn query_doc_no(conn: &mut Conn, meta: &DocMeta, master_id: &str) -> Strin
     if meta.no_field.is_empty() {
         return String::new();
     }
-    let sql = format!("SELECT ISNULL(CAST([{}] AS NVARCHAR(40)), '') AS N FROM [{}] WHERE [{}] = @p1",
-                      meta.no_field, meta.table, meta.primary_key);
+    let sql = format!(
+        "SELECT ISNULL(CAST([{}] AS NVARCHAR(40)), '') AS N FROM [{}] WHERE [{}] = @p1",
+        meta.no_field, meta.table, meta.primary_key
+    );
     if let Ok(stream) = conn.query(&sql, &[&master_id]).await {
         if let Ok(Some(row)) = stream.into_row().await {
             return row.get::<&str, _>("N").unwrap_or("").to_string();
@@ -2233,13 +2812,25 @@ async fn insert_reserve(
     let sql = "INSERT INTO tStk_Reserve (ReserveID, DocType, DocID, DocNo, DetailID, GDSID, StkID, Qty, ReleasedQty, State, EDate, EUser) \
                VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, 0, 'A', GETDATE(), @p9)";
     let params: Vec<&dyn ToSql> = vec![
-        &reserve_id, &doc_type, &doc_id, &doc_no, &detail_id,
-        &gdsid, &stkid, &qty, &user,
+        &reserve_id,
+        &doc_type,
+        &doc_id,
+        &doc_no,
+        &detail_id,
+        &gdsid,
+        &stkid,
+        &qty,
+        &user,
     ];
     match conn.execute(sql, &params).await {
         Ok(_) => true,
         Err(e) => {
-            tracing::error!("[insert_reserve] 写入预占失败: doc_id={} gdsid={} err={}", doc_id, gdsid, e);
+            tracing::error!(
+                "[insert_reserve] 写入预占失败: doc_id={} gdsid={} err={}",
+                doc_id,
+                gdsid,
+                e
+            );
             false
         }
     }
@@ -2259,7 +2850,11 @@ async fn void_reserve_by_doc(conn: &mut Conn, doc_type: &str, doc_id: &str) -> b
     match conn.execute(sql, &params).await {
         Ok(_) => true,
         Err(e) => {
-            tracing::error!("[void_reserve_by_doc] 作废预占失败: doc_id={} err={}", doc_id, e);
+            tracing::error!(
+                "[void_reserve_by_doc] 作废预占失败: doc_id={} err={}",
+                doc_id,
+                e
+            );
             false
         }
     }
@@ -2294,7 +2889,8 @@ async fn release_reserve_by_doc(
             Ok(stream) => match stream.into_row().await {
                 Ok(Some(row)) => {
                     let id = row.get::<&str, _>("RID").unwrap_or("").to_string();
-                    let r: f64 = row.get::<&str, _>("Remain")
+                    let r: f64 = row
+                        .get::<&str, _>("Remain")
                         .and_then(|s| s.parse().ok())
                         .unwrap_or(0.0);
                     (id, r)
@@ -2308,13 +2904,19 @@ async fn release_reserve_by_doc(
             break;
         }
         let to_release = remaining.min(remain).max(0.0);
-        if to_release <= 0.0 { break; }
+        if to_release <= 0.0 {
+            break;
+        }
         let upd = "UPDATE tStk_Reserve SET ReleasedQty = ISNULL(ReleasedQty,0) + @p1, \
                    State = CASE WHEN ISNULL(ReleasedQty,0) + @p1 >= ISNULL(Qty,0) THEN 'X' ELSE 'A' END \
                    WHERE ReserveID = @p2";
         let p2: Vec<&dyn ToSql> = vec![&to_release, &reserve_id];
         if let Err(e) = conn.execute(upd, &p2).await {
-            tracing::error!("[release_reserve_by_doc] 释放预占失败: rid={} err={}", reserve_id, e);
+            tracing::error!(
+                "[release_reserve_by_doc] 释放预占失败: rid={} err={}",
+                reserve_id,
+                e
+            );
             return false;
         }
         remaining -= to_release;
@@ -2351,10 +2953,14 @@ async fn unrelease_reserve_by_doc(
             Ok(stream) => match stream.into_row().await {
                 Ok(Some(row)) => {
                     let id = row.get::<&str, _>("RID").unwrap_or("").to_string();
-                    let rq: f64 = row.get::<&str, _>("RQ")
-                        .and_then(|s| s.parse().ok()).unwrap_or(0.0);
-                    let q: f64 = row.get::<&str, _>("Q")
-                        .and_then(|s| s.parse().ok()).unwrap_or(0.0);
+                    let rq: f64 = row
+                        .get::<&str, _>("RQ")
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0.0);
+                    let q: f64 = row
+                        .get::<&str, _>("Q")
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0.0);
                     (id, rq, q)
                 }
                 _ => (String::new(), 0.0, 0.0),
@@ -2365,14 +2971,24 @@ async fn unrelease_reserve_by_doc(
             break;
         }
         let to_unrelease = remaining.min(released).max(0.0);
-        if to_unrelease <= 0.0 { break; }
+        if to_unrelease <= 0.0 {
+            break;
+        }
         let new_released = (released - to_unrelease).max(0.0);
         // 释放量回退后若仍 >= total，State 保持 X；否则恢复 A
-        let new_state = if new_released >= total - 0.0001 { "X" } else { "A" };
+        let new_state = if new_released >= total - 0.0001 {
+            "X"
+        } else {
+            "A"
+        };
         let upd = "UPDATE tStk_Reserve SET ReleasedQty = @p1, State = @p2 WHERE ReserveID = @p3";
         let p2: Vec<&dyn ToSql> = vec![&new_released, &new_state, &reserve_id];
         if let Err(e) = conn.execute(upd, &p2).await {
-            tracing::error!("[unrelease_reserve_by_doc] 反释放预占失败: rid={} err={}", reserve_id, e);
+            tracing::error!(
+                "[unrelease_reserve_by_doc] 反释放预占失败: rid={} err={}",
+                reserve_id,
+                e
+            );
             return false;
         }
         remaining -= to_unrelease;
@@ -2387,7 +3003,10 @@ async fn query_source_soid(conn: &mut Conn, table: &str, primary_key: &str, id: 
         return String::new();
     }
     for col in &["SOID", "FromSOID", "SQID"] {
-        let sql = format!("SELECT ISNULL(CAST([{}] AS NVARCHAR(40)), '') AS S FROM [{}] WHERE [{}] = @p1", col, table, primary_key);
+        let sql = format!(
+            "SELECT ISNULL(CAST([{}] AS NVARCHAR(40)), '') AS S FROM [{}] WHERE [{}] = @p1",
+            col, table, primary_key
+        );
         if let Ok(stream) = conn.query(&sql, &[&id]).await {
             if let Ok(Some(row)) = stream.into_row().await {
                 let v: &str = row.get::<&str, _>("S").unwrap_or("");
@@ -2404,7 +3023,11 @@ async fn query_source_soid(conn: &mut Conn, table: &str, primary_key: &str, id: 
 /// downstream 格式："tPur_Inv" 或 "tStk_IO:PR"（表名:Kind）
 /// 特殊场景：销售退货(SR)/采购退货(PR)通过明细表 tStk_IODetail.SouID 引用源单据主键，
 /// 主表 tStk_IO 上没有 SIID/PIID 列，必须 JOIN 明细表才能检查
-async fn check_downstream_references(conn: &mut Conn, meta: &DocMeta, master_id: &str) -> Result<(), String> {
+async fn check_downstream_references(
+    conn: &mut Conn,
+    meta: &DocMeta,
+    master_id: &str,
+) -> Result<(), String> {
     if meta.downstream.is_empty() || master_id.is_empty() {
         return Ok(());
     }
@@ -2435,7 +3058,10 @@ async fn check_downstream_references(conn: &mut Conn, meta: &DocMeta, master_id:
                     let count: i64 = row.get::<i32, _>("C").unwrap_or(0) as i64;
                     if count > 0 {
                         let kind_desc = format!("(Kind={})", kind_str);
-                        return Err(format!("单据已被下游单据 {}{} 引用（{} 条），请先删除/反审下游单据", ds_meta.title, kind_desc, count));
+                        return Err(format!(
+                            "单据已被下游单据 {}{} 引用（{} 条），请先删除/反审下游单据",
+                            ds_meta.title, kind_desc, count
+                        ));
                     }
                 }
             }
@@ -2455,7 +3081,10 @@ async fn check_downstream_references(conn: &mut Conn, meta: &DocMeta, master_id:
                     let count: i64 = row.get::<i32, _>("C").unwrap_or(0) as i64;
                     if count > 0 {
                         let kind_desc = format!("(Kind={})", kind_str);
-                        return Err(format!("单据已被下游单据 {}{} 引用（{} 条），请先删除/反审下游单据", ds_meta.title, kind_desc, count));
+                        return Err(format!(
+                            "单据已被下游单据 {}{} 引用（{} 条），请先删除/反审下游单据",
+                            ds_meta.title, kind_desc, count
+                        ));
                     }
                 }
             }
@@ -2475,11 +3104,15 @@ async fn check_downstream_references(conn: &mut Conn, meta: &DocMeta, master_id:
                 if ds_meta.kind_field.is_empty() {
                     continue;
                 }
-                format!("SELECT COUNT(*) AS C FROM [{}] WHERE [{}] = @p1 AND [{}] = @p2 AND ISNULL(State,'') NOT IN ('D','C')",
-                        ds_table, col, ds_meta.kind_field)
+                format!(
+                    "SELECT COUNT(*) AS C FROM [{}] WHERE [{}] = @p1 AND [{}] = @p2 AND ISNULL(State,'') NOT IN ('D','C')",
+                    ds_table, col, ds_meta.kind_field
+                )
             } else {
-                format!("SELECT COUNT(*) AS C FROM [{}] WHERE [{}] = @p1 AND ISNULL(State,'') NOT IN ('D','C')",
-                        ds_table, col)
+                format!(
+                    "SELECT COUNT(*) AS C FROM [{}] WHERE [{}] = @p1 AND ISNULL(State,'') NOT IN ('D','C')",
+                    ds_table, col
+                )
             };
             let count: i64 = if let Some(k) = ds_kind {
                 let params: Vec<&dyn ToSql> = vec![&master_id, &k];
@@ -2502,7 +3135,10 @@ async fn check_downstream_references(conn: &mut Conn, meta: &DocMeta, master_id:
             };
             if count > 0 {
                 let kind_desc = ds_kind.map(|k| format!("(Kind={})", k)).unwrap_or_default();
-                return Err(format!("单据已被下游单据 {}{} 引用（{} 条），请先删除/反审下游单据", ds_meta.title, kind_desc, count));
+                return Err(format!(
+                    "单据已被下游单据 {}{} 引用（{} 条），请先删除/反审下游单据",
+                    ds_meta.title, kind_desc, count
+                ));
             }
             break; // 该候选列查询成功（无论有无引用），不再尝试其他候选列
         }
@@ -2524,23 +3160,31 @@ async fn reverse_stock_on_unapprove(
 
     // 销售订单反审：释放预占（QQty -= qty）+ 作废 tStk_Reserve 预占记录
     if doc_type == "sales_order" {
-        let detail_sql = format!("SELECT CAST(GDSID AS NVARCHAR(40)) AS GDSID, ISNULL(CAST(StkID AS NVARCHAR(40)),'') AS StkID, \
+        let detail_sql = format!(
+            "SELECT CAST(GDSID AS NVARCHAR(40)) AS GDSID, ISNULL(CAST(StkID AS NVARCHAR(40)),'') AS StkID, \
                                   ISNULL(CAST(Qty AS NVARCHAR(50)),'0') AS Q, \
                                   CAST([{}] AS NVARCHAR(40)) AS DID \
                                   FROM [{}] WHERE [{}] = @p1",
-                                 meta.detail_primary_key, meta.detail_table, meta.detail_foreign_key);
-        let rows: Vec<(String, String, f64, String)> = match conn.query(&detail_sql, &[&master_id]).await {
-            Ok(s) => match s.into_first_result().await {
-                Ok(rs) => rs.iter().map(|r| (
-                    r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
-                    r.get::<&str, _>("StkID").unwrap_or("").to_string(),
-                    r.get::<&str, _>("Q").unwrap_or("0").parse().unwrap_or(0.0),
-                    r.get::<&str, _>("DID").unwrap_or("").to_string(),
-                )).collect(),
+            meta.detail_primary_key, meta.detail_table, meta.detail_foreign_key
+        );
+        let rows: Vec<(String, String, f64, String)> =
+            match conn.query(&detail_sql, &[&master_id]).await {
+                Ok(s) => match s.into_first_result().await {
+                    Ok(rs) => rs
+                        .iter()
+                        .map(|r| {
+                            (
+                                r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
+                                r.get::<&str, _>("StkID").unwrap_or("").to_string(),
+                                r.get::<&str, _>("Q").unwrap_or("0").parse().unwrap_or(0.0),
+                                r.get::<&str, _>("DID").unwrap_or("").to_string(),
+                            )
+                        })
+                        .collect(),
+                    Err(_) => Vec::new(),
+                },
                 Err(_) => Vec::new(),
-            },
-            Err(_) => Vec::new(),
-        };
+            };
         // 明细行 StkID 为空或全零 UUID 时回退到主表的仓库字段（tStk_IO 的 StkID 在主表上，明细常为 NULL 或全零 UUID）
         // 与 approve_doc 的 post_stock_on_approve 保持一致，否则反审会因 StkID 空/全零而跳过库存回滚
         let is_invalid_stkid = |s: &str| s.is_empty() || s == ZERO_UUID;
@@ -2554,17 +3198,27 @@ async fn reverse_stock_on_unapprove(
             String::new()
         };
         let rows: Vec<(String, String, f64, String)> = if !is_invalid_stkid(&master_stkid) {
-            rows.into_iter().map(|(g, s, q, d)| {
-                let final_s = if is_invalid_stkid(&s) { master_stkid.clone() } else { s };
-                (g, final_s, q, d)
-            }).collect()
+            rows.into_iter()
+                .map(|(g, s, q, d)| {
+                    let final_s = if is_invalid_stkid(&s) {
+                        master_stkid.clone()
+                    } else {
+                        s
+                    };
+                    (g, final_s, q, d)
+                })
+                .collect()
         } else {
             rows
         };
-        if let Err(e) = inventory_ledger::begin_tran(conn).await { return Err(e); }
+        if let Err(e) = inventory_ledger::begin_tran(conn).await {
+            return Err(e);
+        }
         let mut tx_failed: Option<String> = None;
         for (gdsid, stkid, qty, _did) in &rows {
-            if gdsid.is_empty() || stkid.is_empty() { continue; }
+            if gdsid.is_empty() || stkid.is_empty() {
+                continue;
+            }
             // 销售订单反审：释放预占（QQty -= qty）
             if !apply_qqty_delta(conn, gdsid, stkid, -*qty).await {
                 let (gds_no, gds_name) = query_gds_info(conn, gdsid).await;
@@ -2594,23 +3248,31 @@ async fn reverse_stock_on_unapprove(
 
     // 销售出库反审：反向过账（Qty += qty）+ 重新预占（QQty -= qty）+ 反释放预占记录 + 删流水
     if doc_type == "sales_outbound" || doc_type == "sales_inv" {
-        let detail_sql = format!("SELECT CAST(GDSID AS NVARCHAR(40)) AS GDSID, ISNULL(CAST(StkID AS NVARCHAR(40)),'') AS StkID, \
+        let detail_sql = format!(
+            "SELECT CAST(GDSID AS NVARCHAR(40)) AS GDSID, ISNULL(CAST(StkID AS NVARCHAR(40)),'') AS StkID, \
                                   ISNULL(CAST(Qty AS NVARCHAR(50)),'0') AS Q, \
                                   CAST([{}] AS NVARCHAR(40)) AS DID \
                                   FROM [{}] WHERE [{}] = @p1",
-                                 meta.detail_primary_key, meta.detail_table, meta.detail_foreign_key);
-        let rows: Vec<(String, String, f64, String)> = match conn.query(&detail_sql, &[&master_id]).await {
-            Ok(s) => match s.into_first_result().await {
-                Ok(rs) => rs.iter().map(|r| (
-                    r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
-                    r.get::<&str, _>("StkID").unwrap_or("").to_string(),
-                    r.get::<&str, _>("Q").unwrap_or("0").parse().unwrap_or(0.0),
-                    r.get::<&str, _>("DID").unwrap_or("").to_string(),
-                )).collect(),
+            meta.detail_primary_key, meta.detail_table, meta.detail_foreign_key
+        );
+        let rows: Vec<(String, String, f64, String)> =
+            match conn.query(&detail_sql, &[&master_id]).await {
+                Ok(s) => match s.into_first_result().await {
+                    Ok(rs) => rs
+                        .iter()
+                        .map(|r| {
+                            (
+                                r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
+                                r.get::<&str, _>("StkID").unwrap_or("").to_string(),
+                                r.get::<&str, _>("Q").unwrap_or("0").parse().unwrap_or(0.0),
+                                r.get::<&str, _>("DID").unwrap_or("").to_string(),
+                            )
+                        })
+                        .collect(),
+                    Err(_) => Vec::new(),
+                },
                 Err(_) => Vec::new(),
-            },
-            Err(_) => Vec::new(),
-        };
+            };
         // 明细行 StkID 为空或全零 UUID 时回退到主表的仓库字段（tStk_IO 的 StkID 在主表上，明细常为 NULL 或全零 UUID）
         // 与 approve_doc 的 post_stock_on_approve 保持一致，否则反审会因 StkID 空/全零而跳过库存回滚
         let is_invalid_stkid = |s: &str| s.is_empty() || s == ZERO_UUID;
@@ -2624,38 +3286,59 @@ async fn reverse_stock_on_unapprove(
             String::new()
         };
         let rows: Vec<(String, String, f64, String)> = if !is_invalid_stkid(&master_stkid) {
-            rows.into_iter().map(|(g, s, q, d)| {
-                let final_s = if is_invalid_stkid(&s) { master_stkid.clone() } else { s };
-                (g, final_s, q, d)
-            }).collect()
+            rows.into_iter()
+                .map(|(g, s, q, d)| {
+                    let final_s = if is_invalid_stkid(&s) {
+                        master_stkid.clone()
+                    } else {
+                        s
+                    };
+                    (g, final_s, q, d)
+                })
+                .collect()
         } else {
             rows
         };
         // 查源销售订单 SOID（用于反释放 tStk_Reserve 预占）
         let source_soid = query_source_soid(conn, &meta.table, &meta.primary_key, master_id).await;
-        if let Err(e) = inventory_ledger::begin_tran(conn).await { return Err(e); }
+        if let Err(e) = inventory_ledger::begin_tran(conn).await {
+            return Err(e);
+        }
         let mut tx_failed: Option<String> = None;
         for (gdsid, stkid, qty, did) in &rows {
-            if gdsid.is_empty() || stkid.is_empty() { continue; }
+            if gdsid.is_empty() || stkid.is_empty() {
+                continue;
+            }
             let (gds_no, gds_name) = query_gds_info(conn, gdsid).await;
             let (stk_no, stk_name) = query_stk_info(conn, stkid).await;
             let gds_txt = fmt_gds(gdsid, &gds_no, &gds_name);
             let stk_txt = fmt_stk(stkid, &stk_no, &stk_name);
             // 1) 反向过账：Qty += qty（只动 Qty + StockYM + 快照，不写 TranHis）
             if !reverse_stock_delta_only(conn, gdsid, stkid, *qty, -1.0, doc_ym).await {
-                tx_failed = Some(format!("反审回滚库存失败：商品[{}] 仓库[{}]", gds_txt, stk_txt));
+                tx_failed = Some(format!(
+                    "反审回滚库存失败：商品[{}] 仓库[{}]",
+                    gds_txt, stk_txt
+                ));
                 break;
             }
             // 2) 重新预占：QQty += qty（仅在有源销售订单时才重新预占，与 approve 释放逻辑对称）
             //    无源单的直出库审核时未释放预占，反审时也不应重新预占
             if !source_soid.is_empty() {
                 if !apply_qqty_delta(conn, gdsid, stkid, *qty).await {
-                    tx_failed = Some(format!("反审重新预占失败：商品[{}] 仓库[{}]（可用量不足）", gds_txt, stk_txt));
+                    tx_failed = Some(format!(
+                        "反审重新预占失败：商品[{}] 仓库[{}]（可用量不足）",
+                        gds_txt, stk_txt
+                    ));
                     break;
                 }
                 // 3) 反释放 tStk_Reserve 预占记录（减少 ReleasedQty，恢复 State='A'）
-                if !unrelease_reserve_by_doc(conn, "sales_order", &source_soid, gdsid, stkid, *qty).await {
-                    tx_failed = Some(format!("反释放预占记录失败：商品[{}] 仓库[{}]", gds_txt, stk_txt));
+                if !unrelease_reserve_by_doc(conn, "sales_order", &source_soid, gdsid, stkid, *qty)
+                    .await
+                {
+                    tx_failed = Some(format!(
+                        "反释放预占记录失败：商品[{}] 仓库[{}]",
+                        gds_txt, stk_txt
+                    ));
                     break;
                 }
             }
@@ -2680,8 +3363,10 @@ async fn reverse_stock_on_unapprove(
     }
 
     // 其他入出库反审：反向过账 + 删流水 + 回填快照（带事务）
-    if matches!(doc_type, "purchase_inbound" | "purchase_receipt" | "purchase_return"
-        | "sales_return" | "stock_io") {
+    if matches!(
+        doc_type,
+        "purchase_inbound" | "purchase_receipt" | "purchase_return" | "sales_return" | "stock_io"
+    ) {
         let kind = read_kind(conn, meta, master_id).await;
         let use_kind_direction = doc_type == "stock_io";
         let fixed_dir: f64 = match doc_type {
@@ -2689,28 +3374,40 @@ async fn reverse_stock_on_unapprove(
             "purchase_return" => -1.0,
             _ => 0.0,
         };
-        let kind_dir = if use_kind_direction { doc_graph::kind_direction(&kind) } else { 0.0 };
+        let kind_dir = if use_kind_direction {
+            doc_graph::kind_direction(&kind)
+        } else {
+            0.0
+        };
         let per_row_sign = use_kind_direction && kind_dir == 0.0;
         if !use_kind_direction && fixed_dir == 0.0 {
             return Ok(());
         }
-        let detail_sql = format!("SELECT CAST(GDSID AS NVARCHAR(40)) AS GDSID, ISNULL(CAST(StkID AS NVARCHAR(40)),'') AS StkID, \
+        let detail_sql = format!(
+            "SELECT CAST(GDSID AS NVARCHAR(40)) AS GDSID, ISNULL(CAST(StkID AS NVARCHAR(40)),'') AS StkID, \
                                   ISNULL(CAST(Qty AS NVARCHAR(50)),'0') AS Q, \
                                   CAST([{}] AS NVARCHAR(40)) AS DID \
                                   FROM [{}] WHERE [{}] = @p1",
-                                 meta.detail_primary_key, meta.detail_table, meta.detail_foreign_key);
-        let rows: Vec<(String, String, f64, String)> = match conn.query(&detail_sql, &[&master_id]).await {
-            Ok(s) => match s.into_first_result().await {
-                Ok(rs) => rs.iter().map(|r| (
-                    r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
-                    r.get::<&str, _>("StkID").unwrap_or("").to_string(),
-                    r.get::<&str, _>("Q").unwrap_or("0").parse().unwrap_or(0.0),
-                    r.get::<&str, _>("DID").unwrap_or("").to_string(),
-                )).collect(),
+            meta.detail_primary_key, meta.detail_table, meta.detail_foreign_key
+        );
+        let rows: Vec<(String, String, f64, String)> =
+            match conn.query(&detail_sql, &[&master_id]).await {
+                Ok(s) => match s.into_first_result().await {
+                    Ok(rs) => rs
+                        .iter()
+                        .map(|r| {
+                            (
+                                r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
+                                r.get::<&str, _>("StkID").unwrap_or("").to_string(),
+                                r.get::<&str, _>("Q").unwrap_or("0").parse().unwrap_or(0.0),
+                                r.get::<&str, _>("DID").unwrap_or("").to_string(),
+                            )
+                        })
+                        .collect(),
+                    Err(_) => Vec::new(),
+                },
                 Err(_) => Vec::new(),
-            },
-            Err(_) => Vec::new(),
-        };
+            };
         // 明细行 StkID 为空或全零 UUID 时回退到主表的仓库字段（tStk_IO 的 StkID 在主表上，明细常为 NULL 或全零 UUID）
         // 与 approve_doc 的 post_stock_on_approve 保持一致，否则反审会因 StkID 空/全零而跳过库存回滚
         let is_invalid_stkid = |s: &str| s.is_empty() || s == ZERO_UUID;
@@ -2724,17 +3421,27 @@ async fn reverse_stock_on_unapprove(
             String::new()
         };
         let rows: Vec<(String, String, f64, String)> = if !is_invalid_stkid(&master_stkid) {
-            rows.into_iter().map(|(g, s, q, d)| {
-                let final_s = if is_invalid_stkid(&s) { master_stkid.clone() } else { s };
-                (g, final_s, q, d)
-            }).collect()
+            rows.into_iter()
+                .map(|(g, s, q, d)| {
+                    let final_s = if is_invalid_stkid(&s) {
+                        master_stkid.clone()
+                    } else {
+                        s
+                    };
+                    (g, final_s, q, d)
+                })
+                .collect()
         } else {
             rows
         };
-        if let Err(e) = inventory_ledger::begin_tran(conn).await { return Err(e); }
+        if let Err(e) = inventory_ledger::begin_tran(conn).await {
+            return Err(e);
+        }
         let mut tx_failed: Option<String> = None;
         for (gdsid, stkid, qty, did) in &rows {
-            if gdsid.is_empty() || stkid.is_empty() || *qty == 0.0 { continue; }
+            if gdsid.is_empty() || stkid.is_empty() || *qty == 0.0 {
+                continue;
+            }
             // 决定本行方向：反审时方向取反
             let orig_dir = if per_row_sign {
                 if *qty > 0.0 { 1.0 } else { -1.0 }
@@ -2743,7 +3450,9 @@ async fn reverse_stock_on_unapprove(
             } else {
                 fixed_dir
             };
-            if orig_dir == 0.0 { continue; }
+            if orig_dir == 0.0 {
+                continue;
+            }
             let abs_qty = qty.abs();
             // 反向过账：只动 Qty + StockYM + 快照，不写 TranHis
             if !reverse_stock_delta_only(conn, gdsid, stkid, abs_qty, orig_dir, doc_ym).await {
@@ -2787,32 +3496,47 @@ async fn reverse_stock_on_unapprove(
                           FROM tStk_MoveDetail WHERE MoveID = @p1";
         let rows: Vec<(String, f64, String)> = match conn.query(detail_sql, &[&master_id]).await {
             Ok(s) => match s.into_first_result().await {
-                Ok(rs) => rs.iter().map(|r| (
-                    r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
-                    r.get::<&str, _>("Q").unwrap_or("0").parse().unwrap_or(0.0),
-                    r.get::<&str, _>("DID").unwrap_or("").to_string(),
-                )).collect(),
+                Ok(rs) => rs
+                    .iter()
+                    .map(|r| {
+                        (
+                            r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
+                            r.get::<&str, _>("Q").unwrap_or("0").parse().unwrap_or(0.0),
+                            r.get::<&str, _>("DID").unwrap_or("").to_string(),
+                        )
+                    })
+                    .collect(),
                 Err(_) => Vec::new(),
             },
             Err(_) => Vec::new(),
         };
-        if let Err(e) = inventory_ledger::begin_tran(conn).await { return Err(e); }
+        if let Err(e) = inventory_ledger::begin_tran(conn).await {
+            return Err(e);
+        }
         let (from_no, from_name) = query_stk_info(conn, &from_id).await;
         let (to_no, to_name) = query_stk_info(conn, &to_id).await;
         let from_txt = fmt_stk(&from_id, &from_no, &from_name);
         let to_txt = fmt_stk(&to_id, &to_no, &to_name);
         let mut tx_failed: Option<String> = None;
         for (gdsid, qty, did) in &rows {
-            if gdsid.is_empty() || *qty == 0.0 { continue; }
+            if gdsid.is_empty() || *qty == 0.0 {
+                continue;
+            }
             let (gds_no, gds_name) = query_gds_info(conn, gdsid).await;
             let gds_txt = fmt_gds(gdsid, &gds_no, &gds_name);
             // 反向：调入仓 -qty（原 +1 → 反向 -1），调出仓 +qty（原 -1 → 反向 +1）
             if !reverse_stock_delta_only(conn, gdsid, &to_id, *qty, 1.0, doc_ym).await {
-                tx_failed = Some(format!("调拨反审回滚失败：商品[{}] 调入仓[{}]", gds_txt, to_txt));
+                tx_failed = Some(format!(
+                    "调拨反审回滚失败：商品[{}] 调入仓[{}]",
+                    gds_txt, to_txt
+                ));
                 break;
             }
             if !reverse_stock_delta_only(conn, gdsid, &from_id, *qty, -1.0, doc_ym).await {
-                tx_failed = Some(format!("调拨反审回滚失败：商品[{}] 调出仓[{}]", gds_txt, from_txt));
+                tx_failed = Some(format!(
+                    "调拨反审回滚失败：商品[{}] 调出仓[{}]",
+                    gds_txt, from_txt
+                ));
                 break;
             }
             fill_detail_stock_snapshot(conn, "tStk_MoveDetail", "MoveDetailID", did).await;
@@ -2834,28 +3558,39 @@ async fn reverse_stock_on_unapprove(
     // 盘点反审：按 DiffQty 反向 + 删流水 + 回填快照（带事务）
     if doc_type == "stock_take" || doc_type == "stock_check" || doc_type == "stocktake" {
         let stk_id = query_tran_stk(conn, master_id).await;
-        if stk_id.is_empty() { return Ok(()); }
+        if stk_id.is_empty() {
+            return Ok(());
+        }
         let det_sql = "SELECT CAST(GDSID AS NVARCHAR(40)) AS GDSID, \
                        ISNULL(CAST(DiffQty AS NVARCHAR(50)),'0') AS DQ, \
                        CAST(TranDetailID AS NVARCHAR(40)) AS DID \
                        FROM tStk_TranDetail WHERE TranID = @p1";
         let rows: Vec<(String, f64, String)> = match conn.query(det_sql, &[&master_id]).await {
             Ok(s) => match s.into_first_result().await {
-                Ok(rs) => rs.iter().map(|r| (
-                    r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
-                    r.get::<&str, _>("DQ").unwrap_or("0").parse().unwrap_or(0.0),
-                    r.get::<&str, _>("DID").unwrap_or("").to_string(),
-                )).collect(),
+                Ok(rs) => rs
+                    .iter()
+                    .map(|r| {
+                        (
+                            r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
+                            r.get::<&str, _>("DQ").unwrap_or("0").parse().unwrap_or(0.0),
+                            r.get::<&str, _>("DID").unwrap_or("").to_string(),
+                        )
+                    })
+                    .collect(),
                 Err(_) => Vec::new(),
             },
             Err(_) => Vec::new(),
         };
-        if let Err(e) = inventory_ledger::begin_tran(conn).await { return Err(e); }
+        if let Err(e) = inventory_ledger::begin_tran(conn).await {
+            return Err(e);
+        }
         let (stk_no, stk_name) = query_stk_info(conn, &stk_id).await;
         let stk_txt = fmt_stk(&stk_id, &stk_no, &stk_name);
         let mut tx_failed: Option<String> = None;
         for (gdsid, dq, did) in &rows {
-            if gdsid.is_empty() || *dq == 0.0 { continue; }
+            if gdsid.is_empty() || *dq == 0.0 {
+                continue;
+            }
             let abs_qty = dq.abs();
             // 原方向：dq>0 → +1（增），dq<0 → -1（减）；反审反向
             let orig_dir = if *dq > 0.0 { 1.0 } else { -1.0 };
@@ -2863,7 +3598,8 @@ async fn reverse_stock_on_unapprove(
                 let (gds_no, gds_name) = query_gds_info(conn, gdsid).await;
                 tx_failed = Some(format!(
                     "盘点反审回滚失败：商品[{}] 仓库[{}]",
-                    fmt_gds(gdsid, &gds_no, &gds_name), stk_txt
+                    fmt_gds(gdsid, &gds_no, &gds_name),
+                    stk_txt
                 ));
                 break;
             }
@@ -2893,29 +3629,42 @@ async fn reverse_stock_on_unapprove(
             },
             _ => String::new(),
         };
-        if stk_id.is_empty() { return Ok(()); }
+        if stk_id.is_empty() {
+            return Ok(());
+        }
         let det_sql = "SELECT CAST(GDSID AS NVARCHAR(40)) AS GDSID, \
                        ISNULL(CAST(DiffQty AS NVARCHAR(50)),'0') AS DQ, \
                        CAST(CycleDetailID AS NVARCHAR(40)) AS DID \
                        FROM tStk_StockCycleDetail WHERE CycleID = @p1";
         let rows: Vec<(String, f64, String)> = match conn.query(det_sql, &[&master_id]).await {
             Ok(s) => match s.into_first_result().await {
-                Ok(rs) => rs.iter().map(|r| (
-                    r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
-                    r.get::<&str, _>("DQ").unwrap_or("0").parse().unwrap_or(0.0),
-                    r.get::<&str, _>("DID").unwrap_or("").to_string(),
-                )).collect(),
+                Ok(rs) => rs
+                    .iter()
+                    .map(|r| {
+                        (
+                            r.get::<&str, _>("GDSID").unwrap_or("").to_string(),
+                            r.get::<&str, _>("DQ").unwrap_or("0").parse().unwrap_or(0.0),
+                            r.get::<&str, _>("DID").unwrap_or("").to_string(),
+                        )
+                    })
+                    .collect(),
                 Err(_) => Vec::new(),
             },
             Err(_) => Vec::new(),
         };
-        if let Err(e) = inventory_ledger::begin_tran(conn).await { return Err(e); }
+        if let Err(e) = inventory_ledger::begin_tran(conn).await {
+            return Err(e);
+        }
         let (stk_no, stk_name) = query_stk_info(conn, &stk_id).await;
         let stk_txt = fmt_stk(&stk_id, &stk_no, &stk_name);
         let mut tx_failed: Option<String> = None;
         for (gdsid, diff, did) in &rows {
-            if gdsid.is_empty() { continue; }
-            if diff.abs() < 0.0001 { continue; }
+            if gdsid.is_empty() {
+                continue;
+            }
+            if diff.abs() < 0.0001 {
+                continue;
+            }
             let abs_qty = diff.abs();
             // 原方向：diff>0 → +1（增），diff<0 → -1（减）；反审反向
             let orig_dir = if *diff > 0.0 { 1.0 } else { -1.0 };
@@ -2923,7 +3672,8 @@ async fn reverse_stock_on_unapprove(
                 let (gds_no, gds_name) = query_gds_info(conn, gdsid).await;
                 tx_failed = Some(format!(
                     "周期盘点反审回滚失败：商品[{}] 仓库[{}]",
-                    fmt_gds(gdsid, &gds_no, &gds_name), stk_txt
+                    fmt_gds(gdsid, &gds_no, &gds_name),
+                    stk_txt
                 ));
                 break;
             }
@@ -2955,7 +3705,12 @@ async fn reverse_stock_on_unapprove(
 /// 已审核/草稿状态需先经过软删除流程（软删时已回滚库存），保证审计完整性。
 ///
 /// 对于非单据表（doc_graph 中未定义），直接返回 Ok(())，由调用方处理。
-pub async fn hard_delete_doc(conn: &mut Conn, table: &str, primary_key: &str, id: &str) -> Result<(), String> {
+pub async fn hard_delete_doc(
+    conn: &mut Conn,
+    table: &str,
+    primary_key: &str,
+    id: &str,
+) -> Result<(), String> {
     let meta = match doc_graph::get_doc_meta(table) {
         Some(m) => m.clone(),
         None => return Ok(()), // 非单据表，不处理库存
@@ -2983,7 +3738,8 @@ pub async fn hard_delete_doc(conn: &mut Conn, table: &str, primary_key: &str, id
         // 销售订单：清理 tStk_Reserve 预占记录（DocID 存的是 SOID 主键）
         if table == "tSal_Order" {
             let del_reserve_sql = "DELETE FROM tStk_Reserve WHERE DocID = @p1";
-            conn.execute(del_reserve_sql, &[&id]).await
+            conn.execute(del_reserve_sql, &[&id])
+                .await
                 .map_err(|e| format!("清理预占记录失败 [tStk_Reserve]: {}", e))?;
         }
 
@@ -2993,13 +3749,16 @@ pub async fn hard_delete_doc(conn: &mut Conn, table: &str, primary_key: &str, id
                 "DELETE FROM [{}] WHERE [{}] = @p1",
                 meta.detail_table, meta.detail_foreign_key
             );
-            conn.execute(&del_detail_sql, &[&id]).await
+            conn.execute(&del_detail_sql, &[&id])
+                .await
                 .map_err(|e| format!("删除明细失败 [{}]: {}", meta.detail_table, e))?;
         }
 
         // 删除主表
         let del_main_sql = format!("DELETE FROM [{}] WHERE [{}] = @p1", table, primary_key);
-        let result = conn.execute(&del_main_sql, &[&id]).await
+        let result = conn
+            .execute(&del_main_sql, &[&id])
+            .await
             .map_err(|e| format!("删除主表失败 [{}]: {}", table, e))?;
         // 检查 rows_affected，避免单据不存在时仍返回成功
         let rows = result.rows_affected().first().copied().unwrap_or(0);
@@ -3009,7 +3768,8 @@ pub async fn hard_delete_doc(conn: &mut Conn, table: &str, primary_key: &str, id
 
         inventory_ledger::commit_tran(conn).await?;
         Ok(())
-    }.await;
+    }
+    .await;
     if let Err(e) = tx_result {
         inventory_ledger::rollback_tran(conn).await;
         return Err(e);
@@ -3027,7 +3787,12 @@ pub async fn hard_delete_doc(conn: &mut Conn, table: &str, primary_key: &str, id
 /// 这样设计是为了和 generic_delete 的软删除分支配合：
 /// generic_delete 先调用本函数回滚库存，再执行 UPDATE State='D'。
 /// 避免出现"单据软删但库存未回滚"的悬空数据。
-pub async fn soft_delete_doc(conn: &mut Conn, table: &str, primary_key: &str, id: &str) -> Result<(), String> {
+pub async fn soft_delete_doc(
+    conn: &mut Conn,
+    table: &str,
+    primary_key: &str,
+    id: &str,
+) -> Result<(), String> {
     let meta = match doc_graph::get_doc_meta(table) {
         Some(m) => m.clone(),
         None => return Ok(()), // 非单据表，不处理库存
@@ -3040,7 +3805,11 @@ pub async fn soft_delete_doc(conn: &mut Conn, table: &str, primary_key: &str, id
     // （前端 DataPage 在"显示删除"模式下可能把 D 状态数据传进来再次软删，
     //   generic_delete 的 for 循环遇到 Err 会提前返回，导致后续 id 无法处理）
     if state == STATE_DELETED {
-        tracing::debug!("[soft_delete_doc] 单据已软删除，幂等跳过: table={} id={}", table, id);
+        tracing::debug!(
+            "[soft_delete_doc] 单据已软删除，幂等跳过: table={} id={}",
+            table,
+            id
+        );
         return Ok(());
     }
 
@@ -3066,7 +3835,16 @@ pub async fn soft_delete_doc(conn: &mut Conn, table: &str, primary_key: &str, id
             meta.biz_type.to_string()
         };
         // CAS S→D：抢占状态锁，确保只有一个请求能进入反向过账
-        let cas_ok = update_doc_state_with_cas(conn, table, primary_key, id, STATE_DELETED, ZERO_UUID, Some(&[STATE_REVIEWED])).await;
+        let cas_ok = update_doc_state_with_cas(
+            conn,
+            table,
+            primary_key,
+            id,
+            STATE_DELETED,
+            ZERO_UUID,
+            Some(&[STATE_REVIEWED]),
+        )
+        .await;
         if !cas_ok {
             return Err(format!("单据状态已变更，软删失败（仅 S 状态可回滚库存）"));
         }
@@ -3076,11 +3854,25 @@ pub async fn soft_delete_doc(conn: &mut Conn, table: &str, primary_key: &str, id
             tracing::info!("[soft_delete_doc] 门店销售单软删，跳过反向过账: id={}", id);
             return Ok(());
         }
-        tracing::info!("[soft_delete_doc] 单据已审核，软删前先回滚库存: table={} id={} doc_type={}", table, id, doc_type);
+        tracing::info!(
+            "[soft_delete_doc] 单据已审核，软删前先回滚库存: table={} id={} doc_type={}",
+            table,
+            id,
+            doc_type
+        );
         // 反向过账（内部已有 begin_tran/commit_tran/rollback_tran 事务包裹）
         if let Err(e) = reverse_stock_on_unapprove(conn, &meta, id, &doc_type).await {
             // 反向过账失败：回滚状态 D→S，让用户可以重试
-            let _ = update_doc_state_with_cas(conn, table, primary_key, id, STATE_REVIEWED, ZERO_UUID, Some(&[STATE_DELETED])).await;
+            let _ = update_doc_state_with_cas(
+                conn,
+                table,
+                primary_key,
+                id,
+                STATE_REVIEWED,
+                ZERO_UUID,
+                Some(&[STATE_DELETED]),
+            )
+            .await;
             return Err(e);
         }
         // 软删完成：状态已是 D，库存已回滚。generic_delete 后续的 UPDATE State='D' 是幂等无害。
@@ -3116,9 +3908,15 @@ pub async fn void_doc(
     }
     // 修改前查旧数据快照（用于操作日志变更明细）
     let before_snapshot: Option<serde_json::Value> = query_doc_snapshot(
-        conn, &params.table, &params.primary_key, &params.id,
-        &meta.detail_table, &meta.detail_foreign_key, &meta.detail_primary_key,
-    ).await;
+        conn,
+        &params.table,
+        &params.primary_key,
+        &params.id,
+        &meta.detail_table,
+        &meta.detail_foreign_key,
+        &meta.detail_primary_key,
+    )
+    .await;
     // 修复 M-4：把工号解析为 EmpID 后再写入 AUser
     let auser = resolve_auser_id(conn, user_code).await;
     // 修复 M-1：CAS 状态变更 + after_snapshot + 操作日志 整体放入事务，
@@ -3128,26 +3926,56 @@ pub async fn void_doc(
     }
     let tx_result: std::result::Result<(), String> = async {
         // 修复 P0-2：检查 CAS 返回值，避免单据状态被并发请求变更时仍返回"作废成功"
-        let cas_ok = update_doc_state_with_cas(conn, &params.table, &params.primary_key, &params.id, STATE_VOID, &auser, Some(&[STATE_NEW, STATE_EDIT])).await;
+        let cas_ok = update_doc_state_with_cas(
+            conn,
+            &params.table,
+            &params.primary_key,
+            &params.id,
+            STATE_VOID,
+            &auser,
+            Some(&[STATE_NEW, STATE_EDIT]),
+        )
+        .await;
         if !cas_ok {
-            return Err(format!("单据 {} 状态已变更，作废失败（仅新建/编辑中可作废）", params.id));
+            return Err(format!(
+                "单据 {} 状态已变更，作废失败（仅新建/编辑中可作废）",
+                params.id
+            ));
         }
         let reason = params.reason.clone().unwrap_or_default();
         // 写操作日志（含数据快照）
         // after 快照重新查询 DB：保证 before/after 都是完整行（含 Items），便于变更明细展示
         let after_snapshot: Option<serde_json::Value> = query_doc_snapshot(
-            conn, &params.table, &params.primary_key, &params.id,
-            &meta.detail_table, &meta.detail_foreign_key, &meta.detail_primary_key,
-        ).await;
-        let before_json = before_snapshot.as_ref().and_then(|v| serde_json::to_string(v).ok());
-        let after_json = after_snapshot.as_ref().and_then(|v| serde_json::to_string(v).ok());
+            conn,
+            &params.table,
+            &params.primary_key,
+            &params.id,
+            &meta.detail_table,
+            &meta.detail_foreign_key,
+            &meta.detail_primary_key,
+        )
+        .await;
+        let before_json = before_snapshot
+            .as_ref()
+            .and_then(|v| serde_json::to_string(v).ok());
+        let after_json = after_snapshot
+            .as_ref()
+            .and_then(|v| serde_json::to_string(v).ok());
         let _ = record_oper_with_data(
-            conn, "VOID", &params.table, &params.id, user_code,
-            None, Some(&format!("作废{} ({})", meta.title, reason)),
-            before_json.as_deref(), after_json.as_deref(),
-        ).await;
+            conn,
+            "VOID",
+            &params.table,
+            &params.id,
+            user_code,
+            None,
+            Some(&format!("作废{} ({})", meta.title, reason)),
+            before_json.as_deref(),
+            after_json.as_deref(),
+        )
+        .await;
         Ok(())
-    }.await;
+    }
+    .await;
     match tx_result {
         Ok(()) => {
             if let Err(e) = inventory_ledger::commit_tran(conn).await {
@@ -3178,12 +4006,22 @@ pub async fn generate_from_source(
         .clone();
 
     // 校验上下游关系
-    if !target_meta.upstream.iter().any(|s| s == &params.source_table) {
-        return Err(format!("{} 不是 {} 的合法上游", params.source_table, params.target_table));
+    if !target_meta
+        .upstream
+        .iter()
+        .any(|s| s == &params.source_table)
+    {
+        return Err(format!(
+            "{} 不是 {} 的合法上游",
+            params.source_table, params.target_table
+        ));
     }
 
     // 取主表
-    let master_sql = format!("SELECT * FROM [{}] WHERE [{}] = @p1", source_meta.table, source_meta.primary_key);
+    let master_sql = format!(
+        "SELECT * FROM [{}] WHERE [{}] = @p1",
+        source_meta.table, source_meta.primary_key
+    );
     let master_row = match conn.query(&master_sql, &[&params.source_id]).await {
         Ok(s) => s.into_row().await.ok().flatten(),
         Err(_) => None,
@@ -3196,7 +4034,8 @@ pub async fn generate_from_source(
 
     // 修复 M-3：校验源单状态，仅 S（已审核）/Y（已确认）状态可被参照生单
     // N/E 状态源单尚未审核，不应被下游引用；D/C 状态源单已失效
-    let src_state = master_json.get("State")
+    let src_state = master_json
+        .get("State")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .trim()
@@ -3210,7 +4049,10 @@ pub async fn generate_from_source(
             STATE_VOID => "已作废",
             _ => src_state.as_str(),
         };
-        return Err(format!("源单状态为 {}，仅已审核/已确认状态可参照生单", state_desc));
+        return Err(format!(
+            "源单状态为 {}，仅已审核/已确认状态可参照生单",
+            state_desc
+        ));
     }
 
     // 清空主键、单据号、源单据关联
@@ -3227,12 +4069,18 @@ pub async fn generate_from_source(
         obj.remove("EUser");
         if !target_meta.source_field.is_empty() {
             // 保留 source_field 指向源单主键
-            obj.insert(target_meta.source_field.clone(), serde_json::Value::String(params.source_id.clone()));
+            obj.insert(
+                target_meta.source_field.clone(),
+                serde_json::Value::String(params.source_id.clone()),
+            );
         }
     }
 
     // 取明细
-    let detail_sql = format!("SELECT * FROM [{}] WHERE [{}] = @p1", source_meta.detail_table, source_meta.detail_foreign_key);
+    let detail_sql = format!(
+        "SELECT * FROM [{}] WHERE [{}] = @p1",
+        source_meta.detail_table, source_meta.detail_foreign_key
+    );
     let detail_rows = match conn.query(&detail_sql, &[&params.source_id]).await {
         Ok(s) => s.into_first_result().await.unwrap_or_default(),
         Err(_) => Vec::new(),
@@ -3265,24 +4113,30 @@ fn row_to_json(row: tiberius::Row, _table: &str) -> serde_json::Value {
     for col in row.columns() {
         let name = col.name();
         let v: serde_json::Value = match col.column_type() {
-            ColumnType::Int1 | ColumnType::Int2 | ColumnType::Int4 => {
-                row.get::<i32, _>(name).map(|x| serde_json::Value::from(x)).unwrap_or(serde_json::Value::Null)
-            }
-            ColumnType::Int8 | ColumnType::Intn => {
-                row.get::<i64, _>(name).map(|x| serde_json::Value::from(x)).unwrap_or(serde_json::Value::Null)
-            }
-            ColumnType::Float4 | ColumnType::Float8 | ColumnType::Floatn => {
-                row.get::<f64, _>(name).map(|x| serde_json::json!(x)).unwrap_or(serde_json::Value::Null)
-            }
-            ColumnType::Bit => {
-                row.get::<bool, _>(name).map(|x| serde_json::Value::from(x)).unwrap_or(serde_json::Value::Null)
-            }
-            ColumnType::Guid => {
-                row.get::<uuid::Uuid, _>(name).map(|x| serde_json::Value::from(x.to_string())).unwrap_or(serde_json::Value::Null)
-            }
-            _ => {
-                row.get::<&str, _>(name).map(|x| serde_json::Value::from(x)).unwrap_or(serde_json::Value::Null)
-            }
+            ColumnType::Int1 | ColumnType::Int2 | ColumnType::Int4 => row
+                .get::<i32, _>(name)
+                .map(|x| serde_json::Value::from(x))
+                .unwrap_or(serde_json::Value::Null),
+            ColumnType::Int8 | ColumnType::Intn => row
+                .get::<i64, _>(name)
+                .map(|x| serde_json::Value::from(x))
+                .unwrap_or(serde_json::Value::Null),
+            ColumnType::Float4 | ColumnType::Float8 | ColumnType::Floatn => row
+                .get::<f64, _>(name)
+                .map(|x| serde_json::json!(x))
+                .unwrap_or(serde_json::Value::Null),
+            ColumnType::Bit => row
+                .get::<bool, _>(name)
+                .map(|x| serde_json::Value::from(x))
+                .unwrap_or(serde_json::Value::Null),
+            ColumnType::Guid => row
+                .get::<uuid::Uuid, _>(name)
+                .map(|x| serde_json::Value::from(x.to_string()))
+                .unwrap_or(serde_json::Value::Null),
+            _ => row
+                .get::<&str, _>(name)
+                .map(|x| serde_json::Value::from(x))
+                .unwrap_or(serde_json::Value::Null),
         };
         obj.insert(name.to_string(), v);
     }
@@ -3356,7 +4210,12 @@ async fn query_table_columns(conn: &mut Conn, table: &str) -> Vec<ColumnInfo> {
                 let is_nullable = r.get::<&str, _>("IS_NULLABLE").unwrap_or("YES") == "YES";
                 let has_default = r.get::<&str, _>("COLUMN_DEFAULT").is_some();
                 if !name.is_empty() {
-                    result.push(ColumnInfo { name, data_type, is_nullable, has_default });
+                    result.push(ColumnInfo {
+                        name,
+                        data_type,
+                        is_nullable,
+                        has_default,
+                    });
                 }
             }
         }
@@ -3367,13 +4226,21 @@ async fn query_table_columns(conn: &mut Conn, table: &str) -> Vec<ColumnInfo> {
 /// 根据数据类型生成默认值
 fn default_value_for_type(data_type: &str) -> serde_json::Value {
     match data_type {
-        "uniqueidentifier" => serde_json::Value::String("00000000-0000-0000-0000-000000000000".to_string()),
-        "int" | "tinyint" | "smallint" | "bigint" => serde_json::Value::Number(serde_json::Number::from(0)),
+        "uniqueidentifier" => {
+            serde_json::Value::String("00000000-0000-0000-0000-000000000000".to_string())
+        }
+        "int" | "tinyint" | "smallint" | "bigint" => {
+            serde_json::Value::Number(serde_json::Number::from(0))
+        }
         "decimal" | "numeric" | "float" | "real" | "money" | "smallmoney" => {
-            serde_json::Number::from_f64(0.0).map(serde_json::Value::Number).unwrap_or(serde_json::Value::Null)
+            serde_json::Number::from_f64(0.0)
+                .map(serde_json::Value::Number)
+                .unwrap_or(serde_json::Value::Null)
         }
         "bit" => serde_json::Value::Bool(false),
-        "nvarchar" | "varchar" | "nchar" | "char" | "text" | "ntext" => serde_json::Value::String(String::new()),
+        "nvarchar" | "varchar" | "nchar" | "char" | "text" | "ntext" => {
+            serde_json::Value::String(String::new())
+        }
         "datetime" | "datetime2" | "smalldatetime" | "date" => {
             serde_json::Value::String(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string())
         }
@@ -3389,9 +4256,13 @@ fn fill_not_null_defaults(
 ) {
     for col in columns {
         // 跳过已处理的主键、外键、RowNO
-        if skip_keys.contains(&col.name.as_str()) { continue; }
+        if skip_keys.contains(&col.name.as_str()) {
+            continue;
+        }
         // 只处理 NOT NULL 且无默认值的字段
-        if col.is_nullable || col.has_default { continue; }
+        if col.is_nullable || col.has_default {
+            continue;
+        }
         // 如果前端没传这个字段，补上默认值
         if !obj.contains_key(&col.name) {
             let dv = default_value_for_type(&col.data_type);
@@ -3416,9 +4287,11 @@ fn filter_to_db_columns(
     skip_keys: &[&str],
 ) {
     // 收集数据库列名集合
-    let db_names: std::collections::HashSet<String> = columns.iter().map(|c| c.name.clone()).collect();
+    let db_names: std::collections::HashSet<String> =
+        columns.iter().map(|c| c.name.clone()).collect();
     // 删除数据库不存在的字段
-    let keys_to_remove: Vec<String> = obj.keys()
+    let keys_to_remove: Vec<String> = obj
+        .keys()
         .filter(|k| !db_names.contains(*k))
         .cloned()
         .collect();
@@ -3427,8 +4300,12 @@ fn filter_to_db_columns(
     }
     // 对 UUID 类型字段，空值补全为全零 UUID（避免 NOT NULL 的 uniqueidentifier 转换失败）
     for col in columns {
-        if skip_keys.contains(&col.name.as_str()) { continue; }
-        if col.data_type != "uniqueidentifier" { continue; }
+        if skip_keys.contains(&col.name.as_str()) {
+            continue;
+        }
+        if col.data_type != "uniqueidentifier" {
+            continue;
+        }
         if let Some(v) = obj.get(&col.name) {
             let need_fix = match v {
                 serde_json::Value::Null => true,
@@ -3436,7 +4313,10 @@ fn filter_to_db_columns(
                 _ => false,
             };
             if need_fix {
-                obj.insert(col.name.clone(), serde_json::Value::String("00000000-0000-0000-0000-000000000000".to_string()));
+                obj.insert(
+                    col.name.clone(),
+                    serde_json::Value::String("00000000-0000-0000-0000-000000000000".to_string()),
+                );
             }
         }
     }
@@ -3468,15 +4348,26 @@ async fn query_cust_info_from_data(
 ) -> (String, String) {
     // 销售类单据 + 入出库单（tStk_IO 也有 CustID 字段，如门店销售 SD/SI/POS）
     let doc_type = default_doc_type_for_table(meta);
-    if !matches!(doc_type.as_str(), "sales_outbound" | "sales_inv" | "sales_return" | "sales_order" | "stock_io") {
+    if !matches!(
+        doc_type.as_str(),
+        "sales_outbound" | "sales_inv" | "sales_return" | "sales_order" | "stock_io"
+    ) {
         return (String::new(), String::new());
     }
-    let cust_id = data.get("CustID").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let cust_id = data
+        .get("CustID")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     if cust_id.is_empty() {
         return (String::new(), String::new());
     }
     // CustName 可能在 data 中（前端传入），也可能不在（需查 DB）
-    let cust_name = data.get("CustName").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let cust_name = data
+        .get("CustName")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     if !cust_name.is_empty() {
         return (cust_id, cust_name);
     }
@@ -3501,7 +4392,10 @@ async fn query_cust_info_from_db(
     master_id: &str,
 ) -> (String, String) {
     let doc_type = default_doc_type_for_table(meta);
-    if !matches!(doc_type.as_str(), "sales_outbound" | "sales_inv" | "sales_return" | "sales_order" | "stock_io") {
+    if !matches!(
+        doc_type.as_str(),
+        "sales_outbound" | "sales_inv" | "sales_return" | "sales_order" | "stock_io"
+    ) {
         return (String::new(), String::new());
     }
     if master_id.is_empty() {
@@ -3617,13 +4511,24 @@ async fn log_shortage_to_db(
         // Remark 简短记录来源单据 + 商品名（便于人工排查；详细来源通过 SourceDocID 关联查询）
         let remark = format!("{}: {}", source_doc_no, item.gds_name);
         let params: Vec<&dyn ToSql> = vec![
-            &item.gds_id, &item.stk_id,
-            &item.qty, &item.shortage, &item.stock, &item.reserved,
-            &source_doc_table, &source_doc_no, &source_doc_id_param, &source_kind,
+            &item.gds_id,
+            &item.stk_id,
+            &item.qty,
+            &item.shortage,
+            &item.stock,
+            &item.reserved,
+            &source_doc_table,
+            &source_doc_no,
+            &source_doc_id_param,
+            &source_kind,
             &remark,
-            &user_code, &emp_id, &now,
-            &cust_id_param, &cust_name_param,
-            &shop_id_param, &shop_name_param,
+            &user_code,
+            &emp_id,
+            &now,
+            &cust_id_param,
+            &cust_name_param,
+            &shop_id_param,
+            &shop_name_param,
         ];
         if let Err(e) = conn.execute(sql, &params).await {
             tracing::error!(
@@ -3667,7 +4572,10 @@ async fn resolve_auser_id(conn: &mut Conn, user_code: &str) -> String {
     // 按工号查 EmpID
     let emp_id = query_emp_id_by_code(conn, user_code).await;
     if emp_id.is_empty() {
-        tracing::warn!("[resolve_auser_id] 未找到员工记录，AUser 将置为零 UUID: user_code={}", user_code);
+        tracing::warn!(
+            "[resolve_auser_id] 未找到员工记录，AUser 将置为零 UUID: user_code={}",
+            user_code
+        );
         return ZERO_UUID.to_string();
     }
     emp_id

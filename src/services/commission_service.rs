@@ -15,11 +15,11 @@
 //!
 //! 调用时机：门店销售单保存/审核后由前端调用 /api/commission/recalc-invoice
 
+use crate::utils::{row_get_f64, row_get_uuid_str};
 use bb8::PooledConnection;
 use bb8_tiberius::ConnectionManager;
 use serde::Deserialize;
 use tiberius::ToSql;
-use crate::utils::{row_get_f64, row_get_uuid_str};
 
 pub type Conn = PooledConnection<'static, ConnectionManager>;
 
@@ -67,7 +67,9 @@ pub struct CommissionTemplate {
     pub employee_ids: Vec<String>,
 }
 
-fn default_status() -> i32 { 1 }
+fn default_status() -> i32 {
+    1
+}
 
 #[derive(Debug, Deserialize, Default)]
 pub struct ProductRule {
@@ -102,9 +104,9 @@ pub struct Tier {
 
 /// 单行提成计算结果
 struct CommissionResult {
-    rate: f64,      // 提成比例（小数，如 0.12）
-    ctype: i32,     // 0=无, 1=商品规则, 2=品牌规则
-    amount: f64,    // 提成金额
+    rate: f64,   // 提成比例（小数，如 0.12）
+    ctype: i32,  // 0=无, 1=商品规则, 2=品牌规则
+    amount: f64, // 提成金额
 }
 
 /// 根据模板和商品信息计算单行提成
@@ -128,7 +130,11 @@ fn calc_row_commission(
 ) -> CommissionResult {
     // 1. 模板停用 → 无提成
     if tpl.status != 1 {
-        return CommissionResult { rate: 0.0, ctype: 0, amount: 0.0 };
+        return CommissionResult {
+            rate: 0.0,
+            ctype: 0,
+            amount: 0.0,
+        };
     }
 
     // 2. 优先匹配商品规则（按比例：提成 = 销售额 × 比例）
@@ -137,7 +143,11 @@ fn calc_row_commission(
             if rule.gds_id.eq_ignore_ascii_case(gds_id) && rule.commission > 0.0 {
                 // ★ 对齐 88 项目：commission 是小数比例（0.12=12%），提成 = Amt × commission
                 let comm = amt * rule.commission;
-                return CommissionResult { rate: rule.commission, ctype: 1, amount: comm };
+                return CommissionResult {
+                    rate: rule.commission,
+                    ctype: 1,
+                    amount: comm,
+                };
             }
         }
     }
@@ -148,7 +158,11 @@ fn calc_row_commission(
             if rule.brand_id.eq_ignore_ascii_case(product_brand_id) && rule.commission > 0.0 {
                 // ★ 对齐 88 项目：commission 是小数比例（0.12=12%），提成 = Amt × commission
                 let comm = amt * rule.commission;
-                return CommissionResult { rate: rule.commission, ctype: 2, amount: comm };
+                return CommissionResult {
+                    rate: rule.commission,
+                    ctype: 2,
+                    amount: comm,
+                };
             }
         }
     }
@@ -157,7 +171,11 @@ fn calc_row_commission(
     if tpl.rate > 0.0 || tpl.r#type == 4 {
         // 基础金额门槛（按销售额判断）
         if tpl.base_amount > 0.0 && amt < tpl.base_amount {
-            return CommissionResult { rate: 0.0, ctype: 0, amount: 0.0 };
+            return CommissionResult {
+                rate: 0.0,
+                ctype: 0,
+                amount: 0.0,
+            };
         }
 
         let (rate, raw_comm) = match tpl.r#type {
@@ -165,7 +183,11 @@ fn calc_row_commission(
             2 => {
                 let profit = amt - cost;
                 if profit <= 0.0 || tpl.rate <= 0.0 {
-                    return CommissionResult { rate: 0.0, ctype: 0, amount: 0.0 };
+                    return CommissionResult {
+                        rate: 0.0,
+                        ctype: 0,
+                        amount: 0.0,
+                    };
                 }
                 let r = tpl.rate / 100.0;
                 (r, profit * r)
@@ -173,7 +195,11 @@ fn calc_row_commission(
             // 按销售量：提成 = Qty × rate/100
             3 => {
                 if tpl.rate <= 0.0 {
-                    return CommissionResult { rate: 0.0, ctype: 0, amount: 0.0 };
+                    return CommissionResult {
+                        rate: 0.0,
+                        ctype: 0,
+                        amount: 0.0,
+                    };
                 }
                 let r = tpl.rate / 100.0;
                 (r, qty * r)
@@ -181,24 +207,39 @@ fn calc_row_commission(
             // 阶梯提成：按 Amt 匹配 Tiers 区间，提成 = Amt × tier.rate/100
             4 => {
                 if tpl.tiers.is_empty() {
-                    return CommissionResult { rate: 0.0, ctype: 0, amount: 0.0 };
+                    return CommissionResult {
+                        rate: 0.0,
+                        ctype: 0,
+                        amount: 0.0,
+                    };
                 }
                 // 匹配区间：min <= amt < max（max=0 表示无上限）
-                let tier = tpl.tiers.iter().find(|t| {
-                    t.rate > 0.0 && amt >= t.min && (t.max <= 0.0 || amt < t.max)
-                });
+                let tier = tpl
+                    .tiers
+                    .iter()
+                    .find(|t| t.rate > 0.0 && amt >= t.min && (t.max <= 0.0 || amt < t.max));
                 match tier {
                     Some(t) => {
                         let r = t.rate / 100.0;
                         (r, amt * r)
                     }
-                    None => return CommissionResult { rate: 0.0, ctype: 0, amount: 0.0 },
+                    None => {
+                        return CommissionResult {
+                            rate: 0.0,
+                            ctype: 0,
+                            amount: 0.0,
+                        };
+                    }
                 }
             }
             // 默认（type=1 或未设置）：按销售额，提成 = Amt × rate/100
             _ => {
                 if tpl.rate <= 0.0 {
-                    return CommissionResult { rate: 0.0, ctype: 0, amount: 0.0 };
+                    return CommissionResult {
+                        rate: 0.0,
+                        ctype: 0,
+                        amount: 0.0,
+                    };
                 }
                 let r = tpl.rate / 100.0;
                 (r, amt * r)
@@ -211,10 +252,18 @@ fn calc_row_commission(
         } else {
             raw_comm
         };
-        return CommissionResult { rate, ctype: 0, amount: final_comm };
+        return CommissionResult {
+            rate,
+            ctype: 0,
+            amount: final_comm,
+        };
     }
 
-    CommissionResult { rate: 0.0, ctype: 0, amount: 0.0 }
+    CommissionResult {
+        rate: 0.0,
+        ctype: 0,
+        amount: 0.0,
+    }
 }
 
 /// 检查模板是否对指定员工生效
@@ -226,7 +275,10 @@ fn is_template_for_employee(tpl: &CommissionTemplate, emp_id: &str, pterm: &str)
         if emp_id.is_empty() {
             return false;
         }
-        return tpl.employee_ids.iter().any(|id| id.eq_ignore_ascii_case(emp_id));
+        return tpl
+            .employee_ids
+            .iter()
+            .any(|id| id.eq_ignore_ascii_case(emp_id));
     }
     // ALL 或其他：对所有员工生效
     true
@@ -252,9 +304,13 @@ pub async fn recalc_invoice_commission(conn: &mut Conn, siid: &str) -> Result<us
                                CONVERT(varchar(40), EmpID) AS EmpID,
                                CONVERT(varchar(10), EDate, 120) AS EDate
                         FROM tSal_Inv WHERE SIID = @p1 AND State <> 'D'"#;
-    let stream = conn.query(master_sql, &[&siid.to_string()]).await
+    let stream = conn
+        .query(master_sql, &[&siid.to_string()])
+        .await
         .map_err(|e| format!("查询销售单主表失败: {}", e))?;
-    let row = stream.into_row().await
+    let row = stream
+        .into_row()
+        .await
         .map_err(|e| format!("读取销售单主表失败: {}", e))?
         .ok_or_else(|| "销售单不存在或已删除".to_string())?;
     let stk_id: String = row.get::<&str, _>("StkID").unwrap_or("").to_string();
@@ -270,12 +326,19 @@ pub async fn recalc_invoice_commission(conn: &mut Conn, siid: &str) -> Result<us
                     FROM tBas_Stock s
                     LEFT JOIN tSys_Parameters p ON s.CommissionTemplateID = p.ParametersID
                     WHERE s.StkID = @p1"#;
-    let stream = conn.query(wh_sql, &[&stk_id]).await
+    let stream = conn
+        .query(wh_sql, &[&stk_id])
+        .await
         .map_err(|e| format!("查询仓库提成模板失败: {}", e))?;
-    let row = stream.into_row().await
+    let row = stream
+        .into_row()
+        .await
         .map_err(|e| format!("读取仓库提成模板失败: {}", e))?
         .ok_or_else(|| format!("仓库不存在: {}", stk_id))?;
-    let tpl_id: String = row.get::<&str, _>("CommissionTemplateID").unwrap_or("").to_string();
+    let tpl_id: String = row
+        .get::<&str, _>("CommissionTemplateID")
+        .unwrap_or("")
+        .to_string();
     let pterm: String = row.get::<&str, _>("PTerm").unwrap_or("ALL").to_string();
 
     // 3. 加载提成模板
@@ -288,16 +351,30 @@ pub async fn recalc_invoice_commission(conn: &mut Conn, siid: &str) -> Result<us
 
     // 4. 校验模板是否对当前员工生效（PTerm='CUSTOM' 时仅指定员工生效）
     if !is_template_for_employee(&tpl, &emp_id, &pterm) {
-        tracing::info!("recalc_invoice_commission: 模板 {} 不对员工 {} 生效（PTerm={}），跳过提成计算", tpl_id, emp_id, pterm);
+        tracing::info!(
+            "recalc_invoice_commission: 模板 {} 不对员工 {} 生效（PTerm={}），跳过提成计算",
+            tpl_id,
+            emp_id,
+            pterm
+        );
         // 清零所有明细行的提成
         clear_invoice_commission(conn, siid).await?;
         return Ok(0);
     }
 
     // 5. 校验模板有效期（用单据日期判断）
-    let today = if edate.len() >= 10 { edate[..10].to_string() } else { String::new() };
+    let today = if edate.len() >= 10 {
+        edate[..10].to_string()
+    } else {
+        String::new()
+    };
     if !is_template_in_effect(&tpl, &today) {
-        tracing::info!("recalc_invoice_commission: 模板 {} 不在有效期（{}/{}），跳过提成计算", tpl_id, tpl.eff_s_date, tpl.eff_e_date);
+        tracing::info!(
+            "recalc_invoice_commission: 模板 {} 不在有效期（{}/{}），跳过提成计算",
+            tpl_id,
+            tpl.eff_s_date,
+            tpl.eff_e_date
+        );
         clear_invoice_commission(conn, siid).await?;
         return Ok(0);
     }
@@ -312,9 +389,13 @@ pub async fn recalc_invoice_commission(conn: &mut Conn, siid: &str) -> Result<us
                         FROM tSal_InvDetail d
                         LEFT JOIN tBas_Goods g ON d.GDSID = g.GDSID
                         WHERE d.SIID = @p1"#;
-    let stream = conn.query(detail_sql, &[&siid.to_string()]).await
+    let stream = conn
+        .query(detail_sql, &[&siid.to_string()])
+        .await
         .map_err(|e| format!("查询销售单明细失败: {}", e))?;
-    let rows: Vec<tiberius::Row> = stream.into_first_result().await
+    let rows: Vec<tiberius::Row> = stream
+        .into_first_result()
+        .await
         .map_err(|e| format!("读取销售单明细失败: {}", e))?;
 
     if rows.is_empty() {
@@ -351,9 +432,21 @@ pub async fn recalc_invoice_commission(conn: &mut Conn, siid: &str) -> Result<us
 
         for (i, (did, rate, ctype, amt)) in batch.iter().enumerate() {
             let pidx = i * 4 + 1;
-            case_rate.push_str(&format!(" WHEN CAST(@p{} AS uniqueidentifier) THEN CAST(@p{} AS float) ", pidx, pidx + 1));
-            case_type.push_str(&format!(" WHEN CAST(@p{} AS uniqueidentifier) THEN CAST(@p{} AS int) ", pidx, pidx + 2));
-            case_amt.push_str(&format!(" WHEN CAST(@p{} AS uniqueidentifier) THEN CAST(@p{} AS float) ", pidx, pidx + 3));
+            case_rate.push_str(&format!(
+                " WHEN CAST(@p{} AS uniqueidentifier) THEN CAST(@p{} AS float) ",
+                pidx,
+                pidx + 1
+            ));
+            case_type.push_str(&format!(
+                " WHEN CAST(@p{} AS uniqueidentifier) THEN CAST(@p{} AS int) ",
+                pidx,
+                pidx + 2
+            ));
+            case_amt.push_str(&format!(
+                " WHEN CAST(@p{} AS uniqueidentifier) THEN CAST(@p{} AS float) ",
+                pidx,
+                pidx + 3
+            ));
             params.push(Some(did.clone()));
             params.push(Some(format!("{}", rate)));
             params.push(Some(format!("{}", ctype)));
@@ -365,10 +458,15 @@ pub async fn recalc_invoice_commission(conn: &mut Conn, siid: &str) -> Result<us
 
         let batch_sql = format!(
             "UPDATE tSal_InvDetail SET CommissionRate = {}, CommissionType = {}, Commission = {} WHERE SIDetailID IN ({})",
-            case_rate, case_type, case_amt,
-            batch.iter().enumerate()
+            case_rate,
+            case_type,
+            case_amt,
+            batch
+                .iter()
+                .enumerate()
                 .map(|(i, _)| format!("CAST(@p{} AS uniqueidentifier)", i * 4 + 1))
-                .collect::<Vec<_>>().join(",")
+                .collect::<Vec<_>>()
+                .join(",")
         );
 
         let param_refs: Vec<&dyn ToSql> = params.iter().map(|v| v as &dyn ToSql).collect();
@@ -386,29 +484,47 @@ pub async fn recalc_invoice_commission(conn: &mut Conn, siid: &str) -> Result<us
     // 使用 IF EXISTS 兼容旧表（未应用迁移 022 时跳过）
     let sync_sql = r#"IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'tSal_Inv' AND COLUMN_NAME = 'TotalCommission')
         UPDATE tSal_Inv SET TotalCommission = @p1 WHERE SIID = @p2"#;
-    let _ = conn.query(sync_sql, &[&total_commission, &siid.to_string()]).await
+    let _ = conn
+        .query(sync_sql, &[&total_commission, &siid.to_string()])
+        .await
         .map_err(|e| {
-            tracing::warn!("同步 tSal_Inv.TotalCommission 失败（不影响明细计算）: {}", e);
+            tracing::warn!(
+                "同步 tSal_Inv.TotalCommission 失败（不影响明细计算）: {}",
+                e
+            );
         });
 
-    tracing::info!("recalc_invoice_commission: siid={} updated={}/{} total_commission={}", siid, updated, rows.len(), total_commission);
+    tracing::info!(
+        "recalc_invoice_commission: siid={} updated={}/{} total_commission={}",
+        siid,
+        updated,
+        rows.len(),
+        total_commission
+    );
     Ok(updated)
 }
 
 /// 清零销售单所有明细行的提成字段
 async fn clear_invoice_commission(conn: &mut Conn, siid: &str) -> Result<usize, String> {
     let sql = "UPDATE tSal_InvDetail SET CommissionRate = 0, CommissionType = 0, Commission = 0 WHERE SIID = @p1";
-    let _ = conn.query(sql, &[&siid.to_string()]).await
+    let _ = conn
+        .query(sql, &[&siid.to_string()])
+        .await
         .map_err(|e| format!("清零提成失败: {}", e))?;
     Ok(0)
 }
 
 /// 按模板ID加载提成模板
 async fn load_template_by_id(conn: &mut Conn, tpl_id: &str) -> Result<CommissionTemplate, String> {
-    let sql = "SELECT PValue FROM tSys_Parameters WHERE ParametersID = @p1 AND PKind = 'commission'";
-    let stream = conn.query(sql, &[&tpl_id.to_string()]).await
+    let sql =
+        "SELECT PValue FROM tSys_Parameters WHERE ParametersID = @p1 AND PKind = 'commission'";
+    let stream = conn
+        .query(sql, &[&tpl_id.to_string()])
+        .await
         .map_err(|e| format!("查询提成模板失败: {}", e))?;
-    let row = stream.into_row().await
+    let row = stream
+        .into_row()
+        .await
         .map_err(|e| format!("读取提成模板失败: {}", e))?
         .ok_or_else(|| "提成模板不存在".to_string())?;
     let pvalue: String = row.get::<&str, _>("PValue").unwrap_or("").to_string();
@@ -426,7 +542,9 @@ async fn load_default_template(conn: &mut Conn) -> Result<CommissionTemplate, St
                  WHERE PKind = 'commission' AND PTerm = 'ALL'
                  AND (PValue LIKE '%"status":1%' OR PValue NOT LIKE '%"status":%')
                  ORDER BY EDate DESC"#;
-    let stream = conn.query(sql, &[]).await
+    let stream = conn
+        .query(sql, &[])
+        .await
         .map_err(|e| format!("查询默认提成模板失败: {}", e))?;
     let row = match stream.into_row().await {
         Ok(Some(r)) => r,
@@ -445,83 +563,111 @@ async fn load_default_template(conn: &mut Conn) -> Result<CommissionTemplate, St
 ///   前端保存时：用户输入 12（百分比） → ÷100 → 存储 0.12（小数）
 ///   后端读取时：0.12 × 销售额 = 提成金额
 fn parse_template_json(json_str: &str) -> Result<CommissionTemplate, String> {
-    let val: serde_json::Value = serde_json::from_str(json_str)
-        .map_err(|e| format!("解析提成模板JSON失败: {}", e))?;
+    let val: serde_json::Value =
+        serde_json::from_str(json_str).map_err(|e| format!("解析提成模板JSON失败: {}", e))?;
 
     let tpl = CommissionTemplate {
-        r#type: val.get("type")
+        r#type: val
+            .get("type")
             .or_else(|| val.get("commissionType"))
             .and_then(|v| v.as_i64())
             .unwrap_or(0) as i32,
         rate: val.get("rate").and_then(|v| v.as_f64()).unwrap_or(0.0),
-        base_amount: val.get("baseAmount")
+        base_amount: val
+            .get("baseAmount")
             .or_else(|| val.get("base_amount"))
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0),
-        max_amount: val.get("maxAmount")
+        max_amount: val
+            .get("maxAmount")
             .or_else(|| val.get("max_amount"))
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0),
         status: val.get("status").and_then(|v| v.as_i64()).unwrap_or(1) as i32,
-        eff_s_date: val.get("effSDate")
+        eff_s_date: val
+            .get("effSDate")
             .or_else(|| val.get("eff_s_date"))
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
-        eff_e_date: val.get("effEDate")
+        eff_e_date: val
+            .get("effEDate")
             .or_else(|| val.get("eff_e_date"))
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
-        product_rules: val.get("productRules")
+        product_rules: val
+            .get("productRules")
             .or_else(|| val.get("product_rules"))
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().map(|v| ProductRule {
-                gds_id: v.get("gdsId")
-                    .or_else(|| v.get("gds_id"))
-                    .or_else(|| v.get("GDSID"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                commission: v.get("commission").and_then(|v| v.as_f64()).unwrap_or(0.0),
-            }).collect())
+            .map(|arr| {
+                arr.iter()
+                    .map(|v| ProductRule {
+                        gds_id: v
+                            .get("gdsId")
+                            .or_else(|| v.get("gds_id"))
+                            .or_else(|| v.get("GDSID"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        commission: v.get("commission").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                    })
+                    .collect()
+            })
             .unwrap_or_default(),
-        brand_rules: val.get("brandRules")
+        brand_rules: val
+            .get("brandRules")
             .or_else(|| val.get("brand_rules"))
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().map(|v| BrandRule {
-                brand_id: v.get("brandId")
-                    .or_else(|| v.get("brand_id"))
-                    .or_else(|| v.get("BrandID"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                commission: v.get("commission").and_then(|v| v.as_f64()).unwrap_or(0.0),
-            }).collect())
+            .map(|arr| {
+                arr.iter()
+                    .map(|v| BrandRule {
+                        brand_id: v
+                            .get("brandId")
+                            .or_else(|| v.get("brand_id"))
+                            .or_else(|| v.get("BrandID"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        commission: v.get("commission").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                    })
+                    .collect()
+            })
             .unwrap_or_default(),
-        tiers: val.get("tiers")
+        tiers: val
+            .get("tiers")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().map(|v| Tier {
-                min: v.get("min")
-                    .or_else(|| v.get("Min"))
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0),
-                max: v.get("max")
-                    .or_else(|| v.get("Max"))
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0),
-                rate: v.get("rate")
-                    .or_else(|| v.get("Rate"))
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0),
-            }).collect())
+            .map(|arr| {
+                arr.iter()
+                    .map(|v| Tier {
+                        min: v
+                            .get("min")
+                            .or_else(|| v.get("Min"))
+                            .and_then(|v| v.as_f64())
+                            .unwrap_or(0.0),
+                        max: v
+                            .get("max")
+                            .or_else(|| v.get("Max"))
+                            .and_then(|v| v.as_f64())
+                            .unwrap_or(0.0),
+                        rate: v
+                            .get("rate")
+                            .or_else(|| v.get("Rate"))
+                            .and_then(|v| v.as_f64())
+                            .unwrap_or(0.0),
+                    })
+                    .collect()
+            })
             .unwrap_or_default(),
-        employee_ids: val.get("employeeIds")
+        employee_ids: val
+            .get("employeeIds")
             .or_else(|| val.get("employee_ids"))
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                .collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
             .unwrap_or_default(),
     };
 

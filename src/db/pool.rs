@@ -1,8 +1,8 @@
-use std::sync::OnceLock;
-use std::time::Duration;
+use crate::config::Config;
 use bb8::Pool;
 use bb8_tiberius::ConnectionManager;
-use crate::config::Config;
+use std::sync::OnceLock;
+use std::time::Duration;
 
 static POOL: OnceLock<Pool<ConnectionManager>> = OnceLock::new();
 // P3-22 修复：bb8::State 不含 max_connections 字段，需自行保存配置的最大连接数
@@ -41,13 +41,19 @@ pub async fn init_pool(config: &Config) {
                     tracing::info!("Database connection test successful");
                 }
                 Err(e) => {
-                    tracing::warn!("Database connection test failed: {}. Server will continue but DB operations will fail until DB is available.", e);
+                    tracing::warn!(
+                        "Database connection test failed: {}. Server will continue but DB operations will fail until DB is available.",
+                        e
+                    );
                 }
             }
             p
         }
         Err(e) => {
-            tracing::error!("Failed to create database pool: {}. Server cannot start without a pool.", e);
+            tracing::error!(
+                "Failed to create database pool: {}. Server cannot start without a pool.",
+                e
+            );
             std::process::exit(1);
         }
     };
@@ -60,7 +66,8 @@ pub fn get_pool() -> &'static Pool<ConnectionManager> {
     // P0-4 修复：原 expect("Pool not initialized") 在 pool 未初始化时 panic
     // 改为：返回空 Pool 的引用会导致调用方出错，不如在 init 之前就拦截
     // 但既然 init_pool 在 main.rs 启动时已调用，这里保持 expect 但消息更清晰
-    POOL.get().expect("Database pool not initialized. Call init_pool() at startup first.")
+    POOL.get()
+        .expect("Database pool not initialized. Call init_pool() at startup first.")
 }
 
 /// P0-4 修复：新增 try_get_pool，允许调用方优雅处理未初始化场景

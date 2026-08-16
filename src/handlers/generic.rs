@@ -1,16 +1,16 @@
-use axum::extract::{State, Json, Multipart, Extension};
-use axum::response::Response;
-use serde::Deserialize;
-use tiberius::Row;
 use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
-use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
-use crate::utils::error_codes::*;
-use crate::handlers::base_data::{try_get_value, row_to_json};
+use crate::handlers::base_data::{row_to_json, try_get_value};
 use crate::middleware::auth::Claims;
 use crate::services::inventory_ledger;
+use crate::utils::error_codes::*;
 use crate::utils::password::hash_password;
+use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
+use axum::extract::{Extension, Json, Multipart, State};
+use axum::response::Response;
+use serde::Deserialize;
+use tiberius::Row;
 
 /// 系统敏感表黑名单：这些表禁止通过 /api/generic/* 接口直接 CRUD，
 /// 必须走专用接口（专用接口已配置权限码校验）。
@@ -23,35 +23,35 @@ use crate::utils::password::hash_password;
 ///   补全为前缀匹配 + 显式列表双重防护
 const SYSTEM_TABLE_BLACKLIST: &[&str] = &[
     // ===== 原有 9 张 =====
-    "tSys_Rule",          // 角色：走 /api/permission/role/*
-    "tSys_RuleMenu",      // 角色权限：走 /api/permission/assign
-    "tSys_UserRule",      // 用户角色：走 /api/permission/assign-user-roles
-    "tSys_Menus",         // 菜单：通过菜单管理专用接口
-    "tSys_DocNoSeq",      // 单据号序列：高危
-    "tSys_PrintTemplate", // 打印模板：走专用接口
+    "tSys_Rule",              // 角色：走 /api/permission/role/*
+    "tSys_RuleMenu",          // 角色权限：走 /api/permission/assign
+    "tSys_UserRule",          // 用户角色：走 /api/permission/assign-user-roles
+    "tSys_Menus",             // 菜单：通过菜单管理专用接口
+    "tSys_DocNoSeq",          // 单据号序列：高危
+    "tSys_PrintTemplate",     // 打印模板：走专用接口
     "tSys_TableColumnConfig", // 列配置：走 /api/permission/table-column-config/*
-    "tSys_OperLog",       // 操作日志：只读，禁止改删
-    "tSys_Rpt",           // 报表模板：高危
+    "tSys_OperLog",           // 操作日志：只读，禁止改删
+    "tSys_Rpt",               // 报表模板：高危
     // ===== P0-S3 补全：敏感系统表 =====
-    "tBas_Emp",           // P0-S1：员工表含 PassWordStr 密码哈希，禁止通过 generic 读写
-    "tSys_Parameters",    // 系统参数（业务规则）
-    "tSys_Params",        // 系统参数别名
-    "tSys_Config",        // 系统配置
-    "tSys_Backup",        // 备份记录
-    "tSys_Permission",   // 权限定义
-    "tSys_OperHis",       // 操作历史（可被篡改/删除）
-    "tSys_Company",      // 公司信息
-    "tSys_UploadFile",    // 上传文件元数据
-    "tSys_Notification",  // 通知（可被任意读取）
-    "tSys_DataPack",      // 数据包
-    "tSys_AutoMsg",       // 自动消息
-    "tSys_AutoMsgRule",  // 自动消息规则
+    "tBas_Emp",            // P0-S1：员工表含 PassWordStr 密码哈希，禁止通过 generic 读写
+    "tSys_Parameters",     // 系统参数（业务规则）
+    "tSys_Params",         // 系统参数别名
+    "tSys_Config",         // 系统配置
+    "tSys_Backup",         // 备份记录
+    "tSys_Permission",     // 权限定义
+    "tSys_OperHis",        // 操作历史（可被篡改/删除）
+    "tSys_Company",        // 公司信息
+    "tSys_UploadFile",     // 上传文件元数据
+    "tSys_Notification",   // 通知（可被任意读取）
+    "tSys_DataPack",       // 数据包
+    "tSys_AutoMsg",        // 自动消息
+    "tSys_AutoMsgRule",    // 自动消息规则
     "tSys_RulePermission", // 角色权限映射
-    "tSys_RuleStock",    // 角色仓库权限
-    "tSys_ITReport",     // IT 报表
-    "tSys_RptPrintHis",  // 打印历史
-    "tSys_RptPrintNum",  // 打印计数
-    "tSys_Migration",    // 迁移记录（禁止用户层操作）
+    "tSys_RuleStock",      // 角色仓库权限
+    "tSys_ITReport",       // IT 报表
+    "tSys_RptPrintHis",    // 打印历史
+    "tSys_RptPrintNum",    // 打印计数
+    "tSys_Migration",      // 迁移记录（禁止用户层操作）
 ];
 
 /// P0-S3 辅助：tSys_* 前缀的所有表默认视为敏感（除白名单显式放行的业务表外）
@@ -80,7 +80,10 @@ fn is_table_blacklisted(table: &str, claims: &Claims) -> bool {
     }
     let table_trim = table.trim();
     // 1. 显式黑名单匹配
-    if SYSTEM_TABLE_BLACKLIST.iter().any(|t| table_trim.eq_ignore_ascii_case(t)) {
+    if SYSTEM_TABLE_BLACKLIST
+        .iter()
+        .any(|t| table_trim.eq_ignore_ascii_case(t))
+    {
         return true;
     }
     // 2. P0-S3：tSys_* 前缀的所有表默认拒绝（防止新增系统表遗漏）
@@ -163,13 +166,12 @@ async fn check_record_ownership(
     }
     // 批量校验：统计不属于当前用户的记录数
     // EUser IS NULL 视为历史数据放行（兼容迁移期），仅 EUser <> 当前用户 才拒绝
-    let placeholders: Vec<String> = (0..ids.len())
-        .map(|i| format!("@p{}", i + 1))
-        .collect();
+    let placeholders: Vec<String> = (0..ids.len()).map(|i| format!("@p{}", i + 1)).collect();
     let emp_param_idx = ids.len() + 1;
     let sql = format!(
         "SELECT COUNT(*) AS cnt FROM [{}] WHERE [{}] IN ({}) AND ([EUser] IS NOT NULL AND [EUser] <> @p{})",
-        table, primary_key,
+        table,
+        primary_key,
         placeholders.join(", "),
         emp_param_idx
     );
@@ -258,7 +260,9 @@ fn default_empty_string_cols() -> std::collections::HashSet<String> {
         "PValue".to_string(),
         "CheckSQL".to_string(),
         "PTerm".to_string(),
-    ].into_iter().collect()
+    ]
+    .into_iter()
+    .collect()
 }
 
 /// 可清空的关联字段白名单（表名.列名，全部小写存储）。
@@ -266,9 +270,9 @@ fn default_empty_string_cols() -> std::collections::HashSet<String> {
 /// 否则会被「防御性跳过 null/空值」逻辑忽略，导致无法解绑。
 /// 仅 nullable 的 uniqueidentifier / 外键关联列才应加入此名单。
 fn clearable_nullable_cols() -> std::collections::HashSet<String> {
-    [
-        "tbas_cust.pricingtemplateid".to_string(),
-    ].into_iter().collect()
+    ["tbas_cust.pricingtemplateid".to_string()]
+        .into_iter()
+        .collect()
 }
 
 /// 判断 (table, column) 是否在可清空白名单中（大小写不敏感）
@@ -284,7 +288,11 @@ fn json_to_sql_value(v: &serde_json::Value) -> Option<String> {
             // Treat empty/whitespace-only strings as NULL — SQL Server cannot
             // convert '' to uniqueidentifier / datetime / numeric, and any
             // nullable column should accept NULL gracefully.
-            if s.trim().is_empty() { None } else { Some(s.clone()) }
+            if s.trim().is_empty() {
+                None
+            } else {
+                Some(s.clone())
+            }
         }
         serde_json::Value::Number(n) => Some(n.to_string()),
         serde_json::Value::Bool(b) => Some(if *b { "1".to_string() } else { "0".to_string() }),
@@ -432,19 +440,38 @@ fn get_state_field_for_table(table: &str) -> Option<&'static str> {
     match table {
         "tBas_Brand" | "tBas_Stock" | "tBas_GDSType" | "tBas_GDSProperty" | "tBas_GDSKind"
         | "tBas_DeaType" | "tBas_Unit" | "tBas_SuppType" | "tBas_CustType" | "tBas_Area"
-        | "tBas_Dept" | "tBas_Duty" | "tBas_Payment"
-        | "tBas_CommTemplate" | "tBas_PriceTemplate"
-        | "tSys_Menus" | "tSys_Config" => Some("Used"),
-        "tBas_Goods" | "tBas_Supp" | "tBas_Cust" | "tBas_Emp"
-        | "tPur_Order" | "tPur_Inv" | "tPur_Return" | "tPur_Quote" | "tPur_AdjPrice"
-        | "tSal_Order" | "tSal_Inv" | "tSal_Return" | "tSal_Quote"
-        | "tStk_IO" | "tStk_Move" | "tStk_Tran"
-        | "tStk_ReplenishApply" | "tStk_StockCycle"
+        | "tBas_Dept" | "tBas_Duty" | "tBas_Payment" | "tBas_CommTemplate"
+        | "tBas_PriceTemplate" | "tSys_Menus" | "tSys_Config" => Some("Used"),
+        "tBas_Goods"
+        | "tBas_Supp"
+        | "tBas_Cust"
+        | "tBas_Emp"
+        | "tPur_Order"
+        | "tPur_Inv"
+        | "tPur_Return"
+        | "tPur_Quote"
+        | "tPur_AdjPrice"
+        | "tSal_Order"
+        | "tSal_Inv"
+        | "tSal_Return"
+        | "tSal_Quote"
+        | "tStk_IO"
+        | "tStk_Move"
+        | "tStk_Tran"
+        | "tStk_ReplenishApply"
+        | "tStk_StockCycle"
         | "tStk_Shortage"
-        | "tFin_Receipt" | "tFin_Payment" | "tFin_CashFlow"
-        | "tArd_PD" | "tAcc_PayOut" | "tAcc_PayIn"
-        | "tSys_Rpt" | "tSys_Msg" | "tSys_DataPack"
-        | "tSys_Rule" | "tSal_VIP" => Some("State"),
+        | "tFin_Receipt"
+        | "tFin_Payment"
+        | "tFin_CashFlow"
+        | "tArd_PD"
+        | "tAcc_PayOut"
+        | "tAcc_PayIn"
+        | "tSys_Rpt"
+        | "tSys_Msg"
+        | "tSys_DataPack"
+        | "tSys_Rule"
+        | "tSal_VIP" => Some("State"),
         "tSys_OperLog" | "tSys_OperHis" | "tSys_Dictionary" => None,
         // tStk_Stock / tStk_Qty 的 State 来自 tBas_Goods (别名 g)，由 build_conditions 单独处理
         "tStk_Qty" | "tStk_Stock" => Some("State"),
@@ -1060,33 +1087,30 @@ struct BuiltQuery {
 
 fn get_field_prefix_for_table<'a>(table: &str, field: &str) -> &'a str {
     match table {
-        "tBas_Goods" => {
-            match field {
-                "GDSTypeName" | "GDSTypeID" => "gt",
-                "GDSKindName" => "gk",
-                "BrandName" | "BrandABC" | "BrandNote" | "BrandID" => "b",
-                "DeaTypeName" | "DeaTypeID" => "dt",
-                "SuppName" | "SuppID" => "s",
-                "UnitName" | "UnitNO" => "u",
-                "StkName" | "StkID" => "sk",
-                "GDSPropertyName" | "GDSPropertyID" => "gp",
-                "EUserName" | "EUser" => "eu",
-                _ => "t",
-            }
-        }
-        "tBas_Stock" => {
-            match field {
-                "SalEmpName" | "SalEmpID" => "e",
-                "EUserName" | "EUser" => "eu",
-                "ParentStkName" | "StkPID" => "p",
-                _ => "t",
-            }
-        }
+        "tBas_Goods" => match field {
+            "GDSTypeName" | "GDSTypeID" => "gt",
+            "GDSKindName" => "gk",
+            "BrandName" | "BrandABC" | "BrandNote" | "BrandID" => "b",
+            "DeaTypeName" | "DeaTypeID" => "dt",
+            "SuppName" | "SuppID" => "s",
+            "UnitName" | "UnitNO" => "u",
+            "StkName" | "StkID" => "sk",
+            "GDSPropertyName" | "GDSPropertyID" => "gp",
+            "EUserName" | "EUser" => "eu",
+            _ => "t",
+        },
+        "tBas_Stock" => match field {
+            "SalEmpName" | "SalEmpID" => "e",
+            "EUserName" | "EUser" => "eu",
+            "ParentStkName" | "StkPID" => "p",
+            _ => "t",
+        },
         "tStk_Qty" | "tStk_Stock" => {
             match field {
-                "GDSNO" | "GDSDesc" | "GDSSpec" | "BarCode" | "GDSTypeID" | "BrandID" | "SuppID"
-                | "UnitNO" | "AInPrice" | "BPrice" | "SPrice" | "VPrice" | "CPrice" | "WarnQty"
-                | "GDSStateNO" | "State" | "TopStkQty" | "BttomStkQty" | "PackCnvQty" => "g",
+                "GDSNO" | "GDSDesc" | "GDSSpec" | "BarCode" | "GDSTypeID" | "BrandID"
+                | "SuppID" | "UnitNO" | "AInPrice" | "BPrice" | "SPrice" | "VPrice" | "CPrice"
+                | "WarnQty" | "GDSStateNO" | "State" | "TopStkQty" | "BttomStkQty"
+                | "PackCnvQty" => "g",
                 "StkName" | "StkCode" | "IsDefault" | "Used" | "NodeKind" => "sk",
                 // 商品资料的默认仓库（g.StkID JOIN tBas_Stock gsk）
                 "GoodsStkID" | "GoodsStkName" => "gsk",
@@ -1098,225 +1122,200 @@ fn get_field_prefix_for_table<'a>(table: &str, field: &str) -> &'a str {
             }
         }
         // tStk_Shortage：缺货记录，关联 tBas_Goods/sk/eu，搜索/排序字段路由到对应别名
-        "tStk_Shortage" => {
-            match field {
-                "GDSNO" | "GDSDesc" | "GDSSpec" | "BarCode" | "GDSTypeID" | "BrandID" | "SuppID"
-                | "UnitNO" | "AInPrice" | "GDSStateNO" | "TopStkQty" | "BttomStkQty" | "PackCnvQty" => "g",
-                "StkName" | "StkCode" => "sk",
-                "GDSTypeName" => "gt",
-                "BrandName" => "b",
-                "UnitName" => "u",
-                "SuppName" => "s",
-                "EUserName" => "eu",
-                _ => "t",
+        "tStk_Shortage" => match field {
+            "GDSNO" | "GDSDesc" | "GDSSpec" | "BarCode" | "GDSTypeID" | "BrandID" | "SuppID"
+            | "UnitNO" | "AInPrice" | "GDSStateNO" | "TopStkQty" | "BttomStkQty" | "PackCnvQty" => {
+                "g"
             }
-        }
-        "tPur_OrderDetail" | "tSal_OrderDetail" | "tSal_InvDetail" | "tStk_IODetail"
-        | "tStk_MoveDetail" | "tStk_ReplenishApplyDetail" | "tStk_ReplenishApplyDtl"
-        | "tStk_StockCycleDetail" | "tStk_TranDetail" | "tPur_QuoteDetail"
-        | "tPur_AdjPriceDetail" | "tSal_QuoteDetail" | "tSal_AdjPriceDetail" => {
-            match field {
-                "GDSNO" | "GDSDesc" | "GoodsGDSNO" | "GoodsGDSDesc" | "GDSSpec" | "BarCode"
-                | "GDSTypeID" | "BrandID" | "SuppID" | "UnitNO" | "AInPrice" | "BPrice"
-                | "SPrice" | "VPrice" | "CPrice" | "WarnQty" | "GDSStateNO" | "State" => "g",
-                "UnitName" => "u",
-                "BrandName" | "BrandABC" | "BrandNote" => "b",
-                "IONo" | "Kind" | "IoDate" | "IOState" | "IOSuppID" | "IOCustID" | "IOEmpID"
-                | "IODeptID" | "IOStkID" | "IONote" => "io",
-                "SuppName" => "s",
-                "CustName" => "c",
-                "EmpName" => "e",
-                "DeptName" => "d",
-                "StkName" => "sk",
-                _ => "t",
-            }
-        }
-        "tArd_AR" => {
-            match field {
-                "StkName" => "sk",
-                "EmpName" => "e",
-                "GoodsGDSNO" | "GoodsGDSDesc" | "GoodsUnitNO" => "g",
-                "UnitName" => "u",
-                "BrandName" => "b",
-                _ => "t",
-            }
-        }
+            "StkName" | "StkCode" => "sk",
+            "GDSTypeName" => "gt",
+            "BrandName" => "b",
+            "UnitName" => "u",
+            "SuppName" => "s",
+            "EUserName" => "eu",
+            _ => "t",
+        },
+        "tPur_OrderDetail"
+        | "tSal_OrderDetail"
+        | "tSal_InvDetail"
+        | "tStk_IODetail"
+        | "tStk_MoveDetail"
+        | "tStk_ReplenishApplyDetail"
+        | "tStk_ReplenishApplyDtl"
+        | "tStk_StockCycleDetail"
+        | "tStk_TranDetail"
+        | "tPur_QuoteDetail"
+        | "tPur_AdjPriceDetail"
+        | "tSal_QuoteDetail"
+        | "tSal_AdjPriceDetail" => match field {
+            "GDSNO" | "GDSDesc" | "GoodsGDSNO" | "GoodsGDSDesc" | "GDSSpec" | "BarCode"
+            | "GDSTypeID" | "BrandID" | "SuppID" | "UnitNO" | "AInPrice" | "BPrice" | "SPrice"
+            | "VPrice" | "CPrice" | "WarnQty" | "GDSStateNO" | "State" => "g",
+            "UnitName" => "u",
+            "BrandName" | "BrandABC" | "BrandNote" => "b",
+            "IONo" | "Kind" | "IoDate" | "IOState" | "IOSuppID" | "IOCustID" | "IOEmpID"
+            | "IODeptID" | "IOStkID" | "IONote" => "io",
+            "SuppName" => "s",
+            "CustName" => "c",
+            "EmpName" => "e",
+            "DeptName" => "d",
+            "StkName" => "sk",
+            _ => "t",
+        },
+        "tArd_AR" => match field {
+            "StkName" => "sk",
+            "EmpName" => "e",
+            "GoodsGDSNO" | "GoodsGDSDesc" | "GoodsUnitNO" => "g",
+            "UnitName" => "u",
+            "BrandName" => "b",
+            _ => "t",
+        },
         // 基础资料表：EUser → eu 别名（创建人姓名搜索路由）
-        "tBas_Emp" | "tBas_Supp" | "tBas_Cust" => {
-            match field {
-                "EUserName" | "EUser" => "eu",
-                _ => "t",
-            }
-        }
+        "tBas_Emp" | "tBas_Supp" | "tBas_Cust" => match field {
+            "EUserName" | "EUser" => "eu",
+            _ => "t",
+        },
         // 单据主表：keyword 搜索路由到 LEFT JOIN 的关联表别名，
         // 使关键词能搜到供应商/客户/部门/业务员/仓库名称（JOIN 出来的实时值，非主表冗余列）。
         // 主表自带字段（单号、Note、EUser 等）回退到 "t"。
         // 采购类（tPur_Order/tPur_Inv）：JOIN s/d/e/sk
-        "tPur_Order" | "tPur_Inv" | "tPur_Return" => {
-            match field {
-                "SuppName" | "SuppID" => "s",
-                "DeptName" | "DeptID" => "d",
-                "EmpName" | "EmpID" => "e",
-                "StkName" | "StkID" => "sk",
-                "EUserName" | "EUser" => "eu",
-                "AUserName" | "AUser" => "au",
-                "SUserName" | "SUser" => "su",
-                _ => "t",
-            }
-        }
+        "tPur_Order" | "tPur_Inv" | "tPur_Return" => match field {
+            "SuppName" | "SuppID" => "s",
+            "DeptName" | "DeptID" => "d",
+            "EmpName" | "EmpID" => "e",
+            "StkName" | "StkID" => "sk",
+            "EUserName" | "EUser" => "eu",
+            "AUserName" | "AUser" => "au",
+            "SUserName" | "SUser" => "su",
+            _ => "t",
+        },
         // 采购报价：JOIN s/e
-        "tPur_Quote" => {
-            match field {
-                "SuppName" | "SuppID" => "s",
-                "EmpName" | "EmpID" => "e",
-                "EUserName" | "EUser" => "eu",
-                "AUserName" | "AUser" => "au",
-                "SUserName" | "SUser" => "su",
-                _ => "t",
-            }
-        }
+        "tPur_Quote" => match field {
+            "SuppName" | "SuppID" => "s",
+            "EmpName" | "EmpID" => "e",
+            "EUserName" | "EUser" => "eu",
+            "AUserName" | "AUser" => "au",
+            "SUserName" | "SUser" => "su",
+            _ => "t",
+        },
         // 采购调价：JOIN e
-        "tPur_AdjPrice" => {
-            match field {
-                "EmpName" | "EmpID" => "e",
-                "EUserName" | "EUser" => "eu",
-                "AUserName" | "AUser" => "au",
-                "SUserName" | "SUser" => "su",
-                _ => "t",
-            }
-        }
+        "tPur_AdjPrice" => match field {
+            "EmpName" | "EmpID" => "e",
+            "EUserName" | "EUser" => "eu",
+            "AUserName" | "AUser" => "au",
+            "SUserName" | "SUser" => "su",
+            _ => "t",
+        },
         // 销售类（tSal_Order/tSal_Inv）：JOIN c/d/e/sk
-        "tSal_Order" | "tSal_Inv" => {
-            match field {
-                "CustName" | "CustID" => "c",
-                "DeptName" | "DeptID" => "d",
-                "EmpName" | "EmpID" => "e",
-                "StkName" | "StkID" => "sk",
-                "EUserName" | "EUser" => "eu",
-                "AUserName" | "AUser" => "au",
-                "SUserName" | "SUser" => "su",
-                _ => "t",
-            }
-        }
+        "tSal_Order" | "tSal_Inv" => match field {
+            "CustName" | "CustID" => "c",
+            "DeptName" | "DeptID" => "d",
+            "EmpName" | "EmpID" => "e",
+            "StkName" | "StkID" => "sk",
+            "EUserName" | "EUser" => "eu",
+            "AUserName" | "AUser" => "au",
+            "SUserName" | "SUser" => "su",
+            _ => "t",
+        },
         // 销售报价：JOIN c/e/d/sk
-        "tSal_Quote" => {
-            match field {
-                "CustName" | "CustID" => "c",
-                "DeptName" | "DeptID" => "d",
-                "EmpName" | "EmpID" => "e",
-                "StkName" | "StkID" => "sk",
-                "EUserName" | "EUser" => "eu",
-                "AUserName" | "AUser" => "au",
-                "SUserName" | "SUser" => "su",
-                _ => "t",
-            }
-        }
+        "tSal_Quote" => match field {
+            "CustName" | "CustID" => "c",
+            "DeptName" | "DeptID" => "d",
+            "EmpName" | "EmpID" => "e",
+            "StkName" | "StkID" => "sk",
+            "EUserName" | "EUser" => "eu",
+            "AUserName" | "AUser" => "au",
+            "SUserName" | "SUser" => "su",
+            _ => "t",
+        },
         // 销售调价：JOIN e/d
-        "tSal_AdjPrice" => {
-            match field {
-                "DeptName" | "DeptID" => "d",
-                "EmpName" | "EmpID" => "e",
-                "EUserName" | "EUser" => "eu",
-                "AUserName" | "AUser" => "au",
-                "SUserName" | "SUser" => "su",
-                _ => "t",
-            }
-        }
+        "tSal_AdjPrice" => match field {
+            "DeptName" | "DeptID" => "d",
+            "EmpName" | "EmpID" => "e",
+            "EUserName" | "EUser" => "eu",
+            "AUserName" | "AUser" => "au",
+            "SUserName" | "SUser" => "su",
+            _ => "t",
+        },
         // 入出库单（tStk_IO）：JOIN s/c/d/e/sk
-        "tStk_IO" => {
-            match field {
-                "SuppName" | "SuppID" => "s",
-                "CustName" | "CustID" => "c",
-                "DeptName" | "DeptID" => "d",
-                "EmpName" | "EmpID" => "e",
-                "StkName" | "StkID" => "sk",
-                "EUserName" | "EUser" => "eu",
-                "AUserName" | "AUser" => "au",
-                "SUserName" | "SUser" => "su",
-                _ => "t",
-            }
-        }
+        "tStk_IO" => match field {
+            "SuppName" | "SuppID" => "s",
+            "CustName" | "CustID" => "c",
+            "DeptName" | "DeptID" => "d",
+            "EmpName" | "EmpID" => "e",
+            "StkName" | "StkID" => "sk",
+            "EUserName" | "EUser" => "eu",
+            "AUserName" | "AUser" => "au",
+            "SUserName" | "SUser" => "su",
+            _ => "t",
+        },
         // 调拨单（tStk_Move）：JOIN fs/ts/e
-        "tStk_Move" => {
-            match field {
-                "FromStkName" | "FromStkID" => "fs",
-                "ToStkName" | "ToStkID" => "ts",
-                "EmpName" | "EmpID" => "e",
-                "EUserName" | "EUser" => "eu",
-                "AUserName" | "AUser" => "au",
-                "SUserName" | "SUser" => "su",
-                _ => "t",
-            }
-        }
+        "tStk_Move" => match field {
+            "FromStkName" | "FromStkID" => "fs",
+            "ToStkName" | "ToStkID" => "ts",
+            "EmpName" | "EmpID" => "e",
+            "EUserName" | "EUser" => "eu",
+            "AUserName" | "AUser" => "au",
+            "SUserName" | "SUser" => "su",
+            _ => "t",
+        },
         // 补货申请 / 周期盘点：JOIN sk/e
-        "tStk_ReplenishApply" | "tStk_StockCycle" => {
-            match field {
-                "StkName" | "StkID" => "sk",
-                "EmpName" | "EmpID" => "e",
-                "EUserName" | "EUser" => "eu",
-                "AUserName" | "AUser" => "au",
-                "SUserName" | "SUser" => "su",
-                _ => "t",
-            }
-        }
+        "tStk_ReplenishApply" | "tStk_StockCycle" => match field {
+            "StkName" | "StkID" => "sk",
+            "EmpName" | "EmpID" => "e",
+            "EUserName" | "EUser" => "eu",
+            "AUserName" | "AUser" => "au",
+            "SUserName" | "SUser" => "su",
+            _ => "t",
+        },
         // 库存调整（tStk_Tran）：JOIN sk/e
-        "tStk_Tran" => {
-            match field {
-                "StkName" | "StkID" => "sk",
-                "EmpName" | "EmpID" => "e",
-                "EUserName" | "EUser" => "eu",
-                "AUserName" | "AUser" => "au",
-                "SUserName" | "SUser" => "su",
-                _ => "t",
-            }
-        }
+        "tStk_Tran" => match field {
+            "StkName" | "StkID" => "sk",
+            "EmpName" | "EmpID" => "e",
+            "EUserName" | "EUser" => "eu",
+            "AUserName" | "AUser" => "au",
+            "SUserName" | "SUser" => "su",
+            _ => "t",
+        },
         // 付款单（tAcc_PayOut）：JOIN s/e/d/k（注意仓库别名是 k 不是 sk）
-        "tAcc_PayOut" | "tFin_Payment" => {
-            match field {
-                "SuppName" | "SuppID" => "s",
-                "DeptName" | "DeptID" => "d",
-                "EmpName" | "EmpID" => "e",
-                "StkName" | "StkID" => "k",
-                "EUserName" | "EUser" => "eu",
-                "AUserName" | "AUser" => "au",
-                "SUserName" | "SUser" => "su",
-                _ => "t",
-            }
-        }
+        "tAcc_PayOut" | "tFin_Payment" => match field {
+            "SuppName" | "SuppID" => "s",
+            "DeptName" | "DeptID" => "d",
+            "EmpName" | "EmpID" => "e",
+            "StkName" | "StkID" => "k",
+            "EUserName" | "EUser" => "eu",
+            "AUserName" | "AUser" => "au",
+            "SUserName" | "SUser" => "su",
+            _ => "t",
+        },
         // 收款单（tAcc_PayIn）：JOIN c/e/d/k
-        "tAcc_PayIn" | "tFin_Receipt" => {
-            match field {
-                "CustName" | "CustID" => "c",
-                "DeptName" | "DeptID" => "d",
-                "EmpName" | "EmpID" => "e",
-                "StkName" | "StkID" => "k",
-                "EUserName" | "EUser" => "eu",
-                "AUserName" | "AUser" => "au",
-                "SUserName" | "SUser" => "su",
-                _ => "t",
-            }
-        }
+        "tAcc_PayIn" | "tFin_Receipt" => match field {
+            "CustName" | "CustID" => "c",
+            "DeptName" | "DeptID" => "d",
+            "EmpName" | "EmpID" => "e",
+            "StkName" | "StkID" => "k",
+            "EUserName" | "EUser" => "eu",
+            "AUserName" | "AUser" => "au",
+            "SUserName" | "SUser" => "su",
+            _ => "t",
+        },
         // 现金流量（tFin_CashFlow）：JOIN s/c/e/d
-        "tFin_CashFlow" => {
-            match field {
-                "SuppName" | "SuppID" => "s",
-                "CustName" | "CustID" => "c",
-                "DeptName" | "DeptID" => "d",
-                "EmpName" | "EmpID" => "e",
-                "EUserName" | "EUser" => "eu",
-                "AUserName" | "AUser" => "au",
-                "SUserName" | "SUser" => "su",
-                _ => "t",
-            }
-        }
+        "tFin_CashFlow" => match field {
+            "SuppName" | "SuppID" => "s",
+            "CustName" | "CustID" => "c",
+            "DeptName" | "DeptID" => "d",
+            "EmpName" | "EmpID" => "e",
+            "EUserName" | "EUser" => "eu",
+            "AUserName" | "AUser" => "au",
+            "SUserName" | "SUser" => "su",
+            _ => "t",
+        },
         // 应付账款（tArd_PD）：JOIN s/d
-        "tArd_PD" => {
-            match field {
-                "SuppName" | "SuppID" => "s",
-                "DeptName" | "DeptID" => "d",
-                _ => "t",
-            }
-        }
+        "tArd_PD" => match field {
+            "SuppName" | "SuppID" => "s",
+            "DeptName" | "DeptID" => "d",
+            _ => "t",
+        },
         _ => "t",
     }
 }
@@ -1342,29 +1341,170 @@ fn get_real_column_for_keyword<'a>(table: &str, field: &'a str) -> &'a str {
 /// the main table's own redundant Name columns with wrong data.
 fn get_join_fields_for_table(table: &str) -> Vec<&'static str> {
     match table {
-        "tBas_Goods" => vec!["GDSTypeName", "GDSPropertyName", "BrandName", "BrandABC", "BrandNote", "GDSKindName", "DeaTypeName", "SuppName", "UnitName", "StkName", "EUserName"],
+        "tBas_Goods" => vec![
+            "GDSTypeName",
+            "GDSPropertyName",
+            "BrandName",
+            "BrandABC",
+            "BrandNote",
+            "GDSKindName",
+            "DeaTypeName",
+            "SuppName",
+            "UnitName",
+            "StkName",
+            "EUserName",
+        ],
         "tBas_Supp" => vec!["SuppTypeName", "DeaTypeName", "EmpName", "EUserName"],
         "tBas_Cust" => vec!["CustTypeName", "AreaName", "EmpName", "EUserName"],
         "tBas_Emp" => vec!["DeptName", "DutyName", "StkName", "EUserName"],
         "tBas_Stock" => vec!["SalEmpName", "EUserName", "ParentStkName"],
-        "tPur_Order" | "tPur_Inv" | "tPur_Return" => vec!["SuppName", "DeptName", "EmpName", "StkName", "EUserName", "AUserName", "SUserName"],
+        "tPur_Order" | "tPur_Inv" | "tPur_Return" => vec![
+            "SuppName",
+            "DeptName",
+            "EmpName",
+            "StkName",
+            "EUserName",
+            "AUserName",
+            "SUserName",
+        ],
         "tPur_Quote" => vec!["SuppName", "EmpName", "EUserName", "AUserName", "SUserName"],
         "tPur_AdjPrice" => vec!["EmpName", "EUserName", "AUserName", "SUserName"],
-        "tSal_Order" | "tSal_Inv" => vec!["CustName", "DeptName", "EmpName", "StkName", "EUserName", "AUserName", "SUserName"],
-        "tSal_Quote" => vec!["CustName", "EmpName", "DeptName", "StkName", "EUserName", "AUserName", "SUserName"],
+        "tSal_Order" | "tSal_Inv" => vec![
+            "CustName",
+            "DeptName",
+            "EmpName",
+            "StkName",
+            "EUserName",
+            "AUserName",
+            "SUserName",
+        ],
+        "tSal_Quote" => vec![
+            "CustName",
+            "EmpName",
+            "DeptName",
+            "StkName",
+            "EUserName",
+            "AUserName",
+            "SUserName",
+        ],
         "tSal_AdjPrice" => vec!["EmpName", "DeptName", "EUserName", "AUserName", "SUserName"],
-        "tStk_IO" => vec!["SuppName", "CustName", "DeptName", "EmpName", "StkName", "EUserName", "AUserName", "SUserName"],
-        "tStk_Move" => vec!["FromStkName", "ToStkName", "EmpName", "EUserName", "AUserName", "SUserName"],
-        "tStk_ReplenishApply" | "tStk_StockCycle" => vec!["StkName", "EmpName", "EUserName", "AUserName", "SUserName"],
-        "tStk_Qty" => vec!["StkName", "GDSDesc", "GDSSpec", "GDSNO", "BarCode", "AInPrice", "BPrice", "SPrice", "UnitNO", "GDSTypeName", "BrandName", "BrandABC", "BrandNote", "UnitName", "WarnQty"],
-        "tStk_Stock" => vec!["StkName", "StkCode", "GDSNO", "GDSDesc", "GDSSpec", "BarCode", "AInPrice", "BPrice", "SPrice", "UnitNO", "WarnQty", "GDSStateNO", "State", "GDSTypeID", "BrandID", "SuppID", "GDSTypeName", "BrandName", "BrandABC", "BrandNote", "UnitName", "SuppName"],
-        "tAcc_PayOut" => vec!["SuppName", "EmpName", "DeptName", "StkName", "EUserName", "AUserName", "SUserName"],
-        "tAcc_PayIn" => vec!["CustName", "EmpName", "DeptName", "StkName", "EUserName", "AUserName", "SUserName"],
-        "tFin_Payment" => vec!["SuppName", "EmpName", "DeptName", "StkName", "EUserName", "AUserName", "SUserName"],
-        "tFin_Receipt" => vec!["CustName", "EmpName", "DeptName", "StkName", "EUserName", "AUserName", "SUserName"],
+        "tStk_IO" => vec![
+            "SuppName",
+            "CustName",
+            "DeptName",
+            "EmpName",
+            "StkName",
+            "EUserName",
+            "AUserName",
+            "SUserName",
+        ],
+        "tStk_Move" => vec![
+            "FromStkName",
+            "ToStkName",
+            "EmpName",
+            "EUserName",
+            "AUserName",
+            "SUserName",
+        ],
+        "tStk_ReplenishApply" | "tStk_StockCycle" => {
+            vec!["StkName", "EmpName", "EUserName", "AUserName", "SUserName"]
+        }
+        "tStk_Qty" => vec![
+            "StkName",
+            "GDSDesc",
+            "GDSSpec",
+            "GDSNO",
+            "BarCode",
+            "AInPrice",
+            "BPrice",
+            "SPrice",
+            "UnitNO",
+            "GDSTypeName",
+            "BrandName",
+            "BrandABC",
+            "BrandNote",
+            "UnitName",
+            "WarnQty",
+        ],
+        "tStk_Stock" => vec![
+            "StkName",
+            "StkCode",
+            "GDSNO",
+            "GDSDesc",
+            "GDSSpec",
+            "BarCode",
+            "AInPrice",
+            "BPrice",
+            "SPrice",
+            "UnitNO",
+            "WarnQty",
+            "GDSStateNO",
+            "State",
+            "GDSTypeID",
+            "BrandID",
+            "SuppID",
+            "GDSTypeName",
+            "BrandName",
+            "BrandABC",
+            "BrandNote",
+            "UnitName",
+            "SuppName",
+        ],
+        "tAcc_PayOut" => vec![
+            "SuppName",
+            "EmpName",
+            "DeptName",
+            "StkName",
+            "EUserName",
+            "AUserName",
+            "SUserName",
+        ],
+        "tAcc_PayIn" => vec![
+            "CustName",
+            "EmpName",
+            "DeptName",
+            "StkName",
+            "EUserName",
+            "AUserName",
+            "SUserName",
+        ],
+        "tFin_Payment" => vec![
+            "SuppName",
+            "EmpName",
+            "DeptName",
+            "StkName",
+            "EUserName",
+            "AUserName",
+            "SUserName",
+        ],
+        "tFin_Receipt" => vec![
+            "CustName",
+            "EmpName",
+            "DeptName",
+            "StkName",
+            "EUserName",
+            "AUserName",
+            "SUserName",
+        ],
         "tArd_PD" => vec!["SuppName", "DeptName"],
-        "tArd_AR" => vec!["StkName", "EmpName", "GoodsGDSNO", "GoodsGDSDesc", "GoodsUnitNO", "UnitName", "BrandName"],
-        "tFin_CashFlow" => vec!["SuppName", "CustName", "EmpName", "DeptName", "EUserName", "AUserName", "SUserName"],
+        "tArd_AR" => vec![
+            "StkName",
+            "EmpName",
+            "GoodsGDSNO",
+            "GoodsGDSDesc",
+            "GoodsUnitNO",
+            "UnitName",
+            "BrandName",
+        ],
+        "tFin_CashFlow" => vec![
+            "SuppName",
+            "CustName",
+            "EmpName",
+            "DeptName",
+            "EUserName",
+            "AUserName",
+            "SUserName",
+        ],
         "tSys_OperHis" => vec!["OperatorName"], // tSys_OperLog 不存在
         "tSys_Msg" => vec!["ToUserName", "FromUserName"],
         "tSys_UserRule" => vec!["EmpName", "RuleName"],
@@ -1379,13 +1519,54 @@ fn get_join_fields_for_table(table: &str) -> Vec<&'static str> {
         "tSal_VIP" => vec!["StkName"],
         "tStk_Tran" => vec!["StkName", "EmpName", "EUserName", "AUserName", "SUserName"],
         // 白名单使用 SQL 返回给前端的字段名（含 AS 别名），不是数据库原字段名
-        "tOnline_Goods" => vec!["GoodsGDSDesc", "GoodsGDSNO", "GoodsGDSSpec", "GoodsBarCode", "StkName"],
+        "tOnline_Goods" => vec![
+            "GoodsGDSDesc",
+            "GoodsGDSNO",
+            "GoodsGDSSpec",
+            "GoodsBarCode",
+            "StkName",
+        ],
         "tOnline_Order" => vec!["EmpName"],
         "tOnline_OrderDetail" => vec!["GoodsGDSDesc", "GoodsGDSNO"],
-        "tPur_OrderDetail" | "tSal_OrderDetail" | "tSal_InvDetail" | "tStk_IODetail" | "tStk_MoveDetail"
-        | "tStk_ReplenishApplyDetail" | "tStk_StockCycleDetail" | "tPur_QuoteDetail"
-        | "tPur_AdjPriceDetail" | "tSal_AdjPriceDetail" | "tSal_QuoteDetail" | "tStk_ReplenishApplyDtl"
-        | "tStk_TranDetail" => vec!["GDSDesc", "GDSNO", "GDSSpec", "UnitName", "BrandID", "BrandName", "BrandABC", "BrandNote", "GoodsGDSNO", "GoodsGDSDesc", "IONo", "Kind", "IoDate", "IOState", "IOSuppID", "IOCustID", "IOEmpID", "IODeptID", "IOStkID", "IONote", "SuppName", "CustName", "EmpName", "DeptName", "StkName"],
+        "tPur_OrderDetail"
+        | "tSal_OrderDetail"
+        | "tSal_InvDetail"
+        | "tStk_IODetail"
+        | "tStk_MoveDetail"
+        | "tStk_ReplenishApplyDetail"
+        | "tStk_StockCycleDetail"
+        | "tPur_QuoteDetail"
+        | "tPur_AdjPriceDetail"
+        | "tSal_AdjPriceDetail"
+        | "tSal_QuoteDetail"
+        | "tStk_ReplenishApplyDtl"
+        | "tStk_TranDetail" => vec![
+            "GDSDesc",
+            "GDSNO",
+            "GDSSpec",
+            "UnitName",
+            "BrandID",
+            "BrandName",
+            "BrandABC",
+            "BrandNote",
+            "GoodsGDSNO",
+            "GoodsGDSDesc",
+            "IONo",
+            "Kind",
+            "IoDate",
+            "IOState",
+            "IOSuppID",
+            "IOCustID",
+            "IOEmpID",
+            "IODeptID",
+            "IOStkID",
+            "IONote",
+            "SuppName",
+            "CustName",
+            "EmpName",
+            "DeptName",
+            "StkName",
+        ],
         "tOA_Notice" => vec!["CreatorName"],
         "tOA_Workflow" => vec!["CreatorName", "ApproverName"],
         "tOA_Email" => vec!["SenderName"],
@@ -1549,29 +1730,55 @@ fn is_valid_identifier(s: &str) -> bool {
 fn is_sensitive_field(field: &str) -> bool {
     let f = field.to_ascii_lowercase();
     const SENSITIVE_PATTERNS: &[&str] = &[
-        "password", "passwd", "pwd", "pwdstr",
-        "secret", "jwt_secret", "api_key", "apikey",
-        "salt", "token", "accesstoken", "refreshtoken",
-        "private_key", "privatekey",
+        "password",
+        "passwd",
+        "pwd",
+        "pwdstr",
+        "secret",
+        "jwt_secret",
+        "api_key",
+        "apikey",
+        "salt",
+        "token",
+        "accesstoken",
+        "refreshtoken",
+        "private_key",
+        "privatekey",
     ];
     SENSITIVE_PATTERNS.iter().any(|p| f.contains(p))
 }
 
 /// 校验查询参数的表名、keyword_fields、wheres.field，防止 SQL 注入。
-fn validate_query_params(table: &str, keyword_fields: &Option<Vec<String>>, wheres: &Option<Vec<WhereCondition>>) -> std::result::Result<(), String> {
-    if table.is_empty() { return Err(String::from("表名不能为空")); }
-    if !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') { return Err(String::from("表名只能包含字母、数字、下划线")); }
+fn validate_query_params(
+    table: &str,
+    keyword_fields: &Option<Vec<String>>,
+    wheres: &Option<Vec<WhereCondition>>,
+) -> std::result::Result<(), String> {
+    if table.is_empty() {
+        return Err(String::from("表名不能为空"));
+    }
+    if !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(String::from("表名只能包含字母、数字、下划线"));
+    }
     if let Some(fields) = keyword_fields {
         for f in fields {
-            if !is_valid_identifier(f) { return Err(format!("非法字段名: {}", f)); }
+            if !is_valid_identifier(f) {
+                return Err(format!("非法字段名: {}", f));
+            }
             // P2-19：禁止查询敏感字段（防止通过 keyword 搜索探测密码字段值）
-            if is_sensitive_field(f) { return Err(format!("字段 {} 不允许查询", f)); }
+            if is_sensitive_field(f) {
+                return Err(format!("字段 {} 不允许查询", f));
+            }
         }
     }
     if let Some(wc_list) = wheres {
         for wc in wc_list {
-            if !is_valid_identifier(&wc.field) { return Err(format!("非法字段名: {}", wc.field)); }
-            if is_sensitive_field(&wc.field) { return Err(format!("字段 {} 不允许查询", wc.field)); }
+            if !is_valid_identifier(&wc.field) {
+                return Err(format!("非法字段名: {}", wc.field));
+            }
+            if is_sensitive_field(&wc.field) {
+                return Err(format!("字段 {} 不允许查询", wc.field));
+            }
         }
     }
     Ok(())
@@ -1580,8 +1787,12 @@ fn validate_query_params(table: &str, keyword_fields: &Option<Vec<String>>, wher
 /// 校验 primary_key / state_field 等标识符参数，防止 SQL 注入。
 fn validate_identifiers(idents: &[&str]) -> std::result::Result<(), String> {
     for s in idents {
-        if s.is_empty() { return Err(String::from("主键/状态字段名不能为空")); }
-        if !is_valid_identifier(s) { return Err(format!("非法字段名: {}", s)); }
+        if s.is_empty() {
+            return Err(String::from("主键/状态字段名不能为空"));
+        }
+        if !is_valid_identifier(s) {
+            return Err(format!("非法字段名: {}", s));
+        }
     }
     Ok(())
 }
@@ -1603,7 +1814,11 @@ fn build_base_query(
         // 只显示已删除/已停用行
         if let Some(state_field) = get_state_field_for_table(table) {
             // tStk_Stock / tStk_Qty 的 State 来自 tBas_Goods (别名 g)
-            let prefix = if table == "tStk_Stock" || table == "tStk_Qty" { "g" } else { "t" };
+            let prefix = if table == "tStk_Stock" || table == "tStk_Qty" {
+                "g"
+            } else {
+                "t"
+            };
             match state_field {
                 "Used" => {
                     conditions.push("t.[Used] = 'N'".to_string());
@@ -1616,7 +1831,11 @@ fn build_base_query(
     } else if !include_deleted {
         if let Some(state_field) = get_state_field_for_table(table) {
             // tStk_Stock / tStk_Qty 的 State 来自 tBas_Goods (别名 g)
-            let prefix = if table == "tStk_Stock" || table == "tStk_Qty" { "g" } else { "t" };
+            let prefix = if table == "tStk_Stock" || table == "tStk_Qty" {
+                "g"
+            } else {
+                "t"
+            };
             match state_field {
                 "Used" => {
                     conditions.push("t.[Used] <> 'N'".to_string());
@@ -1624,7 +1843,10 @@ fn build_base_query(
                 _ => {
                     // ★ State=NULL 的记录也要显示（SQL Server 中 NULL <> 'D' 结果为 NULL，会被过滤）
                     //   否则会出现"编码已存在但查不到"的脏数据问题（唯一索引仍拦截 INSERT）
-                    conditions.push(format!("({}.[State] <> 'D' OR {}.[State] IS NULL)", prefix, prefix));
+                    conditions.push(format!(
+                        "({}.[State] <> 'D' OR {}.[State] IS NULL)",
+                        prefix, prefix
+                    ));
                 }
             }
         }
@@ -1634,14 +1856,18 @@ fn build_base_query(
     //   （LEFT JOIN tBas_Goods 后 g.* 全为 NULL，前端显示为空行）
     //   数据库已删除历史脏数据，此处加防御性过滤防止再次出现
     if table == "tStk_Stock" || table == "tStk_Qty" {
-        conditions.push("(t.[GDSID] IS NOT NULL AND t.[GDSID] <> '00000000-0000-0000-0000-000000000000')".to_string());
+        conditions.push(
+            "(t.[GDSID] IS NOT NULL AND t.[GDSID] <> '00000000-0000-0000-0000-000000000000')"
+                .to_string(),
+        );
     }
 
     if let Some(kw) = keyword {
         if !kw.is_empty() {
             if let Some(fields) = keyword_fields {
                 if !fields.is_empty() {
-                    let kw_conditions: Vec<String> = fields.iter()
+                    let kw_conditions: Vec<String> = fields
+                        .iter()
                         .filter(|f| is_valid_identifier(f))
                         .map(|f| {
                             let pidx = param_idx;
@@ -1650,7 +1876,10 @@ fn build_base_query(
                             let prefix = get_field_prefix_for_table(table, f);
                             // keyword 搜索时使用 JOIN 表的真实列名（如 fs.[StkName]），不能用 SELECT 别名（如 fs.[FromStkName]）
                             let real_col = get_real_column_for_keyword(table, f);
-                            format!("CAST({}.[{}] AS varchar(max)) LIKE @p{}", prefix, real_col, pidx)
+                            format!(
+                                "CAST({}.[{}] AS varchar(max)) LIKE @p{}",
+                                prefix, real_col, pidx
+                            )
                         })
                         .collect();
                     if !kw_conditions.is_empty() {
@@ -1694,7 +1923,9 @@ fn build_base_query(
             //   仅显示商品资料默认仓库 = 系统默认仓库(IsDefault=1 的 tBas_Stock) 的商品
             //   避免商品默认仓库是 109 赠品仓 等非默认仓库的商品干扰预警
             if table == "tStk_Stock" && wc.field == "IsDefaultInGoods" {
-                let cond = "(g.[StkID] IN (SELECT [StkID] FROM [tBas_Stock] WHERE [IsDefault] = 1))".to_string();
+                let cond =
+                    "(g.[StkID] IN (SELECT [StkID] FROM [tBas_Stock] WHERE [IsDefault] = 1))"
+                        .to_string();
                 conditions.push(cond);
                 continue;
             }
@@ -1724,31 +1955,33 @@ fn build_base_query(
                 // IN 操作符：value 可以是数组或逗号分隔的字符串
                 // 不预分配 pidx，按需分配参数索引
                 let values: Vec<String> = match &wc.value {
-                    serde_json::Value::Array(arr) => {
-                        arr.iter().filter_map(|v| {
-                            match v {
-                                serde_json::Value::String(s) => Some(s.clone()),
-                                serde_json::Value::Number(n) => Some(n.to_string()),
-                                _ => None,
-                            }
-                        }).collect()
-                    }
-                    serde_json::Value::String(s) => {
-                        s.split(',').map(|x| x.trim().trim_matches('\'').trim_matches('"').to_string())
-                            .filter(|x| !x.is_empty())
-                            .collect()
-                    }
+                    serde_json::Value::Array(arr) => arr
+                        .iter()
+                        .filter_map(|v| match v {
+                            serde_json::Value::String(s) => Some(s.clone()),
+                            serde_json::Value::Number(n) => Some(n.to_string()),
+                            _ => None,
+                        })
+                        .collect(),
+                    serde_json::Value::String(s) => s
+                        .split(',')
+                        .map(|x| x.trim().trim_matches('\'').trim_matches('"').to_string())
+                        .filter(|x| !x.is_empty())
+                        .collect(),
                     _ => Vec::new(),
                 };
                 if values.is_empty() {
                     conditions.push("1=0".to_string());
                 } else {
-                    let placeholders: Vec<String> = values.iter().map(|v| {
-                        params.push(Some(v.clone()));
-                        let p = param_idx;
-                        param_idx += 1;
-                        format!("@p{}", p)
-                    }).collect();
+                    let placeholders: Vec<String> = values
+                        .iter()
+                        .map(|v| {
+                            params.push(Some(v.clone()));
+                            let p = param_idx;
+                            param_idx += 1;
+                            format!("@p{}", p)
+                        })
+                        .collect();
                     conditions.push(format!("{} IN ({})", col_expr, placeholders.join(", ")));
                 }
             } else {
@@ -1784,8 +2017,14 @@ fn build_base_query(
     let (select_cols, join_clause) = if table == "tBas_Goods" {
         if let Some(wid) = warehouse_id {
             if !wid.is_empty() {
-                let extra_select = format!("{}, ISNULL(st.[Qty], 0) AS [StockQty], ISNULL(st.[QQty], 0) AS [QQty]", select_cols);
-                let extra_join = format!("{} LEFT JOIN [tStk_Stock] st ON t.[GDSID] = st.[GDSID] AND st.[StkID] = @p{}", join_clause, param_idx);
+                let extra_select = format!(
+                    "{}, ISNULL(st.[Qty], 0) AS [StockQty], ISNULL(st.[QQty], 0) AS [QQty]",
+                    select_cols
+                );
+                let extra_join = format!(
+                    "{} LEFT JOIN [tStk_Stock] st ON t.[GDSID] = st.[GDSID] AND st.[StkID] = @p{}",
+                    join_clause, param_idx
+                );
                 params.push(Some(wid.clone()));
                 (extra_select, extra_join)
             } else {
@@ -1806,9 +2045,20 @@ fn build_base_query(
         }
     } else {
         if join_clause.is_empty() {
-            format!("SELECT {} FROM [{}] t WHERE {}", select_cols, table, conditions.join(" AND "))
+            format!(
+                "SELECT {} FROM [{}] t WHERE {}",
+                select_cols,
+                table,
+                conditions.join(" AND ")
+            )
         } else {
-            format!("SELECT {} FROM [{}] t {} WHERE {}", select_cols, table, join_clause, conditions.join(" AND "))
+            format!(
+                "SELECT {} FROM [{}] t {} WHERE {}",
+                select_cols,
+                table,
+                join_clause,
+                conditions.join(" AND ")
+            )
         }
     };
 
@@ -1821,15 +2071,28 @@ pub async fn generic_query(
     Json(params): Json<GenericQueryParams>,
 ) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>> {
     if params.table.is_empty() {
-        return Ok(Json(ApiResponse::err_with_code("表名不能为空", VALIDATION_TABLE_INVALID)));
+        return Ok(Json(ApiResponse::err_with_code(
+            "表名不能为空",
+            VALIDATION_TABLE_INVALID,
+        )));
     }
-    if !params.table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        return Ok(Json(ApiResponse::err_with_code("表名只能包含字母、数字、下划线", VALIDATION_TABLE_INVALID)));
+    if !params
+        .table
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return Ok(Json(ApiResponse::err_with_code(
+            "表名只能包含字母、数字、下划线",
+            VALIDATION_TABLE_INVALID,
+        )));
     }
     // 系统表黑名单校验（admin 放行）
     if is_table_blacklisted(&params.table, &claims) {
         return Ok(Json(ApiResponse::err_with_code(
-            &format!("系统表 [{}] 禁止通过通用接口查询，请使用专用接口", params.table),
+            &format!(
+                "系统表 [{}] 禁止通过通用接口查询，请使用专用接口",
+                params.table
+            ),
             "PERMISSION_DENIED",
         )));
     }
@@ -1851,7 +2114,10 @@ pub async fn generic_query(
                 return Ok(Json(ApiResponse::err(&format!("非法字段名: {}", wc.field))));
             }
             if is_sensitive_field(&wc.field) {
-                return Ok(Json(ApiResponse::err(&format!("字段 {} 不允许查询", wc.field))));
+                return Ok(Json(ApiResponse::err(&format!(
+                    "字段 {} 不允许查询",
+                    wc.field
+                ))));
             }
         }
     }
@@ -1864,7 +2130,10 @@ pub async fn generic_query(
     if params.table == "tStk_Stock" {
         if let Some(ref wc_list) = params.wheres {
             for wc in wc_list {
-                eprintln!("[DEBUG tStk_Stock] where: field={}, op={}, value={}", wc.field, wc.op, wc.value);
+                eprintln!(
+                    "[DEBUG tStk_Stock] where: field={}, op={}, value={}",
+                    wc.field, wc.op, wc.value
+                );
             }
         } else {
             eprintln!("[DEBUG tStk_Stock] no wheres");
@@ -1887,69 +2156,122 @@ pub async fn generic_query(
 
     // 性能诊断：记录各阶段耗时
     let t_start = std::time::Instant::now();
-    let built = build_base_query(&params.table, &params.keyword, &params.keyword_fields, &params.wheres, params.include_deleted.unwrap_or(false), params.only_deleted.unwrap_or(false), &params.warehouse_id);
+    let built = build_base_query(
+        &params.table,
+        &params.keyword,
+        &params.keyword_fields,
+        &params.wheres,
+        params.include_deleted.unwrap_or(false),
+        params.only_deleted.unwrap_or(false),
+        &params.warehouse_id,
+    );
     let t_build = t_start.elapsed();
 
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", built.sql);
-    let param_refs: Vec<&dyn tiberius::ToSql> = built.params.iter()
+    let param_refs: Vec<&dyn tiberius::ToSql> = built
+        .params
+        .iter()
         .map(|v| v as &dyn tiberius::ToSql)
         .collect();
     let mut total: i32 = 0;
     let t_count_start = std::time::Instant::now();
     match conn.query(&count_sql, &param_refs).await {
-        Ok(count_stream) => {
-            match count_stream.into_row().await {
-                Ok(Some(row)) => {
-                    let v = try_get_value(&row, "cnt");
-                    total = match v {
-                        serde_json::Value::Number(n) => n.as_i64().unwrap_or(0) as i32,
-                        serde_json::Value::String(s) => s.parse::<i32>().unwrap_or(0),
-                        _ => 0,
-                    };
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    tracing::error!("[generic_query] COUNT 失败 table={} err={} sql={}", params.table, e, count_sql);
-                    let err_msg = format!("查询表 [{}] 失败（可能是表不存在或字段错误），详情见服务端日志", params.table);
-                    return Ok(Json(ApiResponse::err(&err_msg)));
-                }
+        Ok(count_stream) => match count_stream.into_row().await {
+            Ok(Some(row)) => {
+                let v = try_get_value(&row, "cnt");
+                total = match v {
+                    serde_json::Value::Number(n) => n.as_i64().unwrap_or(0) as i32,
+                    serde_json::Value::String(s) => s.parse::<i32>().unwrap_or(0),
+                    _ => 0,
+                };
             }
-        }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::error!(
+                    "[generic_query] COUNT 失败 table={} err={} sql={}",
+                    params.table,
+                    e,
+                    count_sql
+                );
+                let err_msg = format!(
+                    "查询表 [{}] 失败（可能是表不存在或字段错误），详情见服务端日志",
+                    params.table
+                );
+                return Ok(Json(ApiResponse::err(&err_msg)));
+            }
+        },
         Err(e) => {
-            tracing::error!("[generic_query] COUNT 失败 table={} err={} sql={}", params.table, e, count_sql);
-            let err_msg = format!("查询表 [{}] 失败（请确认表是否存在），详情见服务端日志", params.table);
+            tracing::error!(
+                "[generic_query] COUNT 失败 table={} err={} sql={}",
+                params.table,
+                e,
+                count_sql
+            );
+            let err_msg = format!(
+                "查询表 [{}] 失败（请确认表是否存在），详情见服务端日志",
+                params.table
+            );
             return Ok(Json(ApiResponse::err(&err_msg)));
         }
     }
     let t_count = t_count_start.elapsed();
 
-    let paginated_sql = build_pagination_sql_with_sort(&built.sql, page, page_size, params.sort_prop.as_deref(), params.sort_order.as_deref());
+    let paginated_sql = build_pagination_sql_with_sort(
+        &built.sql,
+        page,
+        page_size,
+        params.sort_prop.as_deref(),
+        params.sort_order.as_deref(),
+    );
     let t_data_start = std::time::Instant::now();
     let result = match conn.query(&paginated_sql, &param_refs).await {
-        Ok(data_stream) => {
-            match data_stream.into_first_result().await {
-                Ok(rows) => {
-                    let row_count = rows.len();
-                    let t_serialize_start = std::time::Instant::now();
-                    let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
-                    let t_serialize = t_serialize_start.elapsed();
-                    let t_data = t_data_start.elapsed();
-                    tracing::info!(
-                        "[generic_query] 性能 table={} page={} page_size={} total={} rows={} | build={:?} count={:?} data={:?} (含序列化 {:?})",
-                        params.table, page, page_size, total, row_count,
-                        t_build, t_count, t_data, t_serialize
-                    );
-                    Ok(Json(ApiResponse::ok_paginated(data, total as u64, page, page_size)))
-                }
-                Err(e) => {
-                    tracing::error!("[generic_query] 数据读取失败 table={} err={} sql={}", params.table, e, paginated_sql);
-                    Ok(Json(ApiResponse::err("读取数据失败，详情见服务端日志")))
-                }
+        Ok(data_stream) => match data_stream.into_first_result().await {
+            Ok(rows) => {
+                let row_count = rows.len();
+                let t_serialize_start = std::time::Instant::now();
+                let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
+                let t_serialize = t_serialize_start.elapsed();
+                let t_data = t_data_start.elapsed();
+                tracing::info!(
+                    "[generic_query] 性能 table={} page={} page_size={} total={} rows={} | build={:?} count={:?} data={:?} (含序列化 {:?})",
+                    params.table,
+                    page,
+                    page_size,
+                    total,
+                    row_count,
+                    t_build,
+                    t_count,
+                    t_data,
+                    t_serialize
+                );
+                Ok(Json(ApiResponse::ok_paginated(
+                    data,
+                    total as u64,
+                    page,
+                    page_size,
+                )))
             }
-        }
+            Err(e) => {
+                tracing::error!(
+                    "[generic_query] 数据读取失败 table={} err={} sql={}",
+                    params.table,
+                    e,
+                    paginated_sql
+                );
+                Ok(Json(ApiResponse::err("读取数据失败，详情见服务端日志")))
+            }
+        },
         Err(e) => {
-            tracing::error!("[generic_query] 数据查询失败 table={} err={} sql={}", params.table, e, paginated_sql);
-            Ok(Json(ApiResponse::err(&format!("执行查询失败（表[{}]可能不存在），详情见服务端日志", params.table))))
+            tracing::error!(
+                "[generic_query] 数据查询失败 table={} err={} sql={}",
+                params.table,
+                e,
+                paginated_sql
+            );
+            Ok(Json(ApiResponse::err(&format!(
+                "执行查询失败（表[{}]可能不存在），详情见服务端日志",
+                params.table
+            ))))
         }
     };
     result
@@ -1975,15 +2297,30 @@ pub async fn generic_export(
         Err(e) => return Json(ApiResponse::err(&format!("数据库连接失败: {}", e))),
     };
 
-    let built = build_base_query(&params.table, &params.keyword, &params.keyword_fields, &params.wheres, params.include_deleted.unwrap_or(false), params.only_deleted.unwrap_or(false), &params.warehouse_id);
+    let built = build_base_query(
+        &params.table,
+        &params.keyword,
+        &params.keyword_fields,
+        &params.wheres,
+        params.include_deleted.unwrap_or(false),
+        params.only_deleted.unwrap_or(false),
+        &params.warehouse_id,
+    );
     let export_sql = format!("SELECT TOP 10000 * FROM ({}) t", built.sql);
-    let param_refs: Vec<&dyn tiberius::ToSql> = built.params.iter()
+    let param_refs: Vec<&dyn tiberius::ToSql> = built
+        .params
+        .iter()
         .map(|v| v as &dyn tiberius::ToSql)
         .collect();
 
     let data_stream = match conn.query(&export_sql, &param_refs).await {
         Ok(s) => s,
-        Err(e) => return Json(ApiResponse::err(&format!("导出查询失败 [{}]: {}", params.table, e))),
+        Err(e) => {
+            return Json(ApiResponse::err(&format!(
+                "导出查询失败 [{}]: {}",
+                params.table, e
+            )));
+        }
     };
     let rows = match data_stream.into_first_result().await {
         Ok(r) => r,
@@ -1995,9 +2332,15 @@ pub async fn generic_export(
     let row_count = data.len();
     let export_remark = format!("导出{}条记录", row_count);
     let _ = inventory_ledger::record_oper(
-        &mut conn, "EXPORT", &params.table, "",
-        &claims.user_code, None, Some(&export_remark),
-    ).await;
+        &mut conn,
+        "EXPORT",
+        &params.table,
+        "",
+        &claims.user_code,
+        None,
+        Some(&export_remark),
+    )
+    .await;
 
     Json(ApiResponse::ok(data))
 }
@@ -2038,9 +2381,7 @@ pub async fn generic_cleanup_orphan_stock(
     };
 
     // 参数化 IN 子句
-    let placeholders: Vec<String> = (1..=params.ids.len())
-        .map(|i| format!("@p{}", i))
-        .collect();
+    let placeholders: Vec<String> = (1..=params.ids.len()).map(|i| format!("@p{}", i)).collect();
     let in_clause = placeholders.join(",");
 
     // 先查询将要清理的记录（用于操作日志和返回给前端）
@@ -2061,56 +2402,44 @@ pub async fn generic_cleanup_orphan_stock(
     let mut orphan_records: Vec<serde_json::Value> = Vec::new();
     let mut orphan_keys: Vec<(String, String)> = Vec::new(); // (StkID, GDSID)
     match conn.query(&select_sql, &id_param_refs).await {
-        Ok(stream) => {
-            match stream.into_results().await {
-                Ok(result_sets) => {
-                    for result_set in result_sets {
-                        for row in result_set {
-                            let stk_id = match try_get_value(&row, "StkID") {
-                                serde_json::Value::String(s) => s,
-                                _ => String::new(),
-                            };
-                            let gds_id = match try_get_value(&row, "GDSID") {
-                                serde_json::Value::String(s) => s,
-                                _ => String::new(),
-                            };
-                            let stk_name = match try_get_value(&row, "StkName") {
-                                serde_json::Value::String(s) => s,
-                                _ => String::new(),
-                            };
-                            let gds_name = match try_get_value(&row, "GDSDesc") {
-                                serde_json::Value::String(s) => s,
-                                _ => String::new(),
-                            };
-                            let qty = match try_get_value(&row, "Qty") {
-                                serde_json::Value::Number(n) => n.as_f64().unwrap_or(0.0),
-                                _ => 0.0,
-                            };
-                            orphan_keys.push((stk_id.clone(), gds_id.clone()));
-                            orphan_records.push(serde_json::json!({
-                                "StkID": stk_id,
-                                "GDSID": gds_id,
-                                "StkName": stk_name,
-                                "GDSDesc": gds_name,
-                                "Qty": qty,
-                            }));
-                        }
+        Ok(stream) => match stream.into_results().await {
+            Ok(result_sets) => {
+                for result_set in result_sets {
+                    for row in result_set {
+                        let stk_id = match try_get_value(&row, "StkID") {
+                            serde_json::Value::String(s) => s,
+                            _ => String::new(),
+                        };
+                        let gds_id = match try_get_value(&row, "GDSID") {
+                            serde_json::Value::String(s) => s,
+                            _ => String::new(),
+                        };
+                        let stk_name = match try_get_value(&row, "StkName") {
+                            serde_json::Value::String(s) => s,
+                            _ => String::new(),
+                        };
+                        let gds_name = match try_get_value(&row, "GDSDesc") {
+                            serde_json::Value::String(s) => s,
+                            _ => String::new(),
+                        };
+                        let qty = match try_get_value(&row, "Qty") {
+                            serde_json::Value::Number(n) => n.as_f64().unwrap_or(0.0),
+                            _ => 0.0,
+                        };
+                        orphan_keys.push((stk_id.clone(), gds_id.clone()));
+                        orphan_records.push(serde_json::json!({
+                            "StkID": stk_id,
+                            "GDSID": gds_id,
+                            "StkName": stk_name,
+                            "GDSDesc": gds_name,
+                            "Qty": qty,
+                        }));
                     }
                 }
-                Err(e) => {
-                    return Json(ApiResponse::err(&format!(
-                        "查询孤儿库存记录失败: {}",
-                        e
-                    )))
-                }
             }
-        }
-        Err(e) => {
-            return Json(ApiResponse::err(&format!(
-                "查询孤儿库存记录失败: {}",
-                e
-            )))
-        }
+            Err(e) => return Json(ApiResponse::err(&format!("查询孤儿库存记录失败: {}", e))),
+        },
+        Err(e) => return Json(ApiResponse::err(&format!("查询孤儿库存记录失败: {}", e))),
     }
 
     if orphan_keys.is_empty() {
@@ -2137,7 +2466,7 @@ pub async fn generic_cleanup_orphan_stock(
             return Json(ApiResponse::err(&format!(
                 "清理 tStk_Stock 记录失败: {}",
                 e
-            )))
+            )));
         }
     }
 
@@ -2190,20 +2519,36 @@ pub async fn generic_delete(
     Extension(claims): Extension<Claims>,
     Json(params): Json<GenericDeleteParams>,
 ) -> Json<ApiResponse<serde_json::Value>> {
-    if !params.table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        return Json(ApiResponse::err_with_code("表名只能包含字母、数字、下划线", VALIDATION_TABLE_INVALID));
+    if !params
+        .table
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return Json(ApiResponse::err_with_code(
+            "表名只能包含字母、数字、下划线",
+            VALIDATION_TABLE_INVALID,
+        ));
     }
     // 系统表黑名单校验（admin 放行）
     if is_table_blacklisted(&params.table, &claims) {
         return Json(ApiResponse::err_with_code(
-            &format!("系统表 [{}] 禁止通过通用接口删除，请使用专用接口", params.table),
+            &format!(
+                "系统表 [{}] 禁止通过通用接口删除，请使用专用接口",
+                params.table
+            ),
             "PERMISSION_DENIED",
         ));
     }
     if let Err(msg) = validate_identifiers(&[&params.primary_key]) {
         return Json(ApiResponse::err(&msg));
     }
-    if let Some(ref sf) = params.state_field { if !sf.is_empty() { if let Err(msg) = validate_identifiers(&[sf]) { return Json(ApiResponse::err(&msg)); } } }
+    if let Some(ref sf) = params.state_field {
+        if !sf.is_empty() {
+            if let Err(msg) = validate_identifiers(&[sf]) {
+                return Json(ApiResponse::err(&msg));
+            }
+        }
+    }
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
         Err(e) => return Json(ApiResponse::err(&format!("数据库连接失败: {}", e))),
@@ -2217,14 +2562,24 @@ pub async fn generic_delete(
     if params.table.eq_ignore_ascii_case("tBas_Emp") {
         for id in &params.ids {
             if is_admin_employee(&mut conn, id).await {
-                return Json(ApiResponse::err("禁止删除/作废 admin 账号（系统管理员），避免系统无法登录"));
+                return Json(ApiResponse::err(
+                    "禁止删除/作废 admin 账号（系统管理员），避免系统无法登录",
+                ));
             }
         }
     }
 
     // P0-S4 记录级越权防护：业务单据表（含 EUser 列）只能删除/作废自己创建的记录
     //   admin 全放行；基础资料表（无 EUser）不做此限制
-    if let Err(msg) = check_record_ownership(&mut conn, &params.table, &params.primary_key, &params.ids, &claims).await {
+    if let Err(msg) = check_record_ownership(
+        &mut conn,
+        &params.table,
+        &params.primary_key,
+        &params.ids,
+        &claims,
+    )
+    .await
+    {
         return Json(ApiResponse::err_with_code(&msg, PERMISSION_DENIED_RECORD));
     }
 
@@ -2233,7 +2588,11 @@ pub async fn generic_delete(
     let physical_delete = params.permanent.unwrap_or(false);
 
     if physical_delete {
-        tracing::info!("[彻底删除 v2] permanent=true ids={:?} table={}", params.ids, params.table);
+        tracing::info!(
+            "[彻底删除 v2] permanent=true ids={:?} table={}",
+            params.ids,
+            params.table
+        );
         // 物理删除前：引用检查。若商品已被其它单据/库存引用，强制阻止物理删除，
         // 避免破坏外键完整性。返回被引用的表名 + 引用条数，便于用户清理。
         match check_references_blocking(&mut conn, &params.table, &params.ids, true).await {
@@ -2241,7 +2600,10 @@ pub async fn generic_delete(
                 if !hits.is_empty() {
                     let obj_name = table_cn_name(&params.table);
                     return Json(ApiResponse::err_with_data(
-                        &format!("该{}已被以下数据引用，无法彻底删除，请先清理引用数据后再试。", obj_name),
+                        &format!(
+                            "该{}已被以下数据引用，无法彻底删除，请先清理引用数据后再试。",
+                            obj_name
+                        ),
                         "HARD_DELETE_REFERENCED",
                         serde_json::Value::Array(hits),
                     ));
@@ -2254,15 +2616,26 @@ pub async fn generic_delete(
         // 先查询每条记录的修改前数据快照（删除后无法再查）
         let mut before_snapshots: Vec<(String, Option<String>)> = Vec::new();
         for id in &params.ids {
-            let snap = query_row_snapshot_json(&mut conn, &params.table, &params.primary_key, id).await;
+            let snap =
+                query_row_snapshot_json(&mut conn, &params.table, &params.primary_key, id).await;
             before_snapshots.push((id.clone(), snap));
         }
         // 对于单据表（doc_graph 中定义），调用 hard_delete_doc：已审核单据先回滚库存再删除
         let is_doc_table = crate::metadata::doc_graph::get_doc_meta(&params.table).is_some();
         if is_doc_table {
             for id in &params.ids {
-                if let Err(e) = crate::services::doc_service::hard_delete_doc(&mut conn, &params.table, &params.primary_key, id).await {
-                    return Json(ApiResponse::err(&format!("彻底删除失败 [{}]: {}", params.table, e)));
+                if let Err(e) = crate::services::doc_service::hard_delete_doc(
+                    &mut conn,
+                    &params.table,
+                    &params.primary_key,
+                    id,
+                )
+                .await
+                {
+                    return Json(ApiResponse::err(&format!(
+                        "彻底删除失败 [{}]: {}",
+                        params.table, e
+                    )));
                 }
             }
         } else {
@@ -2274,19 +2647,32 @@ pub async fn generic_delete(
                 );
                 let id_str = id.as_str();
                 if let Err(e) = conn.execute(&sql, &[&id_str]).await {
-                    return Json(ApiResponse::err(&format!("彻底删除失败 [{}]: {}（可能存在 SQL Server 外键约束）", params.table, e)));
+                    return Json(ApiResponse::err(&format!(
+                        "彻底删除失败 [{}]: {}（可能存在 SQL Server 外键约束）",
+                        params.table, e
+                    )));
                 }
             }
         }
         // 记录操作日志：每条 ID 一条（含修改前数据快照）
         for (id, before_json) in &before_snapshots {
             inventory_ledger::record_oper_with_data(
-                &mut conn, "DELETE", &params.table, id,
-                &claims.user_code, None, Some("彻底删除记录"),
-                before_json.as_deref(), None,
-            ).await;
+                &mut conn,
+                "DELETE",
+                &params.table,
+                id,
+                &claims.user_code,
+                None,
+                Some("彻底删除记录"),
+                before_json.as_deref(),
+                None,
+            )
+            .await;
         }
-        return Json(ApiResponse::msg(&format!("成功彻底删除 {} 条记录", params.ids.len())));
+        return Json(ApiResponse::msg(&format!(
+            "成功彻底删除 {} 条记录",
+            params.ids.len()
+        )));
     }
 
     // 软删除：更新状态字段
@@ -2304,18 +2690,31 @@ pub async fn generic_delete(
     // 软删时检查业务引用但不阻止（有库存的商品可以停用，不影响库存数据）
     // 引用信息作为警告附加到成功消息中，便于用户感知
     let mut ref_warnings: Vec<String> = Vec::new();
-    if let Ok(hits) = check_references_blocking(&mut conn, &params.table, &params.ids, false).await {
+    if let Ok(hits) = check_references_blocking(&mut conn, &params.table, &params.ids, false).await
+    {
         if !hits.is_empty() {
-            let label = if state_field == "Used" { "停用" } else { "作废" };
+            let label = if state_field == "Used" {
+                "停用"
+            } else {
+                "作废"
+            };
             let obj_name = table_cn_name(&params.table);
-            let hits_str = hits.iter()
-                .map(|h| format!("  · {} ({}): {} 条",
-                    h.get("label").and_then(|v| v.as_str()).unwrap_or(""),
-                    h.get("table").and_then(|v| v.as_str()).unwrap_or(""),
-                    h.get("count").and_then(|v| v.as_i64()).unwrap_or(0)))
+            let hits_str = hits
+                .iter()
+                .map(|h| {
+                    format!(
+                        "  · {} ({}): {} 条",
+                        h.get("label").and_then(|v| v.as_str()).unwrap_or(""),
+                        h.get("table").and_then(|v| v.as_str()).unwrap_or(""),
+                        h.get("count").and_then(|v| v.as_i64()).unwrap_or(0)
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("\n");
-            ref_warnings.push(format!("该{}已被以下数据引用（{}不影响现有数据）：\n{}", obj_name, label, hits_str));
+            ref_warnings.push(format!(
+                "该{}已被以下数据引用（{}不影响现有数据）：\n{}",
+                obj_name, label, hits_str
+            ));
         }
     }
 
@@ -2331,8 +2730,18 @@ pub async fn generic_delete(
         // 避免出现"单据软删但库存未回滚"的悬空数据
         let is_doc_table = crate::metadata::doc_graph::get_doc_meta(&params.table).is_some();
         if is_doc_table {
-            if let Err(e) = crate::services::doc_service::soft_delete_doc(&mut conn, &params.table, &params.primary_key, id).await {
-                return Json(ApiResponse::err(&format!("软删除失败 [{}]: 库存回滚出错 - {}", params.table, e)));
+            if let Err(e) = crate::services::doc_service::soft_delete_doc(
+                &mut conn,
+                &params.table,
+                &params.primary_key,
+                id,
+            )
+            .await
+            {
+                return Json(ApiResponse::err(&format!(
+                    "软删除失败 [{}]: 库存回滚出错 - {}",
+                    params.table, e
+                )));
             }
         }
         let sql = format!(
@@ -2341,26 +2750,46 @@ pub async fn generic_delete(
         );
         let id_str = id.as_str();
         if let Err(e) = conn.execute(&sql, &[&delete_value, &id_str]).await {
-            return Json(ApiResponse::err(&format!("删除失败 [{}]: {}", params.table, e)));
+            return Json(ApiResponse::err(&format!(
+                "删除失败 [{}]: {}",
+                params.table, e
+            )));
         }
     }
 
-    let label = if state_field == "Used" { "停用" } else { "作废" };
+    let label = if state_field == "Used" {
+        "停用"
+    } else {
+        "作废"
+    };
     let mut msg = format!("成功{}{}条记录", label, params.ids.len());
     if !ref_warnings.is_empty() {
         msg.push_str("\n\n");
         msg.push_str(&ref_warnings.join("\n\n"));
     }
     // 记录操作日志：每条 ID 一条（含修改前数据快照）
-    let oper_type = if state_field == "Used" { "DISABLE" } else if void_flag { "VOID" } else { "DELETE" };
+    let oper_type = if state_field == "Used" {
+        "DISABLE"
+    } else if void_flag {
+        "VOID"
+    } else {
+        "DELETE"
+    };
     let remark_str = format!("{}记录", label);
     for (id, before_json) in &before_snapshots {
         let after_json = serde_json::json!({ state_field: delete_value }).to_string();
         inventory_ledger::record_oper_with_data(
-            &mut conn, oper_type, &params.table, id,
-            &claims.user_code, None, Some(&remark_str),
-            before_json.as_deref(), Some(&after_json),
-        ).await;
+            &mut conn,
+            oper_type,
+            &params.table,
+            id,
+            &claims.user_code,
+            None,
+            Some(&remark_str),
+            before_json.as_deref(),
+            Some(&after_json),
+        )
+        .await;
     }
     Json(ApiResponse::msg(&msg))
 }
@@ -2379,8 +2808,16 @@ pub async fn generic_restore(
     Extension(claims): Extension<Claims>,
     Json(params): Json<GenericRestoreParams>,
 ) -> Json<ApiResponse<serde_json::Value>> {
-    if params.table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') == false {
-        return Json(ApiResponse::err_with_code("表名非法", VALIDATION_TABLE_INVALID));
+    if params
+        .table
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        == false
+    {
+        return Json(ApiResponse::err_with_code(
+            "表名非法",
+            VALIDATION_TABLE_INVALID,
+        ));
     }
     // P0-S2 修复：补 is_table_blacklisted 校验，防止通过恢复接口绕过软删状态保护
     if is_table_blacklisted(&params.table, &claims) {
@@ -2399,11 +2836,29 @@ pub async fn generic_restore(
 
     // 自动选状态字段：先看客户端传入，再按表查找，最后兜底
     let sf: String = if let Some(s) = params.state_field.as_deref() {
-        if !s.is_empty() { s.to_string() } else {
-            match get_state_field_for_table(&params.table) { Some(x) => x.to_string(), None => return Json(ApiResponse::err(&format!("表 [{}] 没有软删字段，无法恢复", params.table))) }
+        if !s.is_empty() {
+            s.to_string()
+        } else {
+            match get_state_field_for_table(&params.table) {
+                Some(x) => x.to_string(),
+                None => {
+                    return Json(ApiResponse::err(&format!(
+                        "表 [{}] 没有软删字段，无法恢复",
+                        params.table
+                    )));
+                }
+            }
         }
     } else {
-        match get_state_field_for_table(&params.table) { Some(x) => x.to_string(), None => return Json(ApiResponse::err(&format!("表 [{}] 没有软删字段，无法恢复", params.table))) }
+        match get_state_field_for_table(&params.table) {
+            Some(x) => x.to_string(),
+            None => {
+                return Json(ApiResponse::err(&format!(
+                    "表 [{}] 没有软删字段，无法恢复",
+                    params.table
+                )));
+            }
+        }
     };
     // 区分基础资料表和单据表：
     // - 基础资料（Used 字段）：Used=N→Y（停用→启用）
@@ -2435,19 +2890,37 @@ pub async fn generic_restore(
         let id_str = id.as_str();
         match conn.execute(&sql, &[&restore_value, &id_str]).await {
             Ok(r) => ok += r.rows_affected().len(),
-            Err(e) => return Json(ApiResponse::err(&format!("恢复失败 [{}]: {}", params.table, e))),
+            Err(e) => {
+                return Json(ApiResponse::err(&format!(
+                    "恢复失败 [{}]: {}",
+                    params.table, e
+                )));
+            }
         }
     }
     // 记录操作日志：每条 ID 一条（含修改前数据快照和修改后状态）
-    let label = if sf == "Used" { "启用" } else if is_doc_table { "恢复为新建" } else { "恢复" };
+    let label = if sf == "Used" {
+        "启用"
+    } else if is_doc_table {
+        "恢复为新建"
+    } else {
+        "恢复"
+    };
     let remark_str = format!("{}记录", label);
     for (id, before_json) in &before_snapshots {
         let after_json = serde_json::json!({ &sf: restore_value }).to_string();
         inventory_ledger::record_oper_with_data(
-            &mut conn, "RESTORE", &params.table, id,
-            &claims.user_code, None, Some(&remark_str),
-            before_json.as_deref(), Some(&after_json),
-        ).await;
+            &mut conn,
+            "RESTORE",
+            &params.table,
+            id,
+            &claims.user_code,
+            None,
+            Some(&remark_str),
+            before_json.as_deref(),
+            Some(&after_json),
+        )
+        .await;
     }
     Json(ApiResponse::msg(&format!("成功{}{}条记录", label, ok)))
 }
@@ -2481,9 +2954,7 @@ async fn check_references_blocking(
     //   2. 然后正常检查 tStk_Stock 的引用 count（此时只剩 Qty≠0 的记录）
     //   3. 如果还有引用（说明有实际库存），正常阻塞并返回引用信息
     if strict && ids.iter().any(|_| true) {
-        let placeholders: Vec<String> = (1..=ids.len())
-            .map(|i| format!("@p{}", i))
-            .collect();
+        let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("@p{}", i)).collect();
         let in_clause = placeholders.join(",");
         let id_params: Vec<Option<String>> = ids.iter().map(|s| Some(s.clone())).collect();
         let id_param_refs: Vec<&dyn tiberius::ToSql> = id_params
@@ -2535,12 +3006,12 @@ async fn check_references_blocking(
     let mut ref_counts: Vec<(&'static str, &'static str, &'static str, i64)> = Vec::new();
     for (ref_table, ref_col, ref_label) in &references {
         // 参数化 IN 子句，防止 SQL 注入（ids 来自用户输入）
-        let placeholders: Vec<String> = (1..=ids.len())
-            .map(|i| format!("@p{}", i))
-            .collect();
+        let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("@p{}", i)).collect();
         let total_sql = format!(
             "SELECT COUNT(*) AS cnt FROM [{}] WHERE [{}] IN ({})",
-            ref_table, ref_col, placeholders.join(",")
+            ref_table,
+            ref_col,
+            placeholders.join(",")
         );
         let ref_params: Vec<Option<String>> = ids.iter().map(|s| Some(s.clone())).collect();
         let ref_param_refs: Vec<&dyn tiberius::ToSql> = ref_params
@@ -2602,9 +3073,7 @@ async fn query_ref_details(
     if ids.is_empty() {
         return vec![];
     }
-    let placeholders: Vec<String> = (1..=ids.len())
-        .map(|i| format!("@p{}", i))
-        .collect();
+    let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("@p{}", i)).collect();
     let in_clause = placeholders.join(",");
 
     // 为每个引用表构造 JOIN 查询，返回前 10 条单据号/仓库名
@@ -2774,51 +3243,51 @@ async fn query_ref_details(
 
     let mut details: Vec<serde_json::Value> = Vec::new();
     match conn.query(&sql, &ref_param_refs).await {
-        Ok(stream) => {
-            match stream.into_results().await {
-                Ok(result_sets) => {
-                    for result_set in result_sets {
-                        for row in result_set {
-                            let label = match crate::handlers::base_data::try_get_value(&row, "label") {
-                                serde_json::Value::String(s) => s,
-                                serde_json::Value::Number(n) => n.to_string(),
-                                _ => String::new(),
-                            };
-                            if label.is_empty() {
-                                continue;
-                            }
-                            let route = match crate::handlers::base_data::try_get_value(&row, "route") {
-                                serde_json::Value::String(s) => s,
-                                _ => String::new(),
-                            };
-                            let focus_field = match crate::handlers::base_data::try_get_value(&row, "focus_field") {
-                                serde_json::Value::String(s) => s,
-                                _ => String::new(),
-                            };
-                            let focus_value = match crate::handlers::base_data::try_get_value(&row, "focus_value") {
-                                serde_json::Value::String(s) => s,
-                                serde_json::Value::Number(n) => n.to_string(),
-                                _ => String::new(),
-                            };
-                            let extra = match crate::handlers::base_data::try_get_value(&row, "extra") {
-                                serde_json::Value::String(s) => s,
-                                _ => String::new(),
-                            };
-                            details.push(serde_json::json!({
-                                "label": label,
-                                "route": route,
-                                "focus_field": focus_field,
-                                "focus_value": focus_value,
-                                "extra": extra,
-                            }));
+        Ok(stream) => match stream.into_results().await {
+            Ok(result_sets) => {
+                for result_set in result_sets {
+                    for row in result_set {
+                        let label = match crate::handlers::base_data::try_get_value(&row, "label") {
+                            serde_json::Value::String(s) => s,
+                            serde_json::Value::Number(n) => n.to_string(),
+                            _ => String::new(),
+                        };
+                        if label.is_empty() {
+                            continue;
                         }
+                        let route = match crate::handlers::base_data::try_get_value(&row, "route") {
+                            serde_json::Value::String(s) => s,
+                            _ => String::new(),
+                        };
+                        let focus_field =
+                            match crate::handlers::base_data::try_get_value(&row, "focus_field") {
+                                serde_json::Value::String(s) => s,
+                                _ => String::new(),
+                            };
+                        let focus_value =
+                            match crate::handlers::base_data::try_get_value(&row, "focus_value") {
+                                serde_json::Value::String(s) => s,
+                                serde_json::Value::Number(n) => n.to_string(),
+                                _ => String::new(),
+                            };
+                        let extra = match crate::handlers::base_data::try_get_value(&row, "extra") {
+                            serde_json::Value::String(s) => s,
+                            _ => String::new(),
+                        };
+                        details.push(serde_json::json!({
+                            "label": label,
+                            "route": route,
+                            "focus_field": focus_field,
+                            "focus_value": focus_value,
+                            "extra": extra,
+                        }));
                     }
                 }
-                Err(e) => {
-                    tracing::warn!("读取引用详情失败 [{}]: {}", ref_table, e);
-                }
             }
-        }
+            Err(e) => {
+                tracing::warn!("读取引用详情失败 [{}]: {}", ref_table, e);
+            }
+        },
         Err(e) => {
             tracing::warn!("查询引用详情失败 [{}]: {}", ref_table, e);
         }
@@ -2936,12 +3405,8 @@ fn get_references_for_table(table: &str) -> Vec<(&'static str, &'static str, &'s
             ("tBas_Emp", "StkID", "员工"),
             ("tBas_Goods", "StkID", "商品资料"),
         ],
-        "tBas_Brand" => vec![
-            ("tBas_Goods", "BrandID", "商品资料"),
-        ],
-        "tBas_Unit" => vec![
-            ("tBas_Goods", "UnitNO", "商品资料"),
-        ],
+        "tBas_Brand" => vec![("tBas_Goods", "BrandID", "商品资料")],
+        "tBas_Unit" => vec![("tBas_Goods", "UnitNO", "商品资料")],
         "tBas_Emp" => vec![
             ("tStk_IO", "EmpID", "出入库单"),
             ("tStk_Move", "EmpID", "调拨单"),
@@ -2949,35 +3414,19 @@ fn get_references_for_table(table: &str) -> Vec<(&'static str, &'static str, &'s
             ("tSal_Order", "EmpID", "销售订单"),
             ("tSal_Inv", "EmpID", "销售发票"),
         ],
-        "tBas_GDSType" => vec![
-            ("tBas_Goods", "GDSTypeID", "商品资料"),
-        ],
-        "tBas_GDSProperty" => vec![
-            ("tBas_Goods", "GDSPropertyID", "商品资料"),
-        ],
-        "tBas_GDSKind" => vec![
-            ("tBas_Goods", "GDSKindID", "商品资料"),
-        ],
+        "tBas_GDSType" => vec![("tBas_Goods", "GDSTypeID", "商品资料")],
+        "tBas_GDSProperty" => vec![("tBas_Goods", "GDSPropertyID", "商品资料")],
+        "tBas_GDSKind" => vec![("tBas_Goods", "GDSKindID", "商品资料")],
         "tBas_DeaType" => vec![],
-        "tBas_SuppType" => vec![
-            ("tBas_Supp", "SuppTypeID", "供应商资料"),
-        ],
-        "tBas_CustType" => vec![
-            ("tBas_Cust", "CustTypeID", "客户资料"),
-        ],
+        "tBas_SuppType" => vec![("tBas_Supp", "SuppTypeID", "供应商资料")],
+        "tBas_CustType" => vec![("tBas_Cust", "CustTypeID", "客户资料")],
         "tBas_Area" => vec![
             ("tBas_Cust", "AreaID", "客户资料"),
             ("tBas_Supp", "AreaID", "供应商资料"),
         ],
-        "tBas_Dept" => vec![
-            ("tBas_Emp", "DeptID", "员工资料"),
-        ],
-        "tBas_Duty" => vec![
-            ("tBas_Emp", "DutyID", "员工资料"),
-        ],
-        "tBas_Payment" => vec![
-            ("tBas_Cust", "PLID", "客户资料"),
-        ],
+        "tBas_Dept" => vec![("tBas_Emp", "DeptID", "员工资料")],
+        "tBas_Duty" => vec![("tBas_Emp", "DutyID", "员工资料")],
+        "tBas_Payment" => vec![("tBas_Cust", "PLID", "客户资料")],
         _ => vec![],
     }
 }
@@ -3009,7 +3458,10 @@ pub async fn generic_tree(
     // 修复 SQL 注入：校验所有用户可控的标识符（表名/字段名）
     let table = params.table.as_str();
     if !is_valid_identifier(table) {
-        return Json(ApiResponse::err_with_code("非法表名", VALIDATION_FIELD_INVALID));
+        return Json(ApiResponse::err_with_code(
+            "非法表名",
+            VALIDATION_FIELD_INVALID,
+        ));
     }
     // P0-S2 修复：补 is_table_blacklisted 校验，防止通过树形接口读取系统表层级数据
     if is_table_blacklisted(table, &claims) {
@@ -3020,38 +3472,59 @@ pub async fn generic_tree(
     }
     let pk = params.primary_key.as_deref().unwrap_or("ID");
     if !is_valid_identifier(pk) {
-        return Json(ApiResponse::err_with_code("非法主键字段名", VALIDATION_FIELD_INVALID));
+        return Json(ApiResponse::err_with_code(
+            "非法主键字段名",
+            VALIDATION_FIELD_INVALID,
+        ));
     }
     let pf = params.parent_field.as_deref().unwrap_or("ParentID");
     if !is_valid_identifier(pf) {
-        return Json(ApiResponse::err_with_code("非法父级字段名", VALIDATION_FIELD_INVALID));
+        return Json(ApiResponse::err_with_code(
+            "非法父级字段名",
+            VALIDATION_FIELD_INVALID,
+        ));
     }
     let nf = params.name_field.as_deref().unwrap_or("Name");
     if !is_valid_identifier(nf) {
-        return Json(ApiResponse::err_with_code("非法名称字段名", VALIDATION_FIELD_INVALID));
+        return Json(ApiResponse::err_with_code(
+            "非法名称字段名",
+            VALIDATION_FIELD_INVALID,
+        ));
     }
     let sf = params.state_field.as_deref().unwrap_or("State");
     if !is_valid_identifier(sf) {
-        return Json(ApiResponse::err_with_code("非法状态字段名", VALIDATION_FIELD_INVALID));
+        return Json(ApiResponse::err_with_code(
+            "非法状态字段名",
+            VALIDATION_FIELD_INVALID,
+        ));
     }
     let extra = params.extra_fields.as_deref().unwrap_or("");
     if !extra.is_empty() {
         for field in extra.split(',') {
             let f = field.trim();
             if !f.is_empty() && !is_valid_identifier(f) {
-                return Json(ApiResponse::err_with_code("非法额外字段名", VALIDATION_FIELD_INVALID));
+                return Json(ApiResponse::err_with_code(
+                    "非法额外字段名",
+                    VALIDATION_FIELD_INVALID,
+                ));
             }
         }
     }
     // count_table / count_field 同样来自前端，拼接进 SQL 前必须校验
     if let Some(ct) = &params.count_table {
         if !is_valid_identifier(ct) {
-            return Json(ApiResponse::err_with_code("非法计数表名", VALIDATION_FIELD_INVALID));
+            return Json(ApiResponse::err_with_code(
+                "非法计数表名",
+                VALIDATION_FIELD_INVALID,
+            ));
         }
     }
     if let Some(cf) = &params.count_field {
         if !is_valid_identifier(cf) {
-            return Json(ApiResponse::err_with_code("非法计数字段名", VALIDATION_FIELD_INVALID));
+            return Json(ApiResponse::err_with_code(
+                "非法计数字段名",
+                VALIDATION_FIELD_INVALID,
+            ));
         }
     }
 
@@ -3131,7 +3604,8 @@ pub async fn generic_tree(
     let pk_lower = pk.to_lowercase();
     let pf_lower = pf.to_lowercase();
 
-    let mut node_map: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+    let mut node_map: std::collections::HashMap<String, serde_json::Value> =
+        std::collections::HashMap::new();
     for item in &flat {
         if let Some(id_val) = item.get(&pk_lower) {
             let id_str = value_to_string(id_val);
@@ -3140,7 +3614,10 @@ pub async fn generic_tree(
                 node.insert(k.clone(), v.clone());
             }
             let count = count_map.get(&id_str).copied().unwrap_or(0);
-            node.insert("product_count".to_string(), serde_json::Value::Number(count.into()));
+            node.insert(
+                "product_count".to_string(),
+                serde_json::Value::Number(count.into()),
+            );
             node.insert("children".to_string(), serde_json::Value::Array(vec![]));
             node_map.insert(id_str, serde_json::Value::Object(node));
         }
@@ -3148,20 +3625,26 @@ pub async fn generic_tree(
 
     // 组装父子关系
     let mut root_ids: Vec<String> = Vec::new();
-    let mut children_map: std::collections::HashMap<String, Vec<serde_json::Value>> = std::collections::HashMap::new();
+    let mut children_map: std::collections::HashMap<String, Vec<serde_json::Value>> =
+        std::collections::HashMap::new();
 
     for item in &flat {
-        let id_str = item.get(&pk_lower)
+        let id_str = item
+            .get(&pk_lower)
             .map(|v| value_to_string(v))
             .unwrap_or_default();
 
-        let parent_str = item.get(&pf_lower)
+        let parent_str = item
+            .get(&pf_lower)
             .map(|v| value_to_string(v))
             .unwrap_or_default();
 
         if !parent_str.is_empty() && parent_str != "null" {
             children_map.entry(parent_str).or_default().push(
-                node_map.get(&id_str).cloned().unwrap_or(serde_json::Value::Object(serde_json::Map::new()))
+                node_map
+                    .get(&id_str)
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Object(serde_json::Map::new())),
             );
         } else {
             root_ids.push(id_str);
@@ -3181,27 +3664,41 @@ pub async fn generic_tree(
         };
 
         if let Some(children) = children_map.get(id) {
-            let child_trees: Vec<serde_json::Value> = children.iter()
+            let child_trees: Vec<serde_json::Value> = children
+                .iter()
                 .filter_map(|c| {
-                    let cid = c.as_object()
+                    let cid = c
+                        .as_object()
                         .and_then(|obj| obj.get(pk_lower))
                         .map(|v| value_to_string(v))
                         .unwrap_or_default();
-                    if cid.is_empty() { return None; }
+                    if cid.is_empty() {
+                        return None;
+                    }
                     Some(build_tree(&cid, node_map, children_map, pk_lower))
                 })
                 .filter(|v| !v.is_null())
                 .collect();
 
             if let Some(obj) = node.as_object_mut() {
-                let self_count = obj.get("product_count").and_then(|v| v.as_i64()).unwrap_or(0);
-                let children_count: i64 = child_trees.iter()
+                let self_count = obj
+                    .get("product_count")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                let children_count: i64 = child_trees
+                    .iter()
                     .filter_map(|c| c.get("product_count").and_then(|v| v.as_i64()))
                     .sum();
-                obj.insert("product_count".to_string(), serde_json::Value::Number((self_count + children_count).into()));
+                obj.insert(
+                    "product_count".to_string(),
+                    serde_json::Value::Number((self_count + children_count).into()),
+                );
 
                 if !child_trees.is_empty() {
-                    obj.insert("children".to_string(), serde_json::Value::Array(child_trees));
+                    obj.insert(
+                        "children".to_string(),
+                        serde_json::Value::Array(child_trees),
+                    );
                 } else {
                     obj.remove("children");
                 }
@@ -3211,7 +3708,8 @@ pub async fn generic_tree(
         node
     }
 
-    let tree: Vec<serde_json::Value> = root_ids.iter()
+    let tree: Vec<serde_json::Value> = root_ids
+        .iter()
         .filter_map(|id| {
             let v = build_tree(id, &node_map, &children_map, &pk_lower);
             if v.is_null() { None } else { Some(v) }
@@ -3236,7 +3734,9 @@ fn row_to_json_map(row: &Row) -> serde_json::Map<String, serde_json::Value> {
     let mut map = serde_json::Map::new();
     for col in columns {
         let name = col.name().to_string();
-        if name == "_rn" { continue; }
+        if name == "_rn" {
+            continue;
+        }
         let val = try_get_value(row, &name);
         map.insert(name.to_lowercase(), val);
     }
@@ -3269,12 +3769,18 @@ pub async fn generic_create(
     Json(params): Json<GenericCreateParams>,
 ) -> Json<ApiResponse<serde_json::Value>> {
     if !is_valid_identifier(&params.table) {
-        return Json(ApiResponse::err_with_code("表名只能包含字母、数字、下划线", VALIDATION_TABLE_INVALID));
+        return Json(ApiResponse::err_with_code(
+            "表名只能包含字母、数字、下划线",
+            VALIDATION_TABLE_INVALID,
+        ));
     }
     // 系统表黑名单校验（admin 放行）
     if is_table_blacklisted(&params.table, &claims) {
         return Json(ApiResponse::err_with_code(
-            &format!("系统表 [{}] 禁止通过通用接口新增，请使用专用接口", params.table),
+            &format!(
+                "系统表 [{}] 禁止通过通用接口新增，请使用专用接口",
+                params.table
+            ),
             "PERMISSION_DENIED",
         ));
     }
@@ -3323,15 +3829,23 @@ pub async fn generic_create(
     for (key, val) in params.data.iter() {
         let key_lc = key.to_lowercase();
         // 字段名安全校验：防止 SQL 注入
-        if !is_valid_identifier(key) { continue; }
+        if !is_valid_identifier(key) {
+            continue;
+        }
         // Skip fields that come from JOIN (not own columns)
-        if join_fields.contains(&key.as_str()) { continue; }
+        if join_fields.contains(&key.as_str()) {
+            continue;
+        }
         // Skip IDENTITY / computed columns — SQL Server rejects explicit inserts
         // (would need IDENTITY_INSERT ON). The DB will auto-fill them.
-        if readonly_fields.contains(&key_lc) { continue; }
+        if readonly_fields.contains(&key_lc) {
+            continue;
+        }
         // If PK was already auto-generated above, ignore whatever the client sent.
         if let Some(pk) = pk_col {
-            if key_lc == pk.to_lowercase() && generated_pk.is_some() { continue; }
+            if key_lc == pk.to_lowercase() && generated_pk.is_some() {
+                continue;
+            }
         }
         columns.push(format!("[{}]", key));
         placeholders.push(format!("@p{}", columns.len()));
@@ -3360,9 +3874,8 @@ pub async fn generic_create(
     }
 
     // ★ 审计字段自动填充：仅当表存在 EDate / EUser / LUTime 列，且客户端未提供时追加
-    let provided_keys: std::collections::HashSet<String> = params.data.keys()
-        .map(|k| k.to_lowercase())
-        .collect();
+    let provided_keys: std::collections::HashSet<String> =
+        params.data.keys().map(|k| k.to_lowercase()).collect();
     let mut pushed_audit = false;
     if !provided_keys.contains("edate") && has_column(&mut conn, &params.table, "EDate").await {
         columns.push("[EDate]".to_string());
@@ -3404,24 +3917,34 @@ pub async fn generic_create(
         // nullable 字段：只对 State/Used 关键字段补默认值，其他 nullable 字段跳过
         if col_info.is_nullable {
             let is_state_or_used = col_lc == "state" || col_lc == "used";
-            if !is_state_or_used { continue; }
+            if !is_state_or_used {
+                continue;
+            }
         }
         // 跳过已自动追加的审计字段
-        if col_lc == "edate" || col_lc == "euser" || col_lc == "lutime" { continue; }
+        if col_lc == "edate" || col_lc == "euser" || col_lc == "lutime" {
+            continue;
+        }
         // 跳过主键（前面已处理）
         if let Some(pk) = pk_col {
-            if col_lc == pk.to_lowercase() { continue; }
+            if col_lc == pk.to_lowercase() {
+                continue;
+            }
         }
         // 跳过 IDENTITY / 计算列（由 DB 自动填充，且 fetch_table_columns 无法识别）
         // 通过 readonly_fields 集合判断
-        if readonly_fields.contains(&col_lc) { continue; }
+        if readonly_fields.contains(&col_lc) {
+            continue;
+        }
 
         // 判断是否需要补默认值：未提供 或 提供了但值为空
         let need_default = if provided_keys.contains(col_lc.as_str()) {
             // 已提供：检查实际值是否为 None（在前面的遍历中已计算）
             // 找到该字段在 columns 中的索引，检查 values 中对应位置是否为 None
             // ★ 简化实现：直接从 params.data 取原始值判断
-            let raw_val = params.data.iter()
+            let raw_val = params
+                .data
+                .iter()
                 .find(|(k, _)| k.to_lowercase() == col_lc)
                 .map(|(_, v)| v);
             match raw_val {
@@ -3431,7 +3954,7 @@ pub async fn generic_create(
                 _ => false,
             }
         } else {
-            true  // 未提供
+            true // 未提供
         };
 
         if need_default {
@@ -3448,7 +3971,10 @@ pub async fn generic_create(
                 // 如果字段已在 columns 中（前端提供了空值），更新对应位置的值
                 // 否则追加新列
                 let col_name_brk = format!("[{}]", col_info.name);
-                if let Some(idx) = columns.iter().position(|c| c.eq_ignore_ascii_case(&col_name_brk)) {
+                if let Some(idx) = columns
+                    .iter()
+                    .position(|c| c.eq_ignore_ascii_case(&col_name_brk))
+                {
                     values[idx] = Some(default_val);
                 } else {
                     columns.push(col_name_brk);
@@ -3470,9 +3996,8 @@ pub async fn generic_create(
         placeholders.join(", ")
     );
 
-    let param_refs: Vec<&dyn tiberius::ToSql> = values.iter()
-        .map(|v| v as &dyn tiberius::ToSql)
-        .collect();
+    let param_refs: Vec<&dyn tiberius::ToSql> =
+        values.iter().map(|v| v as &dyn tiberius::ToSql).collect();
 
     // IsDefault 互斥：tBas_Stock 新增默认仓库时，先清除其他仓库的默认标记
     if params.table == "tBas_Stock" {
@@ -3499,20 +4024,28 @@ pub async fn generic_create(
             // Echo back the (possibly generated) primary key so the frontend
             // can use it for follow-up detail inserts / navigation.
             if let Some(pk) = pk_col {
-                let id_value = generated_pk.clone()
-                    .or_else(|| {
-                        params.data.get(pk)
-                            .and_then(|v| v.as_str())
-                            .filter(|s| !s.trim().is_empty())
-                            .map(|s| s.to_string())
-                    });
+                let id_value = generated_pk.clone().or_else(|| {
+                    params
+                        .data
+                        .get(pk)
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.trim().is_empty())
+                        .map(|s| s.to_string())
+                });
                 if let Some(ref id) = id_value {
                     // 记录操作日志（含数据快照）
                     inventory_ledger::record_oper_with_data(
-                        &mut conn, "CREATE", &params.table, id,
-                        &claims.user_code, None, Some("新增记录"),
-                        None, after_json.as_deref(),
-                    ).await;
+                        &mut conn,
+                        "CREATE",
+                        &params.table,
+                        id,
+                        &claims.user_code,
+                        None,
+                        Some("新增记录"),
+                        None,
+                        after_json.as_deref(),
+                    )
+                    .await;
                     return Json(ApiResponse::ok(serde_json::json!({
                         pk: id,
                         "id": id,
@@ -3521,17 +4054,31 @@ pub async fn generic_create(
             }
             // 无主键回显时也记录日志
             inventory_ledger::record_oper_with_data(
-                &mut conn, "CREATE", &params.table, "",
-                &claims.user_code, None, Some("新增记录"),
-                None, after_json.as_deref(),
-            ).await;
+                &mut conn,
+                "CREATE",
+                &params.table,
+                "",
+                &claims.user_code,
+                None,
+                Some("新增记录"),
+                None,
+                after_json.as_deref(),
+            )
+            .await;
             Json(ApiResponse::msg("新增成功"))
         }
         Err(e) => {
-            tracing::error!("[generic_create] 失败 table={} err={} sql={}", params.table, e, sql);
+            tracing::error!(
+                "[generic_create] 失败 table={} err={} sql={}",
+                params.table,
+                e,
+                sql
+            );
             // ★ 根据常见的 SQL Server 错误码返回有意义的提示，避免笼统的"请确认表和字段是否存在"
             let err_str = e.to_string();
-            let user_msg = if err_str.contains("code: 2601") || err_str.contains("不能在具有唯一索引") {
+            let user_msg = if err_str.contains("code: 2601")
+                || err_str.contains("不能在具有唯一索引")
+            {
                 // 唯一索引冲突：提取重复键值
                 let dup_val = err_str
                     .split("重复键值为 (")
@@ -3539,7 +4086,10 @@ pub async fn generic_create(
                     .and_then(|s| s.split(')').next())
                     .unwrap_or("");
                 format!("新增失败：编码 [{}] 已存在，请勿重复录入", dup_val)
-            } else if err_str.contains("code: 547") || err_str.contains("FOREIGN KEY") || err_str.contains("外键") {
+            } else if err_str.contains("code: 547")
+                || err_str.contains("FOREIGN KEY")
+                || err_str.contains("外键")
+            {
                 "新增失败：关联数据不存在（外键约束冲突），请检查关联字段".to_string()
             } else if err_str.contains("code: 515") || err_str.contains("不能将值 NULL") {
                 "新增失败：存在必填字段为空，请检查表单".to_string()
@@ -3558,13 +4108,23 @@ pub async fn generic_update(
     Extension(claims): Extension<Claims>,
     Json(params): Json<GenericUpdateParams>,
 ) -> Json<ApiResponse<serde_json::Value>> {
-    if !params.table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        return Json(ApiResponse::err_with_code("表名只能包含字母、数字、下划线", VALIDATION_TABLE_INVALID));
+    if !params
+        .table
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return Json(ApiResponse::err_with_code(
+            "表名只能包含字母、数字、下划线",
+            VALIDATION_TABLE_INVALID,
+        ));
     }
     // 系统表黑名单校验（admin 放行）
     if is_table_blacklisted(&params.table, &claims) {
         return Json(ApiResponse::err_with_code(
-            &format!("系统表 [{}] 禁止通过通用接口修改，请使用专用接口", params.table),
+            &format!(
+                "系统表 [{}] 禁止通过通用接口修改，请使用专用接口",
+                params.table
+            ),
             "PERMISSION_DENIED",
         ));
     }
@@ -3583,7 +4143,15 @@ pub async fn generic_update(
     // P0-S4 记录级越权防护：业务单据表（含 EUser 列）只能更新自己创建的记录
     //   admin 全放行；基础资料表（无 EUser）不做此限制
     let id_for_check = vec![params.id.clone()];
-    if let Err(msg) = check_record_ownership(&mut conn, &params.table, &params.primary_key, &id_for_check, &claims).await {
+    if let Err(msg) = check_record_ownership(
+        &mut conn,
+        &params.table,
+        &params.primary_key,
+        &id_for_check,
+        &claims,
+    )
+    .await
+    {
         return Json(ApiResponse::err_with_code(&msg, PERMISSION_DENIED_RECORD));
     }
 
@@ -3593,7 +4161,9 @@ pub async fn generic_update(
             // 1. 禁止修改 EmpNo（工号是 admin 身份标识，改了会导致 is_admin 判断失效）
             for (key, _) in params.data.iter() {
                 if key.eq_ignore_ascii_case("EmpNo") {
-                    return Json(ApiResponse::err("禁止修改 admin 账号的工号（系统管理员标识），避免系统无法登录"));
+                    return Json(ApiResponse::err(
+                        "禁止修改 admin 账号的工号（系统管理员标识），避免系统无法登录",
+                    ));
                 }
             }
             // 2. 检查是否试图停用登录、设为离职/删除
@@ -3605,8 +4175,13 @@ pub async fn generic_update(
                         _ => val.to_string(),
                     };
                     // AllowLogin=N / State=D / WorkState=3 都会阻止 admin 登录
-                    if val_str.eq_ignore_ascii_case("N") || val_str.eq_ignore_ascii_case("D") || val_str == "3" {
-                        return Json(ApiResponse::err("禁止停用 admin 账号的登录权限或设为离职/删除状态，避免系统无法登录"));
+                    if val_str.eq_ignore_ascii_case("N")
+                        || val_str.eq_ignore_ascii_case("D")
+                        || val_str == "3"
+                    {
+                        return Json(ApiResponse::err(
+                            "禁止停用 admin 账号的登录权限或设为离职/删除状态，避免系统无法登录",
+                        ));
                     }
                 }
             }
@@ -3623,12 +4198,20 @@ pub async fn generic_update(
     for (key, val) in params.data.iter() {
         let key_lc = key.to_lowercase();
         // 字段名安全校验：防止 SQL 注入
-        if !is_valid_identifier(key) { continue; }
-        if key_lc == params.primary_key.to_lowercase() { continue; }
+        if !is_valid_identifier(key) {
+            continue;
+        }
+        if key_lc == params.primary_key.to_lowercase() {
+            continue;
+        }
         // Skip fields that come from JOIN (not own columns) to avoid overwriting redundant Name columns
-        if join_fields.contains(&key.as_str()) { continue; }
+        if join_fields.contains(&key.as_str()) {
+            continue;
+        }
         // Skip identity / computed columns — SQL Server rejects updates to them
-        if readonly_fields.contains(&key_lc) { continue; }
+        if readonly_fields.contains(&key_lc) {
+            continue;
+        }
         // ★ 可清空关联字段白名单：允许用户显式置 NULL（如客户解绑定价模板）
         //   这些列即使值为 null/'' 也必须写入，否则前端清空操作无效
         let clearable = is_clearable_nullable(&params.table, key);
@@ -3673,9 +4256,8 @@ pub async fn generic_update(
 
     // ★ 自动更新 LUTime（修改时间）：仅当表存在 LUTime 列且客户端未显式提供时
     // 避免 UPDATE 后列表"修改时间"列仍是旧值
-    let provided_keys: std::collections::HashSet<String> = params.data.keys()
-        .map(|k| k.to_lowercase())
-        .collect();
+    let provided_keys: std::collections::HashSet<String> =
+        params.data.keys().map(|k| k.to_lowercase()).collect();
     let mut auto_lutime = false;
     if !provided_keys.contains("lutime") && has_column(&mut conn, &params.table, "LUTime").await {
         set_clauses.push(format!("[LUTime] = @p{}", set_clauses.len() + 1));
@@ -3714,13 +4296,15 @@ pub async fn generic_update(
         }
     }
 
-    let param_refs: Vec<&dyn tiberius::ToSql> = values.iter()
-        .map(|v| v as &dyn tiberius::ToSql)
-        .collect();
+    let param_refs: Vec<&dyn tiberius::ToSql> =
+        values.iter().map(|v| v as &dyn tiberius::ToSql).collect();
 
     // 修改前查旧数据快照（用于操作日志变更明细对比）
     let before_snapshot: Option<serde_json::Value> = {
-        let snap_sql = format!("SELECT * FROM [{}] WHERE [{}] = @p1", params.table, params.primary_key);
+        let snap_sql = format!(
+            "SELECT * FROM [{}] WHERE [{}] = @p1",
+            params.table, params.primary_key
+        );
         match conn.query(&snap_sql, &[&params.id]).await {
             Ok(stream) => match stream.into_row().await {
                 Ok(Some(row)) => Some(crate::handlers::base_data::row_to_json(&row)),
@@ -3735,7 +4319,10 @@ pub async fn generic_update(
             // 记录操作日志（含数据快照）
             // after 快照重新查询 DB：保证 before/after 都是完整行，避免请求体只有部分字段导致对比失真
             let after_snapshot: Option<serde_json::Value> = {
-                let snap_sql = format!("SELECT * FROM [{}] WHERE [{}] = @p1", params.table, params.primary_key);
+                let snap_sql = format!(
+                    "SELECT * FROM [{}] WHERE [{}] = @p1",
+                    params.table, params.primary_key
+                );
                 match conn.query(&snap_sql, &[&params.id]).await {
                     Ok(stream) => match stream.into_row().await {
                         Ok(Some(row)) => Some(crate::handlers::base_data::row_to_json(&row)),
@@ -3744,16 +4331,30 @@ pub async fn generic_update(
                     Err(_) => None,
                 }
             };
-            let before_json = before_snapshot.as_ref().and_then(|v| serde_json::to_string(v).ok());
-            let after_json = after_snapshot.as_ref().and_then(|v| serde_json::to_string(v).ok());
+            let before_json = before_snapshot
+                .as_ref()
+                .and_then(|v| serde_json::to_string(v).ok());
+            let after_json = after_snapshot
+                .as_ref()
+                .and_then(|v| serde_json::to_string(v).ok());
             inventory_ledger::record_oper_with_data(
-                &mut conn, "UPDATE", &params.table, &params.id,
-                &claims.user_code, None, Some("修改记录"),
-                before_json.as_deref(), after_json.as_deref(),
-            ).await;
+                &mut conn,
+                "UPDATE",
+                &params.table,
+                &params.id,
+                &claims.user_code,
+                None,
+                Some("修改记录"),
+                before_json.as_deref(),
+                after_json.as_deref(),
+            )
+            .await;
             Json(ApiResponse::msg("更新成功"))
         }
-        Err(e) => Json(ApiResponse::err(&format!("更新表 [{}] 数据失败: {}", params.table, e)))
+        Err(e) => Json(ApiResponse::err(&format!(
+            "更新表 [{}] 数据失败: {}",
+            params.table, e
+        ))),
     }
 }
 
@@ -3768,12 +4369,22 @@ pub async fn generic_import(
     Extension(claims): Extension<Claims>,
     Json(params): Json<GenericImportParams>,
 ) -> Json<ApiResponse<serde_json::Value>> {
-    if !params.table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        return Json(ApiResponse::err_with_code("表名只能包含字母、数字、下划线", VALIDATION_TABLE_INVALID));
+    if !params
+        .table
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return Json(ApiResponse::err_with_code(
+            "表名只能包含字母、数字、下划线",
+            VALIDATION_TABLE_INVALID,
+        ));
     }
     // P0-S2 修复：补 is_table_blacklisted 校验，防止向系统表导入恶意数据
     if is_table_blacklisted(&params.table, &claims) {
-        return Json(ApiResponse::err_with_code("系统敏感表禁止导入数据", PERMISSION_DENIED_TABLE));
+        return Json(ApiResponse::err_with_code(
+            "系统敏感表禁止导入数据",
+            PERMISSION_DENIED_TABLE,
+        ));
     }
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
@@ -3789,7 +4400,8 @@ pub async fn generic_import(
     if params.data.len() > MAX_IMPORT_ROWS {
         return Json(ApiResponse::err(&format!(
             "单次导入数据不能超过 {} 行，当前 {} 行，请分批导入",
-            MAX_IMPORT_ROWS, params.data.len()
+            MAX_IMPORT_ROWS,
+            params.data.len()
         )));
     }
 
@@ -3800,7 +4412,8 @@ pub async fn generic_import(
     let table_columns = fetch_table_columns(&mut conn, &params.table).await;
 
     // 识别唯一字段（编码类字段，如 *No, *Code, BarCode）用于查重
-    let unique_fields: Vec<String> = table_columns.iter()
+    let unique_fields: Vec<String> = table_columns
+        .iter()
         .filter(|c| {
             let name = c.name.to_lowercase();
             name.ends_with("no") || name.ends_with("code") || name == "barcode"
@@ -3809,13 +4422,15 @@ pub async fn generic_import(
         .collect();
 
     // 预查询已存在的唯一值（避免逐行查询）
-    let mut existing_unique: std::collections::HashMap<String, std::collections::HashSet<String>> = std::collections::HashMap::new();
+    let mut existing_unique: std::collections::HashMap<String, std::collections::HashSet<String>> =
+        std::collections::HashMap::new();
     for field in &unique_fields {
         let sql = format!("SELECT [{}] FROM [{}]", field, params.table);
         if let Ok(stream) = conn.query(&sql, &[]).await {
             if let Ok(rows) = stream.into_first_result().await {
                 let field_name = field.as_str();
-                let set: std::collections::HashSet<String> = rows.iter()
+                let set: std::collections::HashSet<String> = rows
+                    .iter()
                     .filter_map(|r| {
                         // 用 try_get 避免类型不匹配 panic（返回 Result<Option<T>, Error>）
                         if let Ok(Some(s)) = r.try_get::<&str, _>(field_name) {
@@ -3842,10 +4457,11 @@ pub async fn generic_import(
 
     let mut success_count = 0u32;
     let mut error_msgs: Vec<String> = Vec::new();
-    let mut imported_unique: std::collections::HashMap<String, std::collections::HashSet<String>> = std::collections::HashMap::new();
+    let mut imported_unique: std::collections::HashMap<String, std::collections::HashSet<String>> =
+        std::collections::HashMap::new();
 
     for (row_idx, row) in params.data.iter().enumerate() {
-        let row_no = row_idx + 1;  // 1-based 行号
+        let row_no = row_idx + 1; // 1-based 行号
         // 克隆行数据，便于补充默认值
         let mut row_data = row.clone();
 
@@ -3858,19 +4474,29 @@ pub async fn generic_import(
                     serde_json::Value::Null => String::new(),
                     other => other.to_string(),
                 };
-                if val_str.is_empty() { continue; }
+                if val_str.is_empty() {
+                    continue;
+                }
                 let val_lower = val_str.to_lowercase();
                 // 检查数据库已存在
                 if let Some(set) = existing_unique.get(field) {
                     if set.contains(&val_lower) {
-                        dup_error = Some(format!("第{}行: {}={} 已存在于系统中", row_no, field, val_str));
+                        dup_error = Some(format!(
+                            "第{}行: {}={} 已存在于系统中",
+                            row_no, field, val_str
+                        ));
                         break;
                     }
                 }
                 // 检查本次导入已存在
-                let imported_set = imported_unique.entry(field.clone()).or_insert_with(std::collections::HashSet::new);
+                let imported_set = imported_unique
+                    .entry(field.clone())
+                    .or_insert_with(std::collections::HashSet::new);
                 if imported_set.contains(&val_lower) {
-                    dup_error = Some(format!("第{}行: {}={} 与本次导入的其他行重复", row_no, field, val_str));
+                    dup_error = Some(format!(
+                        "第{}行: {}={} 与本次导入的其他行重复",
+                        row_no, field, val_str
+                    ));
                     break;
                 }
                 imported_set.insert(val_lower);
@@ -3890,16 +4516,25 @@ pub async fn generic_import(
                 _ => false,
             };
             if need_gen {
-                row_data.insert(pk.to_string(), serde_json::Value::String(uuid::Uuid::new_v4().to_string()));
+                row_data.insert(
+                    pk.to_string(),
+                    serde_json::Value::String(uuid::Uuid::new_v4().to_string()),
+                );
             }
         }
 
         // 补全 NOT NULL 字段默认值（排除主键，主键已处理）
         for col_info in &table_columns {
-            if col_info.is_nullable { continue; }
-            if col_info.name.eq_ignore_ascii_case("LUTime") { continue; }
+            if col_info.is_nullable {
+                continue;
+            }
+            if col_info.name.eq_ignore_ascii_case("LUTime") {
+                continue;
+            }
             if let Some(pk) = pk_col {
-                if col_info.name.eq_ignore_ascii_case(pk) { continue; }
+                if col_info.name.eq_ignore_ascii_case(pk) {
+                    continue;
+                }
             }
             // 如果用户已提供非空值，跳过
             let has_value = match row_data.get(&col_info.name) {
@@ -3908,7 +4543,9 @@ pub async fn generic_import(
                 Some(_) => true,
                 None => false,
             };
-            if has_value { continue; }
+            if has_value {
+                continue;
+            }
             // 根据数据类型补默认值
             let default_val = default_value_for_type(&col_info.data_type, &col_info.name);
             if let Some(dv) = default_val {
@@ -3922,11 +4559,20 @@ pub async fn generic_import(
 
         for (key, val) in row_data.iter() {
             // Skip fields that come from JOIN (not own columns)
-            if join_fields.contains(&key.as_str()) { continue; }
+            if join_fields.contains(&key.as_str()) {
+                continue;
+            }
             // Skip IDENTITY / computed columns（readonly_fields 统一小写，需忽略大小写比较）
-            if readonly_fields.iter().any(|r| r.eq_ignore_ascii_case(key)) { continue; }
+            if readonly_fields.iter().any(|r| r.eq_ignore_ascii_case(key)) {
+                continue;
+            }
             // Skip fields not in table schema
-            if !table_columns.iter().any(|c| c.name.eq_ignore_ascii_case(key)) { continue; }
+            if !table_columns
+                .iter()
+                .any(|c| c.name.eq_ignore_ascii_case(key))
+            {
+                continue;
+            }
             columns.push(format!("[{}]", key));
             placeholders.push(format!("@p{}", columns.len()));
             values.push(json_to_sql_value(val));
@@ -3944,9 +4590,8 @@ pub async fn generic_import(
             placeholders.join(", ")
         );
 
-        let param_refs: Vec<&dyn tiberius::ToSql> = values.iter()
-            .map(|v| v as &dyn tiberius::ToSql)
-            .collect();
+        let param_refs: Vec<&dyn tiberius::ToSql> =
+            values.iter().map(|v| v as &dyn tiberius::ToSql).collect();
 
         match conn.execute(&sql, &param_refs).await {
             Ok(_) => success_count += 1,
@@ -3958,11 +4603,19 @@ pub async fn generic_import(
                 } else if err_str.contains("Violation of UNIQUE KEY constraint") {
                     let field_hint = err_str.split("'").nth(1).unwrap_or("唯一约束");
                     format!("第{}行: 唯一约束冲突（{}）", row_no, field_hint)
-                } else if err_str.contains("The INSERT statement conflicted with the FOREIGN KEY constraint") {
+                } else if err_str
+                    .contains("The INSERT statement conflicted with the FOREIGN KEY constraint")
+                {
                     let fk_hint = err_str.split("'").nth(1).unwrap_or("外键约束");
-                    format!("第{}行: 关联数据不存在（{}），请检查编码是否正确", row_no, fk_hint)
+                    format!(
+                        "第{}行: 关联数据不存在（{}），请检查编码是否正确",
+                        row_no, fk_hint
+                    )
                 } else if err_str.contains("Conversion failed") {
-                    format!("第{}行: 数据类型转换失败，请检查字段格式（{}）", row_no, err_str)
+                    format!(
+                        "第{}行: 数据类型转换失败，请检查字段格式（{}）",
+                        row_no, err_str
+                    )
                 } else if err_str.contains("Cannot insert the value NULL into column") {
                     let col_hint = err_str.split("'").nth(3).unwrap_or("未知列");
                     format!("第{}行: 必填字段 {} 不能为空", row_no, col_hint)
@@ -3985,11 +4638,19 @@ pub async fn generic_import(
         }
         // 写操作日志
         let _ = inventory_ledger::record_oper(
-            &mut conn, "IMPORT", &params.table, "",
-            &claims.user_code, None,
+            &mut conn,
+            "IMPORT",
+            &params.table,
+            "",
+            &claims.user_code,
+            None,
             Some(&format!("批量导入{}条记录", success_count)),
-        ).await;
-        Json(ApiResponse::msg(&format!("成功导入{}条记录", success_count)))
+        )
+        .await;
+        Json(ApiResponse::msg(&format!(
+            "成功导入{}条记录",
+            success_count
+        )))
     } else {
         // 有错误，回滚事务
         inventory_ledger::rollback_tran(&mut conn).await;
@@ -4010,7 +4671,10 @@ struct TableColInfo {
 }
 
 /// 查询表列信息
-async fn fetch_table_columns(conn: &mut bb8::PooledConnection<'static, bb8_tiberius::ConnectionManager>, table: &str) -> Vec<TableColInfo> {
+async fn fetch_table_columns(
+    conn: &mut bb8::PooledConnection<'static, bb8_tiberius::ConnectionManager>,
+    table: &str,
+) -> Vec<TableColInfo> {
     let sql = "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @p1 ORDER BY ORDINAL_POSITION";
     let stream = match conn.query(sql, &[&table]).await {
         Ok(s) => s,
@@ -4020,12 +4684,21 @@ async fn fetch_table_columns(conn: &mut bb8::PooledConnection<'static, bb8_tiber
         Ok(r) => r,
         Err(_) => return Vec::new(),
     };
-    rows.iter().map(|row| {
-        let name: String = row.get::<&str, _>("COLUMN_NAME").unwrap_or("").to_string();
-        let data_type: String = row.get::<&str, _>("DATA_TYPE").unwrap_or("").to_string();
-        let is_nullable: bool = row.get::<&str, _>("IS_NULLABLE").unwrap_or("NO").eq_ignore_ascii_case("YES");
-        TableColInfo { name, data_type, is_nullable }
-    }).collect()
+    rows.iter()
+        .map(|row| {
+            let name: String = row.get::<&str, _>("COLUMN_NAME").unwrap_or("").to_string();
+            let data_type: String = row.get::<&str, _>("DATA_TYPE").unwrap_or("").to_string();
+            let is_nullable: bool = row
+                .get::<&str, _>("IS_NULLABLE")
+                .unwrap_or("NO")
+                .eq_ignore_ascii_case("YES");
+            TableColInfo {
+                name,
+                data_type,
+                is_nullable,
+            }
+        })
+        .collect()
 }
 
 /// 根据数据类型返回 NOT NULL 字段的默认值
@@ -4042,11 +4715,17 @@ fn default_value_for_type(data_type: &str, col_name: &str) -> Option<String> {
         "time" => Some("00:00:00".to_string()),
         _ => {
             // 对于未知类型，如果是 State 字段给 'N'，Used 字段给 'Y'
-            if col_name.eq_ignore_ascii_case("State") { Some("N".to_string()) }
-            else if col_name.eq_ignore_ascii_case("Used") { Some("Y".to_string()) }
-            else if col_name.eq_ignore_ascii_case("ScanMode") { Some("N".to_string()) }
-            else if col_name.eq_ignore_ascii_case("AccCheckFlg") { Some("0".to_string()) }
-            else { None }
+            if col_name.eq_ignore_ascii_case("State") {
+                Some("N".to_string())
+            } else if col_name.eq_ignore_ascii_case("Used") {
+                Some("Y".to_string())
+            } else if col_name.eq_ignore_ascii_case("ScanMode") {
+                Some("N".to_string())
+            } else if col_name.eq_ignore_ascii_case("AccCheckFlg") {
+                Some("0".to_string())
+            } else {
+                None
+            }
         }
     }
 }
@@ -4065,15 +4744,24 @@ pub async fn generic_batch_update(
     Json(params): Json<BatchUpdateParams>,
 ) -> Json<ApiResponse<serde_json::Value>> {
     if !is_valid_identifier(&params.table) {
-        return Json(ApiResponse::err_with_code("表名只能包含字母、数字、下划线", VALIDATION_TABLE_INVALID));
+        return Json(ApiResponse::err_with_code(
+            "表名只能包含字母、数字、下划线",
+            VALIDATION_TABLE_INVALID,
+        ));
     }
     if !is_valid_identifier(&params.primary_key) {
-        return Json(ApiResponse::err_with_code("主键字段名只能包含字母、数字、下划线", VALIDATION_FIELD_INVALID));
+        return Json(ApiResponse::err_with_code(
+            "主键字段名只能包含字母、数字、下划线",
+            VALIDATION_FIELD_INVALID,
+        ));
     }
     // P0-S2 修复：补 is_table_blacklisted 校验，防止通过批量更新接口篡改系统表
     if is_table_blacklisted(&params.table, &claims) {
         return Json(ApiResponse::err_with_code(
-            &format!("表 [{}] 为系统敏感表，禁止通过通用接口批量更新", params.table),
+            &format!(
+                "表 [{}] 为系统敏感表，禁止通过通用接口批量更新",
+                params.table
+            ),
             PERMISSION_DENIED_TABLE,
         ));
     }
@@ -4090,7 +4778,15 @@ pub async fn generic_batch_update(
     }
 
     // P0-S4 记录级越权防护：业务单据表（含 EUser 列）只能更新自己创建的记录
-    if let Err(msg) = check_record_ownership(&mut conn, &params.table, &params.primary_key, &params.ids, &claims).await {
+    if let Err(msg) = check_record_ownership(
+        &mut conn,
+        &params.table,
+        &params.primary_key,
+        &params.ids,
+        &claims,
+    )
+    .await
+    {
         return Json(ApiResponse::err_with_code(&msg, PERMISSION_DENIED_RECORD));
     }
 
@@ -4103,14 +4799,20 @@ pub async fn generic_batch_update(
 
     for (key, val) in params.updates.iter() {
         // 字段名安全校验：防止 SQL 注入
-        if !is_valid_identifier(key) { continue; }
+        if !is_valid_identifier(key) {
+            continue;
+        }
         if key == &params.primary_key {
             continue;
         }
         // Skip fields that come from JOIN (not own columns)
-        if join_fields.contains(&key.as_str()) { continue; }
+        if join_fields.contains(&key.as_str()) {
+            continue;
+        }
         // Skip identity / computed columns
-        if readonly_fields.iter().any(|r| r.eq_ignore_ascii_case(key)) { continue; }
+        if readonly_fields.iter().any(|r| r.eq_ignore_ascii_case(key)) {
+            continue;
+        }
         // BIT 字段特殊处理：把 'Y'/'N' 字符串转成 1/0，避免 SQL Server 转换失败
         let key_lc = key.to_lowercase();
         let val = if bit_columns.contains(&key_lc) {
@@ -4144,7 +4846,8 @@ pub async fn generic_batch_update(
         all_values.push(Some(id.clone()));
     }
 
-    let param_refs: Vec<&dyn tiberius::ToSql> = all_values.iter()
+    let param_refs: Vec<&dyn tiberius::ToSql> = all_values
+        .iter()
         .map(|v| v as &dyn tiberius::ToSql)
         .collect();
 
@@ -4178,7 +4881,11 @@ pub async fn generic_batch_update(
     // 事务提交成功后记录操作日志：每条 ID 一条，含修改前数据快照
     // 日志写入失败不影响主操作结果（record_oper 内部已吞错）
     let field_names: Vec<&str> = params.updates.keys().map(|k| k.as_str()).collect();
-    let remark = format!("批量修改 {} 个字段: {}", params.updates.len(), field_names.join("、"));
+    let remark = format!(
+        "批量修改 {} 个字段: {}",
+        params.updates.len(),
+        field_names.join("、")
+    );
     let after_json = serde_json::to_string(&params.updates).ok();
     for (id, before_json) in &before_snapshots {
         inventory_ledger::record_oper_with_data(
@@ -4191,7 +4898,8 @@ pub async fn generic_batch_update(
             Some(&remark),
             before_json.as_deref(),
             after_json.as_deref(),
-        ).await;
+        )
+        .await;
     }
 
     Json(ApiResponse::ok(serde_json::json!({
@@ -4212,7 +4920,9 @@ pub async fn generic_import_template(
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
         Err(e) => {
-            let body = serde_json::json!({"success":false,"message":&format!("数据库连接失败: {}", e)}).to_string();
+            let body =
+                serde_json::json!({"success":false,"message":&format!("数据库连接失败: {}", e)})
+                    .to_string();
             return axum::response::Response::builder()
                 .status(500)
                 .header("Content-Type", "application/json")
@@ -4228,7 +4938,9 @@ pub async fn generic_import_template(
     let stream = match conn.query(&sql, &[&table_name]).await {
         Ok(s) => s,
         Err(e) => {
-            let body = serde_json::json!({"success":false,"message":&format!("查询表结构失败: {}", e)}).to_string();
+            let body =
+                serde_json::json!({"success":false,"message":&format!("查询表结构失败: {}", e)})
+                    .to_string();
             return axum::response::Response::builder()
                 .status(500)
                 .header("Content-Type", "application/json")
@@ -4239,7 +4951,9 @@ pub async fn generic_import_template(
     let rows = match stream.into_first_result().await {
         Ok(r) => r,
         Err(e) => {
-            let body = serde_json::json!({"success":false,"message":&format!("读取列信息失败: {}", e)}).to_string();
+            let body =
+                serde_json::json!({"success":false,"message":&format!("读取列信息失败: {}", e)})
+                    .to_string();
             return axum::response::Response::builder()
                 .status(500)
                 .header("Content-Type", "application/json")
@@ -4263,7 +4977,10 @@ pub async fn generic_import_template(
     axum::response::Response::builder()
         .status(200)
         .header("Content-Type", "text/csv; charset=utf-8")
-        .header("Content-Disposition", format!("attachment; filename={}_template.csv", params.table))
+        .header(
+            "Content-Disposition",
+            format!("attachment; filename={}_template.csv", params.table),
+        )
         .body(axum::body::Body::from(csv))
         .unwrap()
 }
@@ -4281,7 +4998,9 @@ pub async fn generic_import_excel(
             Ok(f) => f,
             Err(e) => return Json(ApiResponse::err(&format!("读取上传文件失败: {}", e))),
         };
-        let Some(field) = field else { break; };
+        let Some(field) = field else {
+            break;
+        };
         let name = field.name().unwrap_or("").to_string();
         if name == "table" {
             table_name = field.text().await.unwrap_or_default();
@@ -4297,8 +5016,14 @@ pub async fn generic_import_excel(
     if table_name.is_empty() || file_data.is_empty() {
         return Json(ApiResponse::err("缺少表名或文件"));
     }
-    if !table_name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        return Json(ApiResponse::err_with_code("表名只能包含字母、数字、下划线", VALIDATION_TABLE_INVALID));
+    if !table_name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return Json(ApiResponse::err_with_code(
+            "表名只能包含字母、数字、下划线",
+            VALIDATION_TABLE_INVALID,
+        ));
     }
     // P0-S2 修复：补 is_table_blacklisted 校验，防止通过 Excel 导入向系统表写入数据
     if is_table_blacklisted(&table_name, &claims) {
@@ -4338,11 +5063,21 @@ pub async fn generic_import_excel(
         let mut row_data = serde_json::Map::new();
         for (i, header) in headers.iter().enumerate() {
             // 修复 SQL 注入：仅接受表中真实存在的列名，且必须是合法标识符
-            if !is_valid_identifier(header) { continue; }
-            if !table_columns.iter().any(|c| c.name.eq_ignore_ascii_case(header)) { continue; }
+            if !is_valid_identifier(header) {
+                continue;
+            }
+            if !table_columns
+                .iter()
+                .any(|c| c.name.eq_ignore_ascii_case(header))
+            {
+                continue;
+            }
             let val = values.get(i).unwrap_or(&"");
             if !val.is_empty() {
-                row_data.insert(header.to_string(), serde_json::Value::String(val.to_string()));
+                row_data.insert(
+                    header.to_string(),
+                    serde_json::Value::String(val.to_string()),
+                );
             }
         }
 
@@ -4356,9 +5091,13 @@ pub async fn generic_import_excel(
 
         for (key, val) in row_data.iter() {
             // Skip fields that come from JOIN (not own columns)
-            if join_fields.contains(&key.as_str()) { continue; }
+            if join_fields.contains(&key.as_str()) {
+                continue;
+            }
             // Skip IDENTITY / computed columns
-            if readonly_fields.iter().any(|r| r.eq_ignore_ascii_case(key)) { continue; }
+            if readonly_fields.iter().any(|r| r.eq_ignore_ascii_case(key)) {
+                continue;
+            }
             columns.push(format!("[{}]", key));
             placeholders.push(format!("@p{}", columns.len()));
             sql_values.push(json_to_sql_value(val));
@@ -4376,7 +5115,8 @@ pub async fn generic_import_excel(
             placeholders.join(", ")
         );
 
-        let param_refs: Vec<&dyn tiberius::ToSql> = sql_values.iter()
+        let param_refs: Vec<&dyn tiberius::ToSql> = sql_values
+            .iter()
             .map(|v| v as &dyn tiberius::ToSql)
             .collect();
 
@@ -4391,10 +5131,15 @@ pub async fn generic_import_excel(
     // 写操作日志
     if success_count > 0 {
         let _ = inventory_ledger::record_oper(
-            &mut conn, "IMPORT", &table_name, "",
-            &claims.user_code, None,
+            &mut conn,
+            "IMPORT",
+            &table_name,
+            "",
+            &claims.user_code,
+            None,
             Some(&format!("Excel导入{}条记录", success_count)),
-        ).await;
+        )
+        .await;
     }
     Json(ApiResponse::ok(serde_json::json!({
         "success_count": success_count,
@@ -4432,8 +5177,15 @@ pub async fn generic_table_schema(
     Json(params): Json<GenericSchemaParams>,
 ) -> Json<ApiResponse<serde_json::Value>> {
     // SQL Server 标识符安全：仅允许字母数字+下划线
-    if !params.table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        return Json(ApiResponse::err_with_code("表名只能包含字母、数字、下划线", VALIDATION_TABLE_INVALID));
+    if !params
+        .table
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return Json(ApiResponse::err_with_code(
+            "表名只能包含字母、数字、下划线",
+            VALIDATION_TABLE_INVALID,
+        ));
     }
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
@@ -4449,18 +5201,24 @@ pub async fn generic_table_schema(
         },
         Err(e) => return Json(ApiResponse::err(&format!("查询表结构失败: {}", e))),
     };
-    let columns: Vec<serde_json::Value> = rows.iter().map(|row| {
-        let name = row.get::<&str, _>("COLUMN_NAME").unwrap_or("").to_string();
-        let data_type = row.get::<&str, _>("DATA_TYPE").unwrap_or("").to_string();
-        let is_nullable = row.get::<&str, _>("IS_NULLABLE").unwrap_or("NO").eq_ignore_ascii_case("YES");
-        let max_len: Option<i32> = row.try_get("CHARACTER_MAXIMUM_LENGTH").ok().flatten();
-        serde_json::json!({
-            "name": name,
-            "data_type": data_type,
-            "is_nullable": is_nullable,
-            "max_length": max_len,
+    let columns: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| {
+            let name = row.get::<&str, _>("COLUMN_NAME").unwrap_or("").to_string();
+            let data_type = row.get::<&str, _>("DATA_TYPE").unwrap_or("").to_string();
+            let is_nullable = row
+                .get::<&str, _>("IS_NULLABLE")
+                .unwrap_or("NO")
+                .eq_ignore_ascii_case("YES");
+            let max_len: Option<i32> = row.try_get("CHARACTER_MAXIMUM_LENGTH").ok().flatten();
+            serde_json::json!({
+                "name": name,
+                "data_type": data_type,
+                "is_nullable": is_nullable,
+                "max_length": max_len,
+            })
         })
-    }).collect();
+        .collect();
     Json(ApiResponse::ok(serde_json::json!({
         "table": params.table,
         "columns": columns,
@@ -4486,8 +5244,13 @@ pub async fn generic_export_excel(
     Extension(claims): Extension<Claims>,
     Json(params): Json<ExportExcelParams>,
 ) -> Response {
-    if !params.table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        let body = serde_json::json!({"success":false,"message":"表名只能包含字母、数字、下划线"}).to_string();
+    if !params
+        .table
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        let body = serde_json::json!({"success":false,"message":"表名只能包含字母、数字、下划线"})
+            .to_string();
         return axum::response::Response::builder()
             .status(400)
             .header("Content-Type", "application/json")
@@ -4505,12 +5268,18 @@ pub async fn generic_export_excel(
     }
     if let Err(msg) = validate_query_params(&params.table, &params.keyword_fields, &params.wheres) {
         let body = serde_json::json!({"success":false,"message":msg.as_str()}).to_string();
-        return axum::response::Response::builder().status(400).header("Content-Type", "application/json").body(axum::body::Body::from(body)).unwrap();
+        return axum::response::Response::builder()
+            .status(400)
+            .header("Content-Type", "application/json")
+            .body(axum::body::Body::from(body))
+            .unwrap();
     }
     let mut conn = match get_pool().get().await {
         Ok(c) => c,
         Err(e) => {
-            let body = serde_json::json!({"success":false,"message":&format!("数据库连接失败: {}", e)}).to_string();
+            let body =
+                serde_json::json!({"success":false,"message":&format!("数据库连接失败: {}", e)})
+                    .to_string();
             return axum::response::Response::builder()
                 .status(500)
                 .header("Content-Type", "application/json")
@@ -4519,16 +5288,28 @@ pub async fn generic_export_excel(
         }
     };
 
-    let built = build_base_query(&params.table, &params.keyword, &params.keyword_fields, &params.wheres, params.include_deleted.unwrap_or(false), params.only_deleted.unwrap_or(false), &None);
+    let built = build_base_query(
+        &params.table,
+        &params.keyword,
+        &params.keyword_fields,
+        &params.wheres,
+        params.include_deleted.unwrap_or(false),
+        params.only_deleted.unwrap_or(false),
+        &None,
+    );
     let export_sql = format!("SELECT TOP 50000 * FROM ({}) t", built.sql);
-    let param_refs: Vec<&dyn tiberius::ToSql> = built.params.iter()
+    let param_refs: Vec<&dyn tiberius::ToSql> = built
+        .params
+        .iter()
         .map(|v| v as &dyn tiberius::ToSql)
         .collect();
 
     let data_stream = match conn.query(&export_sql, &param_refs).await {
         Ok(s) => s,
         Err(e) => {
-            let body = serde_json::json!({"success":false,"message":&format!("导出查询失败: {}", e)}).to_string();
+            let body =
+                serde_json::json!({"success":false,"message":&format!("导出查询失败: {}", e)})
+                    .to_string();
             return axum::response::Response::builder()
                 .status(500)
                 .header("Content-Type", "application/json")
@@ -4539,7 +5320,9 @@ pub async fn generic_export_excel(
     let rows = match data_stream.into_first_result().await {
         Ok(r) => r,
         Err(e) => {
-            let body = serde_json::json!({"success":false,"message":&format!("读取数据失败: {}", e)}).to_string();
+            let body =
+                serde_json::json!({"success":false,"message":&format!("读取数据失败: {}", e)})
+                    .to_string();
             return axum::response::Response::builder()
                 .status(500)
                 .header("Content-Type", "application/json")
@@ -4551,20 +5334,30 @@ pub async fn generic_export_excel(
     if rows.is_empty() {
         // 空结果也记录导出日志（便于审计"谁点了导出"）
         let _ = inventory_ledger::record_oper(
-            &mut conn, "EXPORT", &params.table, "",
-            &claims.user_code, None, Some("导出0条记录"),
-        ).await;
+            &mut conn,
+            "EXPORT",
+            &params.table,
+            "",
+            &claims.user_code,
+            None,
+            Some("导出0条记录"),
+        )
+        .await;
         let csv = "\u{FEFF}\n".to_string();
         return axum::response::Response::builder()
             .status(200)
             .header("Content-Type", "text/csv; charset=utf-8")
-            .header("Content-Disposition", format!("attachment; filename={}_export.csv", params.table))
+            .header(
+                "Content-Disposition",
+                format!("attachment; filename={}_export.csv", params.table),
+            )
             .body(axum::body::Body::from(csv))
             .unwrap();
     }
 
     let columns = rows[0].columns();
-    let headers: Vec<String> = columns.iter()
+    let headers: Vec<String> = columns
+        .iter()
         .filter(|c| c.name() != "_rn")
         .map(|c| c.name().to_string())
         .collect();
@@ -4572,34 +5365,46 @@ pub async fn generic_export_excel(
     let mut csv = format!("\u{FEFF}{}\n", headers.join(","));
 
     for row in &rows {
-        let vals: Vec<String> = headers.iter().map(|h| {
-            let v = try_get_value(row, h);
-            match v {
-                serde_json::Value::String(s) => {
-                    if s.contains(',') || s.contains('"') || s.contains('\n') {
-                        format!("\"{}\"", s.replace('"', "\"\""))
-                    } else {
-                        s
+        let vals: Vec<String> = headers
+            .iter()
+            .map(|h| {
+                let v = try_get_value(row, h);
+                match v {
+                    serde_json::Value::String(s) => {
+                        if s.contains(',') || s.contains('"') || s.contains('\n') {
+                            format!("\"{}\"", s.replace('"', "\"\""))
+                        } else {
+                            s
+                        }
                     }
+                    serde_json::Value::Null => String::new(),
+                    other => other.to_string(),
                 }
-                serde_json::Value::Null => String::new(),
-                other => other.to_string(),
-            }
-        }).collect();
+            })
+            .collect();
         csv.push_str(&format!("{}\n", vals.join(",")));
     }
 
     // 记录导出日志（含行数，便于审计大量数据导出场景）
     let export_remark = format!("导出{}条记录(CSV)", rows.len());
     let _ = inventory_ledger::record_oper(
-        &mut conn, "EXPORT", &params.table, "",
-        &claims.user_code, None, Some(&export_remark),
-    ).await;
+        &mut conn,
+        "EXPORT",
+        &params.table,
+        "",
+        &claims.user_code,
+        None,
+        Some(&export_remark),
+    )
+    .await;
 
     let resp = axum::response::Response::builder()
         .status(200)
         .header("Content-Type", "text/csv; charset=utf-8")
-        .header("Content-Disposition", format!("attachment; filename={}_export.csv", params.table))
+        .header(
+            "Content-Disposition",
+            format!("attachment; filename={}_export.csv", params.table),
+        )
         .body(axum::body::Body::from(csv))
         .unwrap();
     resp
@@ -4694,7 +5499,10 @@ mod tests {
 
     #[test]
     fn test_json_to_sql_value_string() {
-        assert_eq!(json_to_sql_value(&json!("hello")), Some("hello".to_string()));
+        assert_eq!(
+            json_to_sql_value(&json!("hello")),
+            Some("hello".to_string())
+        );
         assert_eq!(json_to_sql_value(&json!("")), None);
         assert_eq!(json_to_sql_value(&json!("   ")), None);
         assert_eq!(json_to_sql_value(&json!("\t\n")), None);
@@ -4762,10 +5570,22 @@ mod tests {
 
     #[test]
     fn test_default_value_for_type_unknown_state() {
-        assert_eq!(default_value_for_type("unknown_type", "State"), Some("N".to_string()));
-        assert_eq!(default_value_for_type("unknown_type", "Used"), Some("Y".to_string()));
-        assert_eq!(default_value_for_type("unknown_type", "ScanMode"), Some("N".to_string()));
-        assert_eq!(default_value_for_type("unknown_type", "AccCheckFlg"), Some("0".to_string()));
+        assert_eq!(
+            default_value_for_type("unknown_type", "State"),
+            Some("N".to_string())
+        );
+        assert_eq!(
+            default_value_for_type("unknown_type", "Used"),
+            Some("Y".to_string())
+        );
+        assert_eq!(
+            default_value_for_type("unknown_type", "ScanMode"),
+            Some("N".to_string())
+        );
+        assert_eq!(
+            default_value_for_type("unknown_type", "AccCheckFlg"),
+            Some("0".to_string())
+        );
         assert_eq!(default_value_for_type("unknown_type", "Other"), None);
     }
 
@@ -4866,12 +5686,18 @@ mod tests {
 
     #[test]
     fn test_get_field_prefix_tbas_goods() {
-        assert_eq!(get_field_prefix_for_table("tBas_Goods", "GDSTypeName"), "gt");
+        assert_eq!(
+            get_field_prefix_for_table("tBas_Goods", "GDSTypeName"),
+            "gt"
+        );
         assert_eq!(get_field_prefix_for_table("tBas_Goods", "BrandName"), "b");
         assert_eq!(get_field_prefix_for_table("tBas_Goods", "SuppName"), "s");
         assert_eq!(get_field_prefix_for_table("tBas_Goods", "UnitName"), "u");
         assert_eq!(get_field_prefix_for_table("tBas_Goods", "StkName"), "sk");
-        assert_eq!(get_field_prefix_for_table("tBas_Goods", "GDSKindName"), "gk");
+        assert_eq!(
+            get_field_prefix_for_table("tBas_Goods", "GDSKindName"),
+            "gk"
+        );
         assert_eq!(get_field_prefix_for_table("tBas_Goods", "GDSNO"), "t");
         assert_eq!(get_field_prefix_for_table("tBas_Goods", "GDSDesc"), "t");
     }
@@ -4884,9 +5710,15 @@ mod tests {
     #[test]
     fn test_get_field_prefix_detail_tables() {
         assert_eq!(get_field_prefix_for_table("tStk_IODetail", "GDSNO"), "g");
-        assert_eq!(get_field_prefix_for_table("tPur_OrderDetail", "GDSDesc"), "g");
+        assert_eq!(
+            get_field_prefix_for_table("tPur_OrderDetail", "GDSDesc"),
+            "g"
+        );
         assert_eq!(get_field_prefix_for_table("tStk_IODetail", "UnitName"), "u");
-        assert_eq!(get_field_prefix_for_table("tStk_IODetail", "BrandName"), "b");
+        assert_eq!(
+            get_field_prefix_for_table("tStk_IODetail", "BrandName"),
+            "b"
+        );
     }
 
     #[test]
@@ -4961,7 +5793,15 @@ mod tests {
             op: "eq".to_string(),
             value: json!(1),
         };
-        let q = build_base_query("tBas_Goods", &None, &None, &Some(vec![wc]), false, false, &None);
+        let q = build_base_query(
+            "tBas_Goods",
+            &None,
+            &None,
+            &Some(vec![wc]),
+            false,
+            false,
+            &None,
+        );
         assert!(q.sql.contains("t.[GDSStateNO] = @p1"));
         assert_eq!(q.params, vec![Some("1".to_string())]);
     }
@@ -4973,7 +5813,15 @@ mod tests {
             op: "ne".to_string(),
             value: json!("D"),
         };
-        let q = build_base_query("tBas_Goods", &None, &None, &Some(vec![wc]), true, false, &None);
+        let q = build_base_query(
+            "tBas_Goods",
+            &None,
+            &None,
+            &Some(vec![wc]),
+            true,
+            false,
+            &None,
+        );
         assert!(q.sql.contains("t.[State] <> @p1"));
     }
 
@@ -4984,7 +5832,15 @@ mod tests {
             op: "in".to_string(),
             value: json!(["a", "b", "c"]),
         };
-        let q = build_base_query("tBas_Goods", &None, &None, &Some(vec![wc]), true, false, &None);
+        let q = build_base_query(
+            "tBas_Goods",
+            &None,
+            &None,
+            &Some(vec![wc]),
+            true,
+            false,
+            &None,
+        );
         assert!(q.sql.contains("IN (@p1, @p2, @p3)"));
         assert_eq!(q.params.len(), 3);
         assert_eq!(q.params[0], Some("a".to_string()));
@@ -4999,7 +5855,15 @@ mod tests {
             op: "in".to_string(),
             value: json!("a,b,c"),
         };
-        let q = build_base_query("tBas_Goods", &None, &None, &Some(vec![wc]), true, false, &None);
+        let q = build_base_query(
+            "tBas_Goods",
+            &None,
+            &None,
+            &Some(vec![wc]),
+            true,
+            false,
+            &None,
+        );
         assert!(q.sql.contains("IN (@p1, @p2, @p3)"));
         assert_eq!(q.params.len(), 3);
     }
@@ -5011,7 +5875,15 @@ mod tests {
             op: "in".to_string(),
             value: json!([]),
         };
-        let q = build_base_query("tBas_Goods", &None, &None, &Some(vec![wc]), true, false, &None);
+        let q = build_base_query(
+            "tBas_Goods",
+            &None,
+            &None,
+            &Some(vec![wc]),
+            true,
+            false,
+            &None,
+        );
         assert!(q.sql.contains("1=0"));
         assert!(q.params.is_empty());
     }
@@ -5023,7 +5895,15 @@ mod tests {
             op: "like".to_string(),
             value: json!("洗发"),
         };
-        let q = build_base_query("tBas_Goods", &None, &None, &Some(vec![wc]), true, false, &None);
+        let q = build_base_query(
+            "tBas_Goods",
+            &None,
+            &None,
+            &Some(vec![wc]),
+            true,
+            false,
+            &None,
+        );
         assert!(q.sql.contains("t.[GDSDesc] LIKE @p1"));
         assert_eq!(q.params, vec![Some("%洗发%".to_string())]);
     }
@@ -5035,7 +5915,15 @@ mod tests {
             op: "eq".to_string(),
             value: json!("Y"),
         };
-        let q = build_base_query("tBas_Brand", &None, &None, &Some(vec![wc]), false, false, &None);
+        let q = build_base_query(
+            "tBas_Brand",
+            &None,
+            &None,
+            &Some(vec![wc]),
+            false,
+            false,
+            &None,
+        );
         assert!(q.sql.contains("CAST(t.[Used] AS nvarchar(1)) = @p"));
     }
 
@@ -5046,7 +5934,15 @@ mod tests {
             op: "eq".to_string(),
             value: json!("x"),
         };
-        let q = build_base_query("tBas_Goods", &None, &None, &Some(vec![wc]), true, false, &None);
+        let q = build_base_query(
+            "tBas_Goods",
+            &None,
+            &None,
+            &Some(vec![wc]),
+            true,
+            false,
+            &None,
+        );
         assert!(!q.sql.contains("bad name"));
     }
 
@@ -5056,7 +5952,11 @@ mod tests {
         let q = build_base_query("tBas_Goods", &None, &None, &None, true, false, &wid);
         assert!(q.sql.contains("StockQty"));
         assert!(q.sql.contains("QQty"));
-        assert!(q.sql.contains("LEFT JOIN [tStk_Stock] st ON t.[GDSID] = st.[GDSID] AND st.[StkID] = @p1"));
+        assert!(
+            q.sql.contains(
+                "LEFT JOIN [tStk_Stock] st ON t.[GDSID] = st.[GDSID] AND st.[StkID] = @p1"
+            )
+        );
         assert_eq!(q.params, vec![Some("warehouse-uuid-1".to_string())]);
     }
 
@@ -5088,7 +5988,15 @@ mod tests {
             op: "like".to_string(),
             value: json!("洗发"),
         };
-        let q = build_base_query("tBas_Goods", &None, &None, &Some(vec![wc1, wc2]), false, false, &None);
+        let q = build_base_query(
+            "tBas_Goods",
+            &None,
+            &None,
+            &Some(vec![wc1, wc2]),
+            false,
+            false,
+            &None,
+        );
         let and_count = q.sql.matches("AND").count();
         assert_eq!(and_count, 2);
     }
@@ -5110,7 +6018,15 @@ mod tests {
             op: "eq".to_string(),
             value: json!(1),
         };
-        let q = build_base_query("tBas_Goods", &kw, &fields, &Some(vec![wc]), false, false, &None);
+        let q = build_base_query(
+            "tBas_Goods",
+            &kw,
+            &fields,
+            &Some(vec![wc]),
+            false,
+            false,
+            &None,
+        );
         assert_eq!(q.params.len(), 3);
         assert!(q.sql.contains("@p1"));
         assert!(q.sql.contains("@p2"));

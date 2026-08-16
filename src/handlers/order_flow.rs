@@ -1,9 +1,9 @@
-use axum::{extract::State, Json};
-use serde::{Deserialize, Serialize};
 use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
 use crate::utils::{ApiResponse, row_get_f64};
+use axum::{Json, extract::State};
+use serde::{Deserialize, Serialize};
 
 // ============================================================
 // 订单流程 P1 增强接口
@@ -54,21 +54,27 @@ pub async fn query_available(
                 continue;
             }
             let p: Vec<&dyn tiberius::ToSql> = vec![&item.gdsid];
-            let qty: f64 = match conn.query(
-                "SELECT ISNULL(SUM(ISNULL(Qty,0)),0) AS Q FROM tStk_Stock WHERE GDSID = @p1",
-                &p,
-            ).await {
+            let qty: f64 = match conn
+                .query(
+                    "SELECT ISNULL(SUM(ISNULL(Qty,0)),0) AS Q FROM tStk_Stock WHERE GDSID = @p1",
+                    &p,
+                )
+                .await
+            {
                 Ok(stream) => match stream.into_row().await {
                     Ok(Some(row)) => row_get_f64(&row, "Q"),
                     _ => 0.0,
                 },
                 _ => 0.0,
             };
-            let reserved: f64 = match conn.query(
-                "SELECT ISNULL(SUM(ISNULL(Qty,0) - ISNULL(ReleasedQty,0)),0) AS R \
+            let reserved: f64 = match conn
+                .query(
+                    "SELECT ISNULL(SUM(ISNULL(Qty,0) - ISNULL(ReleasedQty,0)),0) AS R \
                  FROM tStk_Reserve WHERE GDSID = @p1 AND State = 'A'",
-                &p,
-            ).await {
+                    &p,
+                )
+                .await
+            {
                 Ok(stream) => match stream.into_row().await {
                     Ok(Some(row)) => row_get_f64(&row, "R"),
                     _ => 0.0,
@@ -89,21 +95,27 @@ pub async fn query_available(
                 continue;
             }
             let p: Vec<&dyn tiberius::ToSql> = vec![&item.gdsid, &item.stkid];
-            let qty: f64 = match conn.query(
-                "SELECT ISNULL(Qty,0) AS Q FROM tStk_Stock WHERE GDSID = @p1 AND StkID = @p2",
-                &p,
-            ).await {
+            let qty: f64 = match conn
+                .query(
+                    "SELECT ISNULL(Qty,0) AS Q FROM tStk_Stock WHERE GDSID = @p1 AND StkID = @p2",
+                    &p,
+                )
+                .await
+            {
                 Ok(stream) => match stream.into_row().await {
                     Ok(Some(row)) => row_get_f64(&row, "Q"),
                     _ => 0.0,
                 },
                 _ => 0.0,
             };
-            let reserved: f64 = match conn.query(
-                "SELECT ISNULL(SUM(ISNULL(Qty,0) - ISNULL(ReleasedQty,0)),0) AS R \
+            let reserved: f64 = match conn
+                .query(
+                    "SELECT ISNULL(SUM(ISNULL(Qty,0) - ISNULL(ReleasedQty,0)),0) AS R \
                  FROM tStk_Reserve WHERE GDSID = @p1 AND StkID = @p2 AND State = 'A'",
-                &p,
-            ).await {
+                    &p,
+                )
+                .await
+            {
                 Ok(stream) => match stream.into_row().await {
                     Ok(Some(row)) => row_get_f64(&row, "R"),
                     _ => 0.0,
@@ -167,7 +179,7 @@ fn resolve_source_meta(source_type: &str) -> Option<SourceDocMeta> {
             target_master_pk: "SOID",
             target_detail_fk: "SOID",
             target_master_link_fk: "",
-            target_detail_link_fk: "SQDetailID",  // tSal_OrderDetail.SQDetailID → tSal_QuoteDetail.SQDetailID
+            target_detail_link_fk: "SQDetailID", // tSal_OrderDetail.SQDetailID → tSal_QuoteDetail.SQDetailID
             target_kind: None,
         }),
         "sales_order" => Some(SourceDocMeta {
@@ -179,7 +191,7 @@ fn resolve_source_meta(source_type: &str) -> Option<SourceDocMeta> {
             target_detail: "tStk_IODetail",
             target_master_pk: "IOID",
             target_detail_fk: "IOID",
-            target_master_link_fk: "SOID",  // tStk_IO.SOID → tSal_Order.SOID
+            target_master_link_fk: "SOID", // tStk_IO.SOID → tSal_Order.SOID
             target_detail_link_fk: "",
             target_kind: Some("SD"),
         }),
@@ -192,7 +204,7 @@ fn resolve_source_meta(source_type: &str) -> Option<SourceDocMeta> {
             target_master_pk: "IOID",
             target_detail_fk: "IOID",
             target_master_link_fk: "",
-            target_detail_link_fk: "SouID",  // tStk_IODetail.SouID → 源 tStk_IODetail.IODetailID
+            target_detail_link_fk: "SouID", // tStk_IODetail.SouID → 源 tStk_IODetail.IODetailID
             target_kind: Some("SR"),
         }),
         "purchase_order" => Some(SourceDocMeta {
@@ -203,7 +215,7 @@ fn resolve_source_meta(source_type: &str) -> Option<SourceDocMeta> {
             target_detail: "tStk_IODetail",
             target_master_pk: "IOID",
             target_detail_fk: "IOID",
-            target_master_link_fk: "POID",  // tStk_IO.POID → tPur_Order.POID
+            target_master_link_fk: "POID", // tStk_IO.POID → tPur_Order.POID
             target_detail_link_fk: "",
             target_kind: Some("PD"),
         }),
@@ -215,7 +227,7 @@ fn resolve_source_meta(source_type: &str) -> Option<SourceDocMeta> {
             target_detail: "tStk_IODetail",
             target_master_pk: "IOID",
             target_detail_fk: "IOID",
-            target_master_link_fk: "POID",  // tStk_IO.POID → 源 tStk_IO.IOID
+            target_master_link_fk: "POID", // tStk_IO.POID → 源 tStk_IO.IOID
             target_detail_link_fk: "",
             target_kind: Some("RI"),
         }),
@@ -228,7 +240,7 @@ fn resolve_source_meta(source_type: &str) -> Option<SourceDocMeta> {
             target_master_pk: "IOID",
             target_detail_fk: "IOID",
             target_master_link_fk: "",
-            target_detail_link_fk: "SouID",  // tStk_IODetail.SouID → 源 tStk_IODetail.IODetailID
+            target_detail_link_fk: "SouID", // tStk_IODetail.SouID → 源 tStk_IODetail.IODetailID
             target_kind: Some("TH"),
         }),
         // ===== 批发链路 =====
@@ -241,7 +253,7 @@ fn resolve_source_meta(source_type: &str) -> Option<SourceDocMeta> {
             target_master_pk: "SOID",
             target_detail_fk: "SOID",
             target_master_link_fk: "",
-            target_detail_link_fk: "SQDetailID",  // tSal_OrderDetail.SQDetailID → tSal_QuoteDetail.SQDetailID
+            target_detail_link_fk: "SQDetailID", // tSal_OrderDetail.SQDetailID → tSal_QuoteDetail.SQDetailID
             target_kind: None,
         }),
         "wholesale_order" => Some(SourceDocMeta {
@@ -253,7 +265,7 @@ fn resolve_source_meta(source_type: &str) -> Option<SourceDocMeta> {
             target_detail: "tStk_IODetail",
             target_master_pk: "IOID",
             target_detail_fk: "IOID",
-            target_master_link_fk: "SOID",  // tStk_IO.SOID → tSal_Order.SOID
+            target_master_link_fk: "SOID", // tStk_IO.SOID → tSal_Order.SOID
             target_detail_link_fk: "",
             target_kind: Some("SD"),
         }),
@@ -267,7 +279,7 @@ fn resolve_source_meta(source_type: &str) -> Option<SourceDocMeta> {
             target_master_pk: "IOID",
             target_detail_fk: "IOID",
             target_master_link_fk: "",
-            target_detail_link_fk: "SouID",  // tStk_IODetail.SouID → 源 tStk_IODetail.IODetailID
+            target_detail_link_fk: "SouID", // tStk_IODetail.SouID → 源 tStk_IODetail.IODetailID
             target_kind: Some("SR"),
         }),
         // 采购报价 → 采购订单（无外键关联，仅参照带入数据，不跟踪累计执行量）
@@ -279,8 +291,8 @@ fn resolve_source_meta(source_type: &str) -> Option<SourceDocMeta> {
             target_detail: "tPur_OrderDetail",
             target_master_pk: "POID",
             target_detail_fk: "POID",
-            target_master_link_fk: "",  // tPur_Order 无 PQID 字段
-            target_detail_link_fk: "",  // tPur_OrderDetail 无 PQDetailID 字段
+            target_master_link_fk: "", // tPur_Order 无 PQID 字段
+            target_detail_link_fk: "", // tPur_OrderDetail 无 PQDetailID 字段
             target_kind: None,
         }),
         _ => None,
@@ -350,7 +362,11 @@ pub async fn query_source_detail(
         Ok(stream) => match stream.into_first_result().await {
             Ok(rs) => rs,
             Err(e) => {
-                tracing::warn!("[query_source_detail] 读取明细行失败: {} | sql={}", e, detail_sql);
+                tracing::warn!(
+                    "[query_source_detail] 读取明细行失败: {} | sql={}",
+                    e,
+                    detail_sql
+                );
                 Vec::new()
             }
         },
@@ -435,7 +451,11 @@ pub async fn query_source_detail(
                         fulfilled_map.insert((gdsid, stkid), f);
                     }
                 }
-                Err(e) => tracing::warn!("[query_source_detail] 聚合 SQL 读取失败: {} | sql={}", e, sql),
+                Err(e) => tracing::warn!(
+                    "[query_source_detail] 聚合 SQL 读取失败: {} | sql={}",
+                    e,
+                    sql
+                ),
             },
             Err(e) => tracing::warn!("[query_source_detail] 聚合 SQL 错误: {} | sql={}", e, sql),
         }
@@ -455,7 +475,9 @@ pub async fn query_source_detail(
         let unit_no: String = row.get::<&str, _>("UnitNO").unwrap_or("").to_string();
         let remark: String = row.get::<&str, _>("Remark").unwrap_or("").to_string();
         let pack_cnv_qty: f64 = row_get_f64(&row, "PackCnvQty");
-        let fulfilled = *fulfilled_map.get(&(gdsid.clone(), stkid.clone())).unwrap_or(&0.0);
+        let fulfilled = *fulfilled_map
+            .get(&(gdsid.clone(), stkid.clone()))
+            .unwrap_or(&0.0);
         let pending = (qty - fulfilled).max(0.0);
         out.push(SourceDetailRow {
             detail_id,

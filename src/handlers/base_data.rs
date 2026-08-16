@@ -1,14 +1,11 @@
-use axum::{
-    extract::State,
-    Json,
-};
-use serde::Deserialize;
-use tiberius::Row;
-use tiberius::ColumnType;
 use crate::config::Config;
 use crate::db::get_pool;
-use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
 use crate::utils::password::hash_password;
+use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
+use axum::{Json, extract::State};
+use serde::Deserialize;
+use tiberius::ColumnType;
+use tiberius::Row;
 
 #[derive(Deserialize)]
 pub struct PaginationParams {
@@ -95,7 +92,10 @@ pub fn try_get_value_by_col(row: &Row, col: &tiberius::Column) -> serde_json::Va
                 return serde_json::Value::Bool(v);
             }
         }
-        ColumnType::Datetime | ColumnType::Datetime2 | ColumnType::Datetime4 | ColumnType::Datetimen => {
+        ColumnType::Datetime
+        | ColumnType::Datetime2
+        | ColumnType::Datetime4
+        | ColumnType::Datetimen => {
             if let Ok(Some(v)) = row.try_get::<chrono::NaiveDateTime, _>(col_name) {
                 return serde_json::Value::String(v.format("%Y-%m-%d %H:%M:%S").to_string());
             }
@@ -202,14 +202,16 @@ pub async fn delete_supplier(
         let mut ref_hits: Vec<String> = Vec::new();
         for (ref_table, ref_col, ref_label) in &references {
             // 修复 SQL 注入：参数化 IN 列表，避免字符串拼接
-            let placeholders: Vec<String> = (1..=body.ids.len())
-                .map(|i| format!("@p{}", i))
-                .collect();
+            let placeholders: Vec<String> =
+                (1..=body.ids.len()).map(|i| format!("@p{}", i)).collect();
             let total_sql = format!(
                 "SELECT COUNT(*) AS cnt FROM [{}] WHERE [{}] IN ({})",
-                ref_table, ref_col, placeholders.join(",")
+                ref_table,
+                ref_col,
+                placeholders.join(",")
             );
-            let ref_params: Vec<Option<String>> = body.ids.iter().map(|s| Some(s.clone())).collect();
+            let ref_params: Vec<Option<String>> =
+                body.ids.iter().map(|s| Some(s.clone())).collect();
             let ref_param_refs: Vec<&dyn tiberius::ToSql> = ref_params
                 .iter()
                 .map(|v| v as &dyn tiberius::ToSql)
@@ -246,7 +248,10 @@ pub async fn delete_supplier(
                 return Json(ApiResponse::err(&format!("彻底删除供应商失败: {}", e)));
             }
         }
-        return Json(ApiResponse::msg(&format!("成功彻底删除 {} 条供应商", body.ids.len())));
+        return Json(ApiResponse::msg(&format!(
+            "成功彻底删除 {} 条供应商",
+            body.ids.len()
+        )));
     }
 
     // 软删除
@@ -258,7 +263,10 @@ pub async fn delete_supplier(
         }
     }
 
-    Json(ApiResponse::msg(&format!("成功作废{}条供应商", body.ids.len())))
+    Json(ApiResponse::msg(&format!(
+        "成功作废{}条供应商",
+        body.ids.len()
+    )))
 }
 
 pub async fn delete_warehouse(
@@ -291,14 +299,16 @@ pub async fn delete_warehouse(
         let mut ref_hits: Vec<String> = Vec::new();
         for (ref_table, ref_col, ref_label) in &references {
             // 修复 SQL 注入：参数化 IN 列表，避免字符串拼接
-            let placeholders: Vec<String> = (1..=body.ids.len())
-                .map(|i| format!("@p{}", i))
-                .collect();
+            let placeholders: Vec<String> =
+                (1..=body.ids.len()).map(|i| format!("@p{}", i)).collect();
             let total_sql = format!(
                 "SELECT COUNT(*) AS cnt FROM [{}] WHERE [{}] IN ({})",
-                ref_table, ref_col, placeholders.join(",")
+                ref_table,
+                ref_col,
+                placeholders.join(",")
             );
-            let ref_params: Vec<Option<String>> = body.ids.iter().map(|s| Some(s.clone())).collect();
+            let ref_params: Vec<Option<String>> =
+                body.ids.iter().map(|s| Some(s.clone())).collect();
             let ref_param_refs: Vec<&dyn tiberius::ToSql> = ref_params
                 .iter()
                 .map(|v| v as &dyn tiberius::ToSql)
@@ -335,7 +345,10 @@ pub async fn delete_warehouse(
                 return Json(ApiResponse::err(&format!("彻底删除仓库失败: {}", e)));
             }
         }
-        return Json(ApiResponse::msg(&format!("成功彻底删除 {} 条仓库", body.ids.len())));
+        return Json(ApiResponse::msg(&format!(
+            "成功彻底删除 {} 条仓库",
+            body.ids.len()
+        )));
     }
 
     // 软删除
@@ -347,7 +360,10 @@ pub async fn delete_warehouse(
         }
     }
 
-    Json(ApiResponse::msg(&format!("成功停用{}条仓库", body.ids.len())))
+    Json(ApiResponse::msg(&format!(
+        "成功停用{}条仓库",
+        body.ids.len()
+    )))
 }
 
 #[derive(Deserialize)]
@@ -408,11 +424,36 @@ pub async fn create_customer(
     let pay_sub_code = body.PaySubCode.as_deref().unwrap_or("");
     let pay_sub_name = body.PaySubName.as_deref().unwrap_or("");
 
-    if let Err(e) = conn.execute(sql, &[
-        &custid, &body.CustNo, &body.CustName, &area_id, &cust_type_id, &emp_id,
-        &addr, &linkman, &zip, &email, &tel, &fax, &bank, &bank_acc_no, &tax_code,
-        &py_code, &state, &now, &now, &0i32, &pay_sub_code, &pay_sub_name,
-    ]).await {
+    if let Err(e) = conn
+        .execute(
+            sql,
+            &[
+                &custid,
+                &body.CustNo,
+                &body.CustName,
+                &area_id,
+                &cust_type_id,
+                &emp_id,
+                &addr,
+                &linkman,
+                &zip,
+                &email,
+                &tel,
+                &fax,
+                &bank,
+                &bank_acc_no,
+                &tax_code,
+                &py_code,
+                &state,
+                &now,
+                &now,
+                &0i32,
+                &pay_sub_code,
+                &pay_sub_name,
+            ],
+        )
+        .await
+    {
         return Json(ApiResponse::err(&format!("新增客户失败: {}", e)));
     }
 
@@ -475,11 +516,34 @@ pub async fn update_customer(
     let pay_sub_code = body.PaySubCode.as_deref().unwrap_or("");
     let pay_sub_name = body.PaySubName.as_deref().unwrap_or("");
 
-    if let Err(e) = conn.execute(sql, &[
-        &body.CustNo, &body.CustName, &cust_type_id, &area_id, &emp_id,
-        &linkman, &tel, &addr, &zip, &email, &fax, &bank, &bank_acc_no, &tax_code,
-        &py_code, &state, &pay_sub_code, &pay_sub_name, &now, &body.CustID,
-    ]).await {
+    if let Err(e) = conn
+        .execute(
+            sql,
+            &[
+                &body.CustNo,
+                &body.CustName,
+                &cust_type_id,
+                &area_id,
+                &emp_id,
+                &linkman,
+                &tel,
+                &addr,
+                &zip,
+                &email,
+                &fax,
+                &bank,
+                &bank_acc_no,
+                &tax_code,
+                &py_code,
+                &state,
+                &pay_sub_code,
+                &pay_sub_name,
+                &now,
+                &body.CustID,
+            ],
+        )
+        .await
+    {
         return Json(ApiResponse::err(&format!("更新客户失败: {}", e)));
     }
 
@@ -517,14 +581,16 @@ pub async fn delete_customer(
         let mut ref_hits: Vec<String> = Vec::new();
         for (ref_table, ref_col, ref_label) in &references {
             // 修复 SQL 注入：参数化 IN 列表，避免字符串拼接
-            let placeholders: Vec<String> = (1..=body.ids.len())
-                .map(|i| format!("@p{}", i))
-                .collect();
+            let placeholders: Vec<String> =
+                (1..=body.ids.len()).map(|i| format!("@p{}", i)).collect();
             let total_sql = format!(
                 "SELECT COUNT(*) AS cnt FROM [{}] WHERE [{}] IN ({})",
-                ref_table, ref_col, placeholders.join(",")
+                ref_table,
+                ref_col,
+                placeholders.join(",")
             );
-            let ref_params: Vec<Option<String>> = body.ids.iter().map(|s| Some(s.clone())).collect();
+            let ref_params: Vec<Option<String>> =
+                body.ids.iter().map(|s| Some(s.clone())).collect();
             let ref_param_refs: Vec<&dyn tiberius::ToSql> = ref_params
                 .iter()
                 .map(|v| v as &dyn tiberius::ToSql)
@@ -561,7 +627,10 @@ pub async fn delete_customer(
                 return Json(ApiResponse::err(&format!("彻底删除客户失败: {}", e)));
             }
         }
-        return Json(ApiResponse::msg(&format!("成功彻底删除 {} 条客户", body.ids.len())));
+        return Json(ApiResponse::msg(&format!(
+            "成功彻底删除 {} 条客户",
+            body.ids.len()
+        )));
     }
 
     // 软删除
@@ -573,7 +642,10 @@ pub async fn delete_customer(
         }
     }
 
-    Json(ApiResponse::msg(&format!("成功作废{}条客户", body.ids.len())))
+    Json(ApiResponse::msg(&format!(
+        "成功作废{}条客户",
+        body.ids.len()
+    )))
 }
 
 pub async fn get_base_versions(
@@ -585,7 +657,8 @@ pub async fn get_base_versions(
     };
 
     let mut goods_version: String = String::new();
-    let sql = "SELECT MAX(CONVERT(varchar(19), EDate, 120)) as ver FROM tBas_Goods WHERE State <> 'D'";
+    let sql =
+        "SELECT MAX(CONVERT(varchar(19), EDate, 120)) as ver FROM tBas_Goods WHERE State <> 'D'";
     match conn.query(sql, &[]).await {
         Ok(stream) => {
             if let Ok(Some(row)) = stream.into_row().await {
@@ -596,7 +669,8 @@ pub async fn get_base_versions(
     }
 
     let mut cust_version: String = String::new();
-    let sql = "SELECT MAX(CONVERT(varchar(19), EDate, 120)) as ver FROM tBas_Cust WHERE State <> 'D'";
+    let sql =
+        "SELECT MAX(CONVERT(varchar(19), EDate, 120)) as ver FROM tBas_Cust WHERE State <> 'D'";
     match conn.query(sql, &[]).await {
         Ok(stream) => {
             if let Ok(Some(row)) = stream.into_row().await {
@@ -607,7 +681,8 @@ pub async fn get_base_versions(
     }
 
     let mut supp_version: String = String::new();
-    let sql = "SELECT MAX(CONVERT(varchar(19), EDate, 120)) as ver FROM tBas_Supp WHERE State <> 'D'";
+    let sql =
+        "SELECT MAX(CONVERT(varchar(19), EDate, 120)) as ver FROM tBas_Supp WHERE State <> 'D'";
     match conn.query(sql, &[]).await {
         Ok(stream) => {
             if let Ok(Some(row)) = stream.into_row().await {
@@ -657,15 +732,28 @@ pub async fn get_suppliers(
 
     if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
-            base_query.push_str(&format!(" AND (SuppNo LIKE @p{} OR SuppName LIKE @p{})", pidx, pidx + 1));
+            base_query.push_str(&format!(
+                " AND (SuppNo LIKE @p{} OR SuppName LIKE @p{})",
+                pidx,
+                pidx + 1
+            ));
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
         }
     }
 
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
-    let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, params.sort_prop.as_deref(), params.sort_order.as_deref());
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let paginated_sql = build_pagination_sql_with_sort(
+        &base_query,
+        page,
+        page_size,
+        params.sort_prop.as_deref(),
+        params.sort_order.as_deref(),
+    );
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
 
     let mut total: i32 = 0;
     let count_stream = match conn.query(&count_sql, &param_refs).await {
@@ -673,7 +761,9 @@ pub async fn get_suppliers(
         Err(e) => return Json(ApiResponse::err(&format!("查询供应商总数失败: {}", e))),
     };
     match count_stream.into_row().await {
-        Ok(Some(row)) => { total = row.get::<i32, _>("cnt").unwrap_or(0); }
+        Ok(Some(row)) => {
+            total = row.get::<i32, _>("cnt").unwrap_or(0);
+        }
         Ok(None) => {}
         Err(e) => return Json(ApiResponse::err(&format!("获取供应商总数行失败: {}", e))),
     }
@@ -688,7 +778,12 @@ pub async fn get_suppliers(
     };
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Json(ApiResponse::ok_paginated(data, total as u64, page, page_size))
+    Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    ))
 }
 
 #[derive(Deserialize)]
@@ -708,7 +803,17 @@ pub async fn retail_goods_search(
     let kw_pattern = format!("%{}%", params.keyword);
     let sql = "SELECT TOP 50 GDSID, GDSNO, GDSDesc, BarCode, UnitNO, SPrice as Price, 999 as StockQty FROM tBas_Goods WHERE (GDSNO LIKE @p1 OR GDSDesc LIKE @p2 OR BarCode LIKE @p3) AND State = 'Y'";
 
-    let stream = match conn.query(sql, &[&kw_pattern.as_str(), &kw_pattern.as_str(), &kw_pattern.as_str()]).await {
+    let stream = match conn
+        .query(
+            sql,
+            &[
+                &kw_pattern.as_str(),
+                &kw_pattern.as_str(),
+                &kw_pattern.as_str(),
+            ],
+        )
+        .await
+    {
         Ok(stream) => stream,
         Err(e) => return Json(ApiResponse::err(&format!("搜索商品失败: {}", e))),
     };
@@ -716,13 +821,16 @@ pub async fn retail_goods_search(
         Ok(rows) => rows,
         Err(e) => return Json(ApiResponse::err(&format!("获取搜索结果失败: {}", e))),
     };
-    let data: Vec<serde_json::Value> = rows.iter().map(|row| {
-        let mut map = serde_json::Map::new();
-        for col in row.columns() {
-            map.insert(col.name().to_string(), try_get_value(row, col.name()));
-        }
-        serde_json::Value::Object(map)
-    }).collect();
+    let data: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| {
+            let mut map = serde_json::Map::new();
+            for col in row.columns() {
+                map.insert(col.name().to_string(), try_get_value(row, col.name()));
+            }
+            serde_json::Value::Object(map)
+        })
+        .collect();
 
     Json(ApiResponse::ok(data))
 }
@@ -757,16 +865,22 @@ pub async fn retail_sales_settle(
     let inv_sql = r#"INSERT INTO tSal_Inv (SIID, SINo, SIDate, CustID, SumAmt, State, EDate, EUser, LUTime)
                      VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p7)"#;
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    if let Err(e) = conn.execute(inv_sql, &[
-        &si_id.as_str(),
-        &inv_no.as_str(),
-        &now,
-        &zero_uuid,
-        &total_amt,
-        &"S",
-        &now,
-        &zero_uuid,
-    ]).await {
+    if let Err(e) = conn
+        .execute(
+            inv_sql,
+            &[
+                &si_id.as_str(),
+                &inv_no.as_str(),
+                &now,
+                &zero_uuid,
+                &total_amt,
+                &"S",
+                &now,
+                &zero_uuid,
+            ],
+        )
+        .await
+    {
         return Json(ApiResponse::err(&format!("插入销售单失败: {}", e)));
     }
 
@@ -794,21 +908,30 @@ pub async fn retail_sales_settle(
         let detail_sql = r#"INSERT INTO tSal_InvDetail (SIID, SIDetailID, RowNO, GDSID, StkID, Qty, Price, DisRate, Amt)
                             VALUES (@p1, NEWID(), @p2, @p3, @p4, @p5, @p6, @p7, @p8)"#;
         let dis_rate: f64 = 100.0;
-        if let Err(e) = conn.execute(detail_sql, &[
-            &si_id.as_str(),
-            &row_no.as_str(),
-            &gds_id.as_str(),
-            &zero_uuid,
-            &qty,
-            &price,
-            &dis_rate,
-            &amt,
-        ]).await {
+        if let Err(e) = conn
+            .execute(
+                detail_sql,
+                &[
+                    &si_id.as_str(),
+                    &row_no.as_str(),
+                    &gds_id.as_str(),
+                    &zero_uuid,
+                    &qty,
+                    &price,
+                    &dis_rate,
+                    &amt,
+                ],
+            )
+            .await
+        {
             return Json(ApiResponse::err(&format!("插入销售明细失败: {}", e)));
         }
     }
 
-    Json(ApiResponse::msg(&format!("结算成功，共{}件商品", params.items.len())))
+    Json(ApiResponse::msg(&format!(
+        "结算成功，共{}件商品",
+        params.items.len()
+    )))
 }
 
 #[derive(Deserialize)]
@@ -966,52 +1089,58 @@ pub async fn create_goods(
     let gds_abc = body.GDSAbc.as_deref().unwrap_or("");
     let gds_property_name = body.GDSPropertyName.as_deref().unwrap_or("");
 
-    if let Err(e) = conn.execute(sql, &[
-        &gdsid,
-        &gds_type_id,
-        &gds_property_id,
-        &brand_id,
-        &dea_type_id,
-        &gds_kind_id,
-        &supp_id,
-        &unitno,
-        &gdsno,
-        &gdsdesc,
-        &gdsspec,
-        &barcode,
-        &prod_area,
-        &ainprice,
-        &bprice,
-        &sprice,
-        &vprice,
-        &cprice,
-        &top_stk_qty,
-        &bttom_stk_qty,
-        &allow_change_price,
-        &allow_discount,
-        &combo_flg,
-        &stk_run,
-        &int_rate,
-        &qa_day,
-        &pur_bef_day,
-        &py_code,
-        &state,
-        &now,
-        &now,
-        &gds_state_no,
-        &item_no,
-        &bprice2,
-        &bprice3,
-        &stk_id,
-        &gds_sd,
-        &server_ciiprice,
-        &pack_cnv_qty,
-        &dprice1,
-        &dprice2,
-        &dprice3,
-        &gds_abc,
-        &gds_property_name,
-    ]).await {
+    if let Err(e) = conn
+        .execute(
+            sql,
+            &[
+                &gdsid,
+                &gds_type_id,
+                &gds_property_id,
+                &brand_id,
+                &dea_type_id,
+                &gds_kind_id,
+                &supp_id,
+                &unitno,
+                &gdsno,
+                &gdsdesc,
+                &gdsspec,
+                &barcode,
+                &prod_area,
+                &ainprice,
+                &bprice,
+                &sprice,
+                &vprice,
+                &cprice,
+                &top_stk_qty,
+                &bttom_stk_qty,
+                &allow_change_price,
+                &allow_discount,
+                &combo_flg,
+                &stk_run,
+                &int_rate,
+                &qa_day,
+                &pur_bef_day,
+                &py_code,
+                &state,
+                &now,
+                &now,
+                &gds_state_no,
+                &item_no,
+                &bprice2,
+                &bprice3,
+                &stk_id,
+                &gds_sd,
+                &server_ciiprice,
+                &pack_cnv_qty,
+                &dprice1,
+                &dprice2,
+                &dprice3,
+                &gds_abc,
+                &gds_property_name,
+            ],
+        )
+        .await
+    {
         return Json(ApiResponse::err(&format!("新增商品失败: {}", e)));
     }
 
@@ -1084,51 +1213,57 @@ pub async fn update_goods(
     let gds_property_name = body.GDSPropertyName.as_deref().unwrap_or("");
     let gdsid = body.GDSID.as_str();
 
-    if let Err(e) = conn.execute(sql, &[
-        &gds_type_id,
-        &gds_property_id,
-        &brand_id,
-        &dea_type_id,
-        &gds_kind_id,
-        &supp_id,
-        &unitno,
-        &gdsno,
-        &gdsdesc,
-        &gdsspec,
-        &barcode,
-        &prod_area,
-        &ainprice,
-        &bprice,
-        &sprice,
-        &vprice,
-        &cprice,
-        &top_stk_qty,
-        &bttom_stk_qty,
-        &allow_change_price,
-        &allow_discount,
-        &combo_flg,
-        &stk_run,
-        &int_rate,
-        &qa_day,
-        &pur_bef_day,
-        &py_code,
-        &state,
-        &now,
-        &gds_state_no,
-        &item_no,
-        &bprice2,
-        &bprice3,
-        &stk_id,
-        &gds_sd,
-        &server_ciiprice,
-        &pack_cnv_qty,
-        &dprice1,
-        &dprice2,
-        &dprice3,
-        &gds_abc,
-        &gds_property_name,
-        &gdsid,
-    ]).await {
+    if let Err(e) = conn
+        .execute(
+            sql,
+            &[
+                &gds_type_id,
+                &gds_property_id,
+                &brand_id,
+                &dea_type_id,
+                &gds_kind_id,
+                &supp_id,
+                &unitno,
+                &gdsno,
+                &gdsdesc,
+                &gdsspec,
+                &barcode,
+                &prod_area,
+                &ainprice,
+                &bprice,
+                &sprice,
+                &vprice,
+                &cprice,
+                &top_stk_qty,
+                &bttom_stk_qty,
+                &allow_change_price,
+                &allow_discount,
+                &combo_flg,
+                &stk_run,
+                &int_rate,
+                &qa_day,
+                &pur_bef_day,
+                &py_code,
+                &state,
+                &now,
+                &gds_state_no,
+                &item_no,
+                &bprice2,
+                &bprice3,
+                &stk_id,
+                &gds_sd,
+                &server_ciiprice,
+                &pack_cnv_qty,
+                &dprice1,
+                &dprice2,
+                &dprice3,
+                &gds_abc,
+                &gds_property_name,
+                &gdsid,
+            ],
+        )
+        .await
+    {
         return Json(ApiResponse::err(&format!("更新商品失败: {}", e)));
     }
 
@@ -1173,14 +1308,16 @@ pub async fn delete_goods(
         let mut ref_hits: Vec<String> = Vec::new();
         for (ref_table, ref_col, ref_label) in &references {
             // 修复 SQL 注入：参数化 IN 列表，避免字符串拼接
-            let placeholders: Vec<String> = (1..=body.ids.len())
-                .map(|i| format!("@p{}", i))
-                .collect();
+            let placeholders: Vec<String> =
+                (1..=body.ids.len()).map(|i| format!("@p{}", i)).collect();
             let total_sql = format!(
                 "SELECT COUNT(*) AS cnt FROM [{}] WHERE [{}] IN ({})",
-                ref_table, ref_col, placeholders.join(",")
+                ref_table,
+                ref_col,
+                placeholders.join(",")
             );
-            let ref_params: Vec<Option<String>> = body.ids.iter().map(|s| Some(s.clone())).collect();
+            let ref_params: Vec<Option<String>> =
+                body.ids.iter().map(|s| Some(s.clone())).collect();
             let ref_param_refs: Vec<&dyn tiberius::ToSql> = ref_params
                 .iter()
                 .map(|v| v as &dyn tiberius::ToSql)
@@ -1220,7 +1357,10 @@ pub async fn delete_goods(
                 return Json(ApiResponse::err(&format!("彻底删除商品失败: {}", e)));
             }
         }
-        return Json(ApiResponse::msg(&format!("成功彻底删除 {} 条商品", body.ids.len())));
+        return Json(ApiResponse::msg(&format!(
+            "成功彻底删除 {} 条商品",
+            body.ids.len()
+        )));
     }
 
     // 软删除
@@ -1232,7 +1372,10 @@ pub async fn delete_goods(
         }
     }
 
-    Json(ApiResponse::msg(&format!("成功作废{}条商品", body.ids.len())))
+    Json(ApiResponse::msg(&format!(
+        "成功作废{}条商品",
+        body.ids.len()
+    )))
 }
 
 pub async fn get_customers(
@@ -1252,15 +1395,28 @@ pub async fn get_customers(
 
     if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
-            base_query.push_str(&format!(" AND (CustNo LIKE @p{} OR CustName LIKE @p{})", pidx, pidx + 1));
+            base_query.push_str(&format!(
+                " AND (CustNo LIKE @p{} OR CustName LIKE @p{})",
+                pidx,
+                pidx + 1
+            ));
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
         }
     }
 
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
-    let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, params.sort_prop.as_deref(), params.sort_order.as_deref());
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let paginated_sql = build_pagination_sql_with_sort(
+        &base_query,
+        page,
+        page_size,
+        params.sort_prop.as_deref(),
+        params.sort_order.as_deref(),
+    );
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
 
     let mut total: i32 = 0;
     let count_stream = match conn.query(&count_sql, &param_refs).await {
@@ -1268,7 +1424,9 @@ pub async fn get_customers(
         Err(e) => return Json(ApiResponse::err(&format!("查询客户总数失败: {}", e))),
     };
     match count_stream.into_row().await {
-        Ok(Some(row)) => { total = row.get::<i32, _>("cnt").unwrap_or(0); }
+        Ok(Some(row)) => {
+            total = row.get::<i32, _>("cnt").unwrap_or(0);
+        }
         Ok(None) => {}
         Err(e) => return Json(ApiResponse::err(&format!("获取客户总数行失败: {}", e))),
     }
@@ -1283,7 +1441,12 @@ pub async fn get_customers(
     };
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Json(ApiResponse::ok_paginated(data, total as u64, page, page_size))
+    Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    ))
 }
 
 pub async fn get_goods(
@@ -1303,7 +1466,12 @@ pub async fn get_goods(
 
     if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
-            base_query.push_str(&format!(" AND (GDSNO LIKE @p{} OR GDSDesc LIKE @p{} OR BarCode LIKE @p{})", pidx, pidx + 1, pidx + 2));
+            base_query.push_str(&format!(
+                " AND (GDSNO LIKE @p{} OR GDSDesc LIKE @p{} OR BarCode LIKE @p{})",
+                pidx,
+                pidx + 1,
+                pidx + 2
+            ));
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
@@ -1311,8 +1479,17 @@ pub async fn get_goods(
     }
 
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
-    let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, params.sort_prop.as_deref(), params.sort_order.as_deref());
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let paginated_sql = build_pagination_sql_with_sort(
+        &base_query,
+        page,
+        page_size,
+        params.sort_prop.as_deref(),
+        params.sort_order.as_deref(),
+    );
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
 
     let mut total: i32 = 0;
     let count_stream = match conn.query(&count_sql, &param_refs).await {
@@ -1320,7 +1497,9 @@ pub async fn get_goods(
         Err(e) => return Json(ApiResponse::err(&format!("查询商品总数失败: {}", e))),
     };
     match count_stream.into_row().await {
-        Ok(Some(row)) => { total = row.get::<i32, _>("cnt").unwrap_or(0); }
+        Ok(Some(row)) => {
+            total = row.get::<i32, _>("cnt").unwrap_or(0);
+        }
         Ok(None) => {}
         Err(e) => return Json(ApiResponse::err(&format!("获取商品总数行失败: {}", e))),
     }
@@ -1335,7 +1514,12 @@ pub async fn get_goods(
     };
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Json(ApiResponse::ok_paginated(data, total as u64, page, page_size))
+    Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    ))
 }
 
 pub async fn get_dashboard_stats(
@@ -1347,57 +1531,95 @@ pub async fn get_dashboard_stats(
     };
 
     let mut goods_count: i32 = 0;
-    let stream = match conn.query("SELECT COUNT(*) as cnt FROM tBas_Goods WHERE State <> 'D'", &[]).await {
+    let stream = match conn
+        .query(
+            "SELECT COUNT(*) as cnt FROM tBas_Goods WHERE State <> 'D'",
+            &[],
+        )
+        .await
+    {
         Ok(stream) => stream,
         Err(e) => return Json(ApiResponse::err(&format!("查询商品数量失败: {}", e))),
     };
     match stream.into_row().await {
-        Ok(Some(row)) => { goods_count = row.get::<i32, _>("cnt").unwrap_or(0); }
+        Ok(Some(row)) => {
+            goods_count = row.get::<i32, _>("cnt").unwrap_or(0);
+        }
         Ok(None) => {}
         Err(e) => return Json(ApiResponse::err(&format!("获取商品数量行失败: {}", e))),
     }
 
     let mut supplier_count: i32 = 0;
-    let stream = match conn.query("SELECT COUNT(*) as cnt FROM tBas_Supp WHERE State <> 'D'", &[]).await {
+    let stream = match conn
+        .query(
+            "SELECT COUNT(*) as cnt FROM tBas_Supp WHERE State <> 'D'",
+            &[],
+        )
+        .await
+    {
         Ok(stream) => stream,
         Err(e) => return Json(ApiResponse::err(&format!("查询供应商数量失败: {}", e))),
     };
     match stream.into_row().await {
-        Ok(Some(row)) => { supplier_count = row.get::<i32, _>("cnt").unwrap_or(0); }
+        Ok(Some(row)) => {
+            supplier_count = row.get::<i32, _>("cnt").unwrap_or(0);
+        }
         Ok(None) => {}
         Err(e) => return Json(ApiResponse::err(&format!("获取供应商数量行失败: {}", e))),
     }
 
     let mut customer_count: i32 = 0;
-    let stream = match conn.query("SELECT COUNT(*) as cnt FROM tBas_Cust WHERE State <> 'D'", &[]).await {
+    let stream = match conn
+        .query(
+            "SELECT COUNT(*) as cnt FROM tBas_Cust WHERE State <> 'D'",
+            &[],
+        )
+        .await
+    {
         Ok(stream) => stream,
         Err(e) => return Json(ApiResponse::err(&format!("查询客户数量失败: {}", e))),
     };
     match stream.into_row().await {
-        Ok(Some(row)) => { customer_count = row.get::<i32, _>("cnt").unwrap_or(0); }
+        Ok(Some(row)) => {
+            customer_count = row.get::<i32, _>("cnt").unwrap_or(0);
+        }
         Ok(None) => {}
         Err(e) => return Json(ApiResponse::err(&format!("获取客户数量行失败: {}", e))),
     }
 
     let mut purchase_order_count: i32 = 0;
-    match conn.query("SELECT COUNT(*) as cnt FROM tPur_Order WHERE State <> 'D'", &[]).await {
-        Ok(stream) => {
-            match stream.into_row().await {
-                Ok(Some(row)) => { purchase_order_count = row.get::<i32, _>("cnt").unwrap_or(0); }
-                Ok(None) => {}
-                Err(_) => {}
+    match conn
+        .query(
+            "SELECT COUNT(*) as cnt FROM tPur_Order WHERE State <> 'D'",
+            &[],
+        )
+        .await
+    {
+        Ok(stream) => match stream.into_row().await {
+            Ok(Some(row)) => {
+                purchase_order_count = row.get::<i32, _>("cnt").unwrap_or(0);
             }
-        }
+            Ok(None) => {}
+            Err(_) => {}
+        },
         Err(_) => {}
     }
 
     let mut active_goods_count: i32 = 0;
-    let stream = match conn.query("SELECT COUNT(*) as cnt FROM tBas_Goods WHERE State='Y'", &[]).await {
+    let stream = match conn
+        .query(
+            "SELECT COUNT(*) as cnt FROM tBas_Goods WHERE State='Y'",
+            &[],
+        )
+        .await
+    {
         Ok(stream) => stream,
         Err(e) => return Json(ApiResponse::err(&format!("查询活跃商品数量失败: {}", e))),
     };
     match stream.into_row().await {
-        Ok(Some(row)) => { active_goods_count = row.get::<i32, _>("cnt").unwrap_or(0); }
+        Ok(Some(row)) => {
+            active_goods_count = row.get::<i32, _>("cnt").unwrap_or(0);
+        }
         Ok(None) => {}
         Err(e) => return Json(ApiResponse::err(&format!("获取活跃商品数量行失败: {}", e))),
     }
@@ -1433,20 +1655,23 @@ pub async fn get_dashboard_stats(
         WHERE b.State = 'Y'
         GROUP BY gt.GDSTypeName ORDER BY COUNT(*) DESC"#;
     match conn.query(cat_sql, &[]).await {
-        Ok(stream) => {
-            match stream.into_first_result().await {
-                Ok(rows) => {
-                    let items: Vec<serde_json::Value> = rows.iter().map(|row| {
+        Ok(stream) => match stream.into_first_result().await {
+            Ok(rows) => {
+                let items: Vec<serde_json::Value> = rows
+                    .iter()
+                    .map(|row| {
                         serde_json::json!({
                             "name": row.get::<&str, _>("name").unwrap_or("未分类"),
                             "value": row.get::<i32, _>("value").unwrap_or(0)
                         })
-                    }).collect();
-                    if !items.is_empty() { category_stats = serde_json::json!(items); }
+                    })
+                    .collect();
+                if !items.is_empty() {
+                    category_stats = serde_json::json!(items);
                 }
-                Err(_) => {}
             }
-        }
+            Err(_) => {}
+        },
         Err(_) => {}
     }
 
@@ -1516,7 +1741,12 @@ pub async fn get_inventory_stock(
 
     if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
-            base_query.push_str(&format!(" AND (g.[GDSNO] LIKE @p{} OR g.[GDSDesc] LIKE @p{} OR g.[BarCode] LIKE @p{})", pidx, pidx + 1, pidx + 2));
+            base_query.push_str(&format!(
+                " AND (g.[GDSNO] LIKE @p{} OR g.[GDSDesc] LIKE @p{} OR g.[BarCode] LIKE @p{})",
+                pidx,
+                pidx + 1,
+                pidx + 2
+            ));
             pidx += 3;
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
@@ -1552,8 +1782,17 @@ pub async fn get_inventory_stock(
     }
 
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
-    let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, params.sort_prop.as_deref(), params.sort_order.as_deref());
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let paginated_sql = build_pagination_sql_with_sort(
+        &base_query,
+        page,
+        page_size,
+        params.sort_prop.as_deref(),
+        params.sort_order.as_deref(),
+    );
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
 
     let mut total: i32 = 0;
     let count_stream = match conn.query(&count_sql, &param_refs).await {
@@ -1561,7 +1800,9 @@ pub async fn get_inventory_stock(
         Err(e) => return Json(ApiResponse::err(&format!("查询库存总数失败: {}", e))),
     };
     match count_stream.into_row().await {
-        Ok(Some(row)) => { total = row.get::<i32, _>("cnt").unwrap_or(0); }
+        Ok(Some(row)) => {
+            total = row.get::<i32, _>("cnt").unwrap_or(0);
+        }
         Ok(None) => {}
         Err(e) => return Json(ApiResponse::err(&format!("获取库存总数行失败: {}", e))),
     }
@@ -1576,7 +1817,12 @@ pub async fn get_inventory_stock(
     };
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Json(ApiResponse::ok_paginated(data, total as u64, page, page_size))
+    Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    ))
 }
 
 pub async fn get_stock_summary(
@@ -1595,7 +1841,8 @@ pub async fn get_stock_summary(
                           SUM(ISNULL(s.[Qty], 0)) AS [total_quantity] \
                           FROM [tStk_Stock] s \
                           INNER JOIN [tBas_Goods] g ON s.[GDSID] = g.[GDSID] \
-                          WHERE g.[State] IN ('S', '1', 'N')".to_string();
+                          WHERE g.[State] IN ('S', '1', 'N')"
+        .to_string();
     if !params.show_zero.unwrap_or(false) {
         base_query.push_str(" AND ISNULL(s.[Qty], 0) <> 0");
     }
@@ -1604,7 +1851,12 @@ pub async fn get_stock_summary(
 
     if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
-            base_query.push_str(&format!(" AND (g.[GDSNO] LIKE @p{} OR g.[GDSDesc] LIKE @p{} OR g.[BarCode] LIKE @p{})", pidx, pidx + 1, pidx + 2));
+            base_query.push_str(&format!(
+                " AND (g.[GDSNO] LIKE @p{} OR g.[GDSDesc] LIKE @p{} OR g.[BarCode] LIKE @p{})",
+                pidx,
+                pidx + 1,
+                pidx + 2
+            ));
             pidx += 3;
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
@@ -1639,14 +1891,21 @@ pub async fn get_stock_summary(
         }
     }
 
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
     let stream = match conn.query(&base_query, &param_refs).await {
         Ok(s) => s,
         Err(e) => return Json(ApiResponse::err(&format!("查询库存汇总失败: {}", e))),
     };
     let row = match stream.into_row().await {
         Ok(Some(r)) => r,
-        Ok(None) => return Json(ApiResponse::ok(serde_json::json!({ "product_types": 0, "record_count": 0, "total_value": 0.0, "total_quantity": 0 }))),
+        Ok(None) => {
+            return Json(ApiResponse::ok(
+                serde_json::json!({ "product_types": 0, "record_count": 0, "total_value": 0.0, "total_quantity": 0 }),
+            ));
+        }
         Err(e) => return Json(ApiResponse::err(&format!("获取库存汇总行失败: {}", e))),
     };
     let summary = serde_json::json!({
@@ -1672,10 +1931,11 @@ pub async fn get_sales_analysis(
         FROM tSal_Inv WHERE State <> 'D' AND SIDate >= DATEADD(month, -6, GETDATE())
         GROUP BY CONVERT(varchar(7), SIDate, 120) ORDER BY month"#;
     match conn.query(sql, &[]).await {
-        Ok(stream) => {
-            match stream.into_first_result().await {
-                Ok(rows) => {
-                    let items: Vec<serde_json::Value> = rows.iter().map(|row| {
+        Ok(stream) => match stream.into_first_result().await {
+            Ok(rows) => {
+                let items: Vec<serde_json::Value> = rows
+                    .iter()
+                    .map(|row| {
                         let sales = try_get_value(&row, "sales").as_f64().unwrap_or(0.0);
                         let cost = try_get_value(&row, "cost").as_f64().unwrap_or(0.0);
                         serde_json::json!({
@@ -1684,14 +1944,14 @@ pub async fn get_sales_analysis(
                             "cost": cost as i64,
                             "profit": (sales - cost) as i64
                         })
-                    }).collect();
-                    if !items.is_empty() {
-                        monthly_sales = serde_json::json!(items);
-                    }
+                    })
+                    .collect();
+                if !items.is_empty() {
+                    monthly_sales = serde_json::json!(items);
                 }
-                Err(_) => {}
             }
-        }
+            Err(_) => {}
+        },
         Err(_) => {}
     }
 
@@ -1701,21 +1961,21 @@ pub async fn get_sales_analysis(
         WHERE h.State <> 'D' AND h.SIDate >= DATEADD(month, -6, GETDATE())
         GROUP BY d.GDSNO, d.GDSDesc ORDER BY SUM(d.Amt) DESC"#;
     match conn.query(tp_sql, &[]).await {
-        Ok(stream) => {
-            match stream.into_first_result().await {
-                Ok(rows) => {
-                    let items: Vec<serde_json::Value> = rows.iter().map(|row| {
+        Ok(stream) => match stream.into_first_result().await {
+            Ok(rows) => {
+                let items: Vec<serde_json::Value> = rows.iter().map(|row| {
                         serde_json::json!({
                             "name": row.get::<&str, _>("name").unwrap_or(""),
                             "sales": try_get_value(&row, "sales").as_f64().unwrap_or(0.0) as i64,
                             "quantity": try_get_value(&row, "quantity").as_f64().unwrap_or(0.0) as i64
                         })
                     }).collect();
-                    if !items.is_empty() { top_products = serde_json::json!(items); }
+                if !items.is_empty() {
+                    top_products = serde_json::json!(items);
                 }
-                Err(_) => {}
             }
-        }
+            Err(_) => {}
+        },
         Err(_) => {}
     }
 
@@ -1724,20 +1984,20 @@ pub async fn get_sales_analysis(
         FROM tSal_Inv WHERE State <> 'D' AND SIDate >= DATEADD(month, -6, GETDATE())
         GROUP BY CustID, CustName ORDER BY SUM(SumAmt) DESC"#;
     match conn.query(cr_sql, &[]).await {
-        Ok(stream) => {
-            match stream.into_first_result().await {
-                Ok(rows) => {
-                    let items: Vec<serde_json::Value> = rows.iter().map(|row| {
+        Ok(stream) => match stream.into_first_result().await {
+            Ok(rows) => {
+                let items: Vec<serde_json::Value> = rows.iter().map(|row| {
                         serde_json::json!({
                             "name": row.get::<&str, _>("CustName").unwrap_or(row.get::<&str, _>("name").unwrap_or("")),
                             "amount": try_get_value(&row, "amount").as_f64().unwrap_or(0.0) as i64
                         })
                     }).collect();
-                    if !items.is_empty() { customer_ranking = serde_json::json!(items); }
+                if !items.is_empty() {
+                    customer_ranking = serde_json::json!(items);
                 }
-                Err(_) => {}
             }
-        }
+            Err(_) => {}
+        },
         Err(_) => {}
     }
 
@@ -1857,11 +2117,37 @@ pub async fn create_supplier(
     let pay_sub_code = body.PaySubCode.as_deref().unwrap_or("");
     let pay_sub_name = body.PaySubName.as_deref().unwrap_or("");
 
-    if let Err(e) = conn.execute(sql, &[
-        &suppid, &supp_type_id, &dea_type_id, &emp_id, &body.SuppNo, &body.SuppName,
-        &addr, &linkman, &zip, &email, &tel, &fax, &bank, &bank_acc_no, &tax_code,
-        &py_code, &state, &now, &now, &0i32, &note, &pay_sub_code, &pay_sub_name,
-    ]).await {
+    if let Err(e) = conn
+        .execute(
+            sql,
+            &[
+                &suppid,
+                &supp_type_id,
+                &dea_type_id,
+                &emp_id,
+                &body.SuppNo,
+                &body.SuppName,
+                &addr,
+                &linkman,
+                &zip,
+                &email,
+                &tel,
+                &fax,
+                &bank,
+                &bank_acc_no,
+                &tax_code,
+                &py_code,
+                &state,
+                &now,
+                &now,
+                &0i32,
+                &note,
+                &pay_sub_code,
+                &pay_sub_name,
+            ],
+        )
+        .await
+    {
         return Json(ApiResponse::err(&format!("新增供应商失败: {}", e)));
     }
     Json(ApiResponse::msg("供应商新增成功"))
@@ -1926,11 +2212,35 @@ pub async fn update_supplier(
     let pay_sub_code = body.PaySubCode.as_deref().unwrap_or("");
     let pay_sub_name = body.PaySubName.as_deref().unwrap_or("");
 
-    if let Err(e) = conn.execute(sql, &[
-        &body.SuppNo, &body.SuppName, &supp_type_id, &dea_type_id, &emp_id,
-        &linkman, &tel, &addr, &zip, &email, &fax, &bank, &bank_acc_no, &tax_code,
-        &py_code, &state, &note, &pay_sub_code, &pay_sub_name, &now, &body.SuppID,
-    ]).await {
+    if let Err(e) = conn
+        .execute(
+            sql,
+            &[
+                &body.SuppNo,
+                &body.SuppName,
+                &supp_type_id,
+                &dea_type_id,
+                &emp_id,
+                &linkman,
+                &tel,
+                &addr,
+                &zip,
+                &email,
+                &fax,
+                &bank,
+                &bank_acc_no,
+                &tax_code,
+                &py_code,
+                &state,
+                &note,
+                &pay_sub_code,
+                &pay_sub_name,
+                &now,
+                &body.SuppID,
+            ],
+        )
+        .await
+    {
         return Json(ApiResponse::err(&format!("更新供应商失败: {}", e)));
     }
     Json(ApiResponse::msg("供应商更新成功"))
@@ -1977,7 +2287,11 @@ pub async fn create_warehouse(
     let stkid = format!("{}", uuid::Uuid::new_v4());
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let zero_uuid = "00000000-0000-0000-0000-000000000000".to_string();
-    let stkpid = body.StkPID.as_deref().unwrap_or("00000000-0000-0000-0000-000000000000").to_string();
+    let stkpid = body
+        .StkPID
+        .as_deref()
+        .unwrap_or("00000000-0000-0000-0000-000000000000")
+        .to_string();
     let stkman = body.StkMan.clone().unwrap_or_default();
     let stkaddr = body.StkAddr.clone().unwrap_or_default();
     let stkzip = body.StkZip.clone().unwrap_or_default();
@@ -2004,12 +2318,40 @@ pub async fn create_warehouse(
               StkType3, StkType4, StkType5, DPriceLevle, SalEmpID, BaseWage, AttDays, QKind)
               VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15,
               @p16, @p17, @p18, @p19, @p20, @p21, @p22, @p23, @p24, @p25, @p26)"#;
-    if let Err(e) = conn.execute(sql, &[
-        &stkid, &stkpid, &body.StkName, &stkman, &stkaddr, &stkzip, &used, &now,
-        &costcalc, &stklevel, &body.StkCode, &pycode, &nodekind, &stksd, &connstr, &isjoin,
-        &stktype1, &stktype2, &stktype3, &stktype4, &stktype5, &dpricelevle, &salempid,
-        &basewage, &attdays, &qkind,
-    ]).await {
+    if let Err(e) = conn
+        .execute(
+            sql,
+            &[
+                &stkid,
+                &stkpid,
+                &body.StkName,
+                &stkman,
+                &stkaddr,
+                &stkzip,
+                &used,
+                &now,
+                &costcalc,
+                &stklevel,
+                &body.StkCode,
+                &pycode,
+                &nodekind,
+                &stksd,
+                &connstr,
+                &isjoin,
+                &stktype1,
+                &stktype2,
+                &stktype3,
+                &stktype4,
+                &stktype5,
+                &dpricelevle,
+                &salempid,
+                &basewage,
+                &attdays,
+                &qkind,
+            ],
+        )
+        .await
+    {
         return Json(ApiResponse::err(&format!("新增仓库失败: {}", e)));
     }
     Json(ApiResponse::msg("仓库新增成功"))
@@ -2053,7 +2395,11 @@ pub async fn update_warehouse(
     };
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let zero_uuid = "00000000-0000-0000-0000-000000000000".to_string();
-    let stkpid = body.StkPID.as_deref().unwrap_or("00000000-0000-0000-0000-000000000000").to_string();
+    let stkpid = body
+        .StkPID
+        .as_deref()
+        .unwrap_or("00000000-0000-0000-0000-000000000000")
+        .to_string();
     let stkman = body.StkMan.clone().unwrap_or_default();
     let stkaddr = body.StkAddr.clone().unwrap_or_default();
     let stkzip = body.StkZip.clone().unwrap_or_default();
@@ -2079,12 +2425,39 @@ pub async fn update_warehouse(
               ConnStr=@p13, IsJoin=@p14, StkType1=@p15, StkType2=@p16, StkType3=@p17, StkType4=@p18,
               StkType5=@p19, DPriceLevle=@p20, SalEmpID=@p21, BaseWage=@p22, AttDays=@p23, QKind=@p24
               WHERE StkID=@p25"#;
-    if let Err(e) = conn.execute(sql, &[
-        &stkpid, &body.StkName, &stkman, &stkaddr, &stkzip, &used, &now,
-        &costcalc, &stklevel, &body.StkCode, &pycode, &nodekind, &connstr, &isjoin,
-        &stktype1, &stktype2, &stktype3, &stktype4, &stktype5, &dpricelevle, &salempid,
-        &basewage, &attdays, &qkind, &body.StkID,
-    ]).await {
+    if let Err(e) = conn
+        .execute(
+            sql,
+            &[
+                &stkpid,
+                &body.StkName,
+                &stkman,
+                &stkaddr,
+                &stkzip,
+                &used,
+                &now,
+                &costcalc,
+                &stklevel,
+                &body.StkCode,
+                &pycode,
+                &nodekind,
+                &connstr,
+                &isjoin,
+                &stktype1,
+                &stktype2,
+                &stktype3,
+                &stktype4,
+                &stktype5,
+                &dpricelevle,
+                &salempid,
+                &basewage,
+                &attdays,
+                &qkind,
+                &body.StkID,
+            ],
+        )
+        .await
+    {
         return Json(ApiResponse::err(&format!("更新仓库失败: {}", e)));
     }
     Json(ApiResponse::msg("仓库更新成功"))
@@ -2114,9 +2487,13 @@ pub async fn create_brand(
               VALUES (@p1, @p2, @p3, @p4, @p5)"#;
     let branden = body.BrandEN.as_deref().unwrap_or("");
     let used = body.Used.as_deref().unwrap_or("Y");
-    if let Err(e) = conn.execute(sql, &[
-        &brandid, &body.BrandCode, &body.BrandName, &branden, &used,
-    ]).await {
+    if let Err(e) = conn
+        .execute(
+            sql,
+            &[&brandid, &body.BrandCode, &body.BrandName, &branden, &used],
+        )
+        .await
+    {
         return Json(ApiResponse::err(&format!("新增品牌失败: {}", e)));
     }
     Json(ApiResponse::msg("品牌新增成功"))
@@ -2142,9 +2519,19 @@ pub async fn update_brand(
     let sql = r#"UPDATE tBas_Brand SET BrandCode=@p1, BrandName=@p2, BrandEN=@p3, Used=@p4 WHERE BrandID=@p5"#;
     let branden = body.BrandEN.as_deref().unwrap_or("");
     let used = body.Used.as_deref().unwrap_or("Y");
-    if let Err(e) = conn.execute(sql, &[
-        &body.BrandCode, &body.BrandName, &branden, &used, &body.BrandID,
-    ]).await {
+    if let Err(e) = conn
+        .execute(
+            sql,
+            &[
+                &body.BrandCode,
+                &body.BrandName,
+                &branden,
+                &used,
+                &body.BrandID,
+            ],
+        )
+        .await
+    {
         return Json(ApiResponse::err(&format!("更新品牌失败: {}", e)));
     }
     Json(ApiResponse::msg("品牌更新成功"))
@@ -2228,12 +2615,40 @@ pub async fn create_employee(
     let py_code = body.PYCode.as_deref().unwrap_or("");
     let out_date = body.OutDate.as_deref().unwrap_or("");
 
-    if let Err(e) = conn.execute(sql, &[
-        &empid, &body.EmpNo, &body.EmpName, &sex, &deptid, &dutyid, &tel, &state,
-        &work_state, &allow_login, &password_str, &in_date, &stk_id, &id_code, &email,
-        &addr, &birthday, &note, &base_wage_price, &base_wage_kind, &home_tel, &py_code,
-        &out_date, &0i32, &now, &now,
-    ]).await {
+    if let Err(e) = conn
+        .execute(
+            sql,
+            &[
+                &empid,
+                &body.EmpNo,
+                &body.EmpName,
+                &sex,
+                &deptid,
+                &dutyid,
+                &tel,
+                &state,
+                &work_state,
+                &allow_login,
+                &password_str,
+                &in_date,
+                &stk_id,
+                &id_code,
+                &email,
+                &addr,
+                &birthday,
+                &note,
+                &base_wage_price,
+                &base_wage_kind,
+                &home_tel,
+                &py_code,
+                &out_date,
+                &0i32,
+                &now,
+                &now,
+            ],
+        )
+        .await
+    {
         return Json(ApiResponse::err(&format!("新增员工失败: {}", e)));
     }
     Json(ApiResponse::msg("员工新增成功"))
@@ -2287,11 +2702,15 @@ pub async fn update_employee(
                     if emp_no.eq_ignore_ascii_case("admin") {
                         // 禁止修改工号
                         if !body.EmpNo.eq_ignore_ascii_case("admin") {
-                            return Json(ApiResponse::err("禁止修改 admin 账号的工号（系统管理员标识），避免系统无法登录"));
+                            return Json(ApiResponse::err(
+                                "禁止修改 admin 账号的工号（系统管理员标识），避免系统无法登录",
+                            ));
                         }
                         // 禁止停用登录
                         if body.AllowLogin.as_deref() == Some("N") {
-                            return Json(ApiResponse::err("禁止停用 admin 账号的登录权限，避免系统无法登录"));
+                            return Json(ApiResponse::err(
+                                "禁止停用 admin 账号的登录权限，避免系统无法登录",
+                            ));
                         }
                         // 禁止删除
                         if body.State.as_deref() == Some("D") {
@@ -2299,7 +2718,9 @@ pub async fn update_employee(
                         }
                         // 禁止设为离职
                         if body.WorkState.as_deref() == Some("3") {
-                            return Json(ApiResponse::err("禁止将 admin 账号设为离职状态，避免系统无法登录"));
+                            return Json(ApiResponse::err(
+                                "禁止将 admin 账号设为离职状态，避免系统无法登录",
+                            ));
                         }
                     }
                 }
@@ -2331,17 +2752,55 @@ pub async fn update_employee(
     // 动态构建 UPDATE：密码为空时跳过 PassWordStr 字段（保留原密码）
     // 密码非空时 bcrypt 加密（已加密的不重复）
     let mut set_clauses: Vec<String> = vec![
-        "EmpNo=@p1", "EmpName=@p2", "Sex=@p3", "DeptID=@p4", "DutyID=@p5",
-        "Tel=@p6", "State=@p7", "WorkState=@p8", "AllowLogin=@p9",
-        "InDate=@p10", "StkID=@p11", "IDCode=@p12", "Email=@p13", "Addr=@p14",
-        "Birthday=@p15", "Note=@p16", "BaseWagePrice=@p17", "BaseWageKind=@p18",
-        "HomeTel=@p19", "PYCode=@p20", "OutDate=@p21", "LUTime=@p22",
-    ].iter().map(|s| s.to_string()).collect();
+        "EmpNo=@p1",
+        "EmpName=@p2",
+        "Sex=@p3",
+        "DeptID=@p4",
+        "DutyID=@p5",
+        "Tel=@p6",
+        "State=@p7",
+        "WorkState=@p8",
+        "AllowLogin=@p9",
+        "InDate=@p10",
+        "StkID=@p11",
+        "IDCode=@p12",
+        "Email=@p13",
+        "Addr=@p14",
+        "Birthday=@p15",
+        "Note=@p16",
+        "BaseWagePrice=@p17",
+        "BaseWageKind=@p18",
+        "HomeTel=@p19",
+        "PYCode=@p20",
+        "OutDate=@p21",
+        "LUTime=@p22",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
     let mut values: Vec<&dyn tiberius::ToSql> = vec![
-        &body.EmpNo, &body.EmpName, &sex, &deptid, &dutyid, &tel, &state,
-        &work_state, &allow_login, &in_date, &stk_id, &id_code, &email,
-        &addr, &birthday, &note, &base_wage_price, &base_wage_kind, &home_tel,
-        &py_code, &out_date, &now,
+        &body.EmpNo,
+        &body.EmpName,
+        &sex,
+        &deptid,
+        &dutyid,
+        &tel,
+        &state,
+        &work_state,
+        &allow_login,
+        &in_date,
+        &stk_id,
+        &id_code,
+        &email,
+        &addr,
+        &birthday,
+        &note,
+        &base_wage_price,
+        &base_wage_kind,
+        &home_tel,
+        &py_code,
+        &out_date,
+        &now,
     ];
     // 密码处理：空则跳过（保留原密码），非空则加密
     let password_hashed: String = if !password_raw.is_empty() {
@@ -2386,14 +2845,19 @@ pub async fn get_profit_analysis(
         FROM tSal_Inv WHERE State <> 'D' AND SIDate >= DATEADD(month, -6, GETDATE())
         GROUP BY CONVERT(varchar(7), SIDate, 120) ORDER BY month"#;
     match conn.query(sql, &[]).await {
-        Ok(stream) => {
-            match stream.into_first_result().await {
-                Ok(rows) => {
-                    let items: Vec<serde_json::Value> = rows.iter().map(|row| {
+        Ok(stream) => match stream.into_first_result().await {
+            Ok(rows) => {
+                let items: Vec<serde_json::Value> = rows
+                    .iter()
+                    .map(|row| {
                         let sales = try_get_value(&row, "sales").as_f64().unwrap_or(0.0);
                         let cost = try_get_value(&row, "cost").as_f64().unwrap_or(0.0);
                         let profit = sales - cost;
-                        let margin = if sales > 0.0 { (profit / sales * 100.0 * 10.0).round() / 10.0 } else { 0.0 };
+                        let margin = if sales > 0.0 {
+                            (profit / sales * 100.0 * 10.0).round() / 10.0
+                        } else {
+                            0.0
+                        };
                         serde_json::json!({
                             "month": row.get::<&str, _>("month").unwrap_or(""),
                             "sales": sales as i64,
@@ -2401,14 +2865,14 @@ pub async fn get_profit_analysis(
                             "profit": profit as i64,
                             "margin": margin
                         })
-                    }).collect();
-                    if !items.is_empty() {
-                        monthly_profit = serde_json::json!(items);
-                    }
+                    })
+                    .collect();
+                if !items.is_empty() {
+                    monthly_profit = serde_json::json!(items);
                 }
-                Err(_) => {}
             }
-        }
+            Err(_) => {}
+        },
         Err(_) => {}
     }
 
@@ -2433,7 +2897,13 @@ pub async fn get_warehouses(
     let base_query = "SELECT * FROM tBas_Stock WHERE Used <> 'N'".to_string();
 
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
-    let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, params.sort_prop.as_deref(), params.sort_order.as_deref());
+    let paginated_sql = build_pagination_sql_with_sort(
+        &base_query,
+        page,
+        page_size,
+        params.sort_prop.as_deref(),
+        params.sort_order.as_deref(),
+    );
 
     let mut total: i32 = 0;
     let count_stream = match conn.query(&count_sql, &[]).await {
@@ -2441,7 +2911,9 @@ pub async fn get_warehouses(
         Err(e) => return Json(ApiResponse::err(&format!("查询仓库总数失败: {}", e))),
     };
     match count_stream.into_row().await {
-        Ok(Some(row)) => { total = row.get::<i32, _>("cnt").unwrap_or(0); }
+        Ok(Some(row)) => {
+            total = row.get::<i32, _>("cnt").unwrap_or(0);
+        }
         Ok(None) => {}
         Err(e) => return Json(ApiResponse::err(&format!("获取仓库总数行失败: {}", e))),
     }
@@ -2456,7 +2928,12 @@ pub async fn get_warehouses(
     };
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Json(ApiResponse::ok_paginated(data, total as u64, page, page_size))
+    Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    ))
 }
 
 pub async fn get_employees(
@@ -2476,15 +2953,28 @@ pub async fn get_employees(
 
     if let Some(kw) = &params.keyword {
         if !kw.is_empty() {
-            base_query.push_str(&format!(" AND (EmpNo LIKE @p{} OR EmpName LIKE @p{})", pidx, pidx + 1));
+            base_query.push_str(&format!(
+                " AND (EmpNo LIKE @p{} OR EmpName LIKE @p{})",
+                pidx,
+                pidx + 1
+            ));
             query_params.push(Some(format!("%{}%", kw)));
             query_params.push(Some(format!("%{}%", kw)));
         }
     }
 
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
-    let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, params.sort_prop.as_deref(), params.sort_order.as_deref());
-    let param_refs: Vec<&dyn tiberius::ToSql> = query_params.iter().map(|v| v as &dyn tiberius::ToSql).collect();
+    let paginated_sql = build_pagination_sql_with_sort(
+        &base_query,
+        page,
+        page_size,
+        params.sort_prop.as_deref(),
+        params.sort_order.as_deref(),
+    );
+    let param_refs: Vec<&dyn tiberius::ToSql> = query_params
+        .iter()
+        .map(|v| v as &dyn tiberius::ToSql)
+        .collect();
 
     let mut total: i32 = 0;
     let count_stream = match conn.query(&count_sql, &param_refs).await {
@@ -2492,7 +2982,9 @@ pub async fn get_employees(
         Err(e) => return Json(ApiResponse::err(&format!("查询员工总数失败: {}", e))),
     };
     match count_stream.into_row().await {
-        Ok(Some(row)) => { total = row.get::<i32, _>("cnt").unwrap_or(0); }
+        Ok(Some(row)) => {
+            total = row.get::<i32, _>("cnt").unwrap_or(0);
+        }
         Ok(None) => {}
         Err(e) => return Json(ApiResponse::err(&format!("获取员工总数行失败: {}", e))),
     }
@@ -2507,7 +2999,12 @@ pub async fn get_employees(
     };
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Json(ApiResponse::ok_paginated(data, total as u64, page, page_size))
+    Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    ))
 }
 
 pub async fn get_brands(
@@ -2524,7 +3021,13 @@ pub async fn get_brands(
     let base_query = "SELECT * FROM tBas_Brand WHERE Used <> 'N'".to_string();
 
     let count_sql = format!("SELECT COUNT(*) as cnt FROM ({}) t", base_query);
-    let paginated_sql = build_pagination_sql_with_sort(&base_query, page, page_size, params.sort_prop.as_deref(), params.sort_order.as_deref());
+    let paginated_sql = build_pagination_sql_with_sort(
+        &base_query,
+        page,
+        page_size,
+        params.sort_prop.as_deref(),
+        params.sort_order.as_deref(),
+    );
 
     let mut total: i32 = 0;
     let count_stream = match conn.query(&count_sql, &[]).await {
@@ -2532,7 +3035,9 @@ pub async fn get_brands(
         Err(e) => return Json(ApiResponse::err(&format!("查询品牌总数失败: {}", e))),
     };
     match count_stream.into_row().await {
-        Ok(Some(row)) => { total = row.get::<i32, _>("cnt").unwrap_or(0); }
+        Ok(Some(row)) => {
+            total = row.get::<i32, _>("cnt").unwrap_or(0);
+        }
         Ok(None) => {}
         Err(e) => return Json(ApiResponse::err(&format!("获取品牌总数行失败: {}", e))),
     }
@@ -2547,5 +3052,10 @@ pub async fn get_brands(
     };
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Json(ApiResponse::ok_paginated(data, total as u64, page, page_size))
+    Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    ))
 }

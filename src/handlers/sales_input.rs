@@ -1,14 +1,11 @@
-use axum::{
-    extract::State,
-    Json,
-};
-use serde::Deserialize;
-use tiberius::Row;
+use super::base_data::row_to_json;
 use crate::config::Config;
 use crate::db::get_pool;
 use crate::error::Result;
 use crate::utils::{ApiResponse, build_pagination_sql_with_sort};
-use super::base_data::row_to_json;
+use axum::{Json, extract::State};
+use serde::Deserialize;
+use tiberius::Row;
 
 #[derive(Deserialize)]
 pub struct PaginationParams {
@@ -68,7 +65,12 @@ pub async fn list_emp_sales(
     let rows: Vec<Row> = data_stream.into_first_result().await?;
     let data: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Ok(Json(ApiResponse::ok_paginated(data, total as u64, page, page_size)))
+    Ok(Json(ApiResponse::ok_paginated(
+        data,
+        total as u64,
+        page,
+        page_size,
+    )))
 }
 
 fn json_str(v: &serde_json::Value, key: &str) -> String {
@@ -79,9 +81,7 @@ fn json_str(v: &serde_json::Value, key: &str) -> String {
 }
 
 fn json_f64(v: &serde_json::Value, key: &str) -> f64 {
-    v.get(key)
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.0)
+    v.get(key).and_then(|v| v.as_f64()).unwrap_or(0.0)
 }
 
 fn json_opt_str(v: &serde_json::Value, key: &str) -> Option<String> {
@@ -92,9 +92,7 @@ fn json_opt_str(v: &serde_json::Value, key: &str) -> Option<String> {
 }
 
 fn json_i32(v: &serde_json::Value, key: &str) -> i32 {
-    v.get(key)
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0) as i32
+    v.get(key).and_then(|v| v.as_i64()).unwrap_or(0) as i32
 }
 
 pub async fn create_emp_sales(
@@ -112,7 +110,8 @@ pub async fn create_emp_sales(
     let price = json_f64(&body, "Price");
     let amt = json_f64(&body, "Amt");
     let amt = if amt == 0.0 { qty * price } else { amt };
-    let sale_date = json_opt_str(&body, "SaleDate").unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
+    let sale_date = json_opt_str(&body, "SaleDate")
+        .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
     let state = json_opt_str(&body, "State").unwrap_or_else(|| "N".to_string());
 
     let sql = r#"INSERT INTO tSal_EmpSales (EmpNo, EmpName, GDSNO, GDSDesc, Qty, Price, Amt, SaleDate, State, EDate, EUser)
@@ -122,19 +121,23 @@ pub async fn create_emp_sales(
     //   "Conversion failed when converting from a character string to uniqueidentifier"
     //   该函数无 Extension<Claims> 注入，使用 ZERO_UUID 作为审计占位（列可空）
     const EUSER_PLACEHOLDER: &str = "00000000-0000-0000-0000-000000000000";
-    conn.execute(sql, &[
-        &emp_no.as_str(),
-        &emp_name.as_str(),
-        &gdsno.as_str(),
-        &gdsdesc.as_str(),
-        &qty,
-        &price,
-        &amt,
-        &sale_date.as_str(),
-        &state.as_str(),
-        &now,
-        &EUSER_PLACEHOLDER,
-    ]).await?;
+    conn.execute(
+        sql,
+        &[
+            &emp_no.as_str(),
+            &emp_name.as_str(),
+            &gdsno.as_str(),
+            &gdsdesc.as_str(),
+            &qty,
+            &price,
+            &amt,
+            &sale_date.as_str(),
+            &state.as_str(),
+            &now,
+            &EUSER_PLACEHOLDER,
+        ],
+    )
+    .await?;
 
     Ok(Json(ApiResponse::msg("员工销量录入成功")))
 }
@@ -159,26 +162,31 @@ pub async fn update_emp_sales(
     let price = json_f64(&body, "Price");
     let amt = json_f64(&body, "Amt");
     let amt = if amt == 0.0 { qty * price } else { amt };
-    let sale_date = json_opt_str(&body, "SaleDate").unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
+    let sale_date = json_opt_str(&body, "SaleDate")
+        .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
     let state = json_opt_str(&body, "State").unwrap_or_else(|| "N".to_string());
 
     let sql = r#"UPDATE tSal_EmpSales SET EmpNo=@p1, EmpName=@p2, GDSNO=@p3, GDSDesc=@p4,
         Qty=@p5, Price=@p6, Amt=@p7, SaleDate=@p8, State=@p9, EDate=@p10, EUser=@p11 WHERE ID=@p12"#;
 
-    conn.execute(sql, &[
-        &emp_no.as_str(),
-        &emp_name.as_str(),
-        &gdsno.as_str(),
-        &gdsdesc.as_str(),
-        &qty,
-        &price,
-        &amt,
-        &sale_date.as_str(),
-        &state.as_str(),
-        &now,
-        &"system",
-        &id,
-    ]).await?;
+    conn.execute(
+        sql,
+        &[
+            &emp_no.as_str(),
+            &emp_name.as_str(),
+            &gdsno.as_str(),
+            &gdsdesc.as_str(),
+            &qty,
+            &price,
+            &amt,
+            &sale_date.as_str(),
+            &state.as_str(),
+            &now,
+            &"system",
+            &id,
+        ],
+    )
+    .await?;
 
     Ok(Json(ApiResponse::msg("员工销量更新成功")))
 }

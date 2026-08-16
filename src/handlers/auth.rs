@@ -47,7 +47,7 @@ pub async fn login(
         Ok(c) => c,
         Err(e) => {
             return Json(ApiResponse::<LoginResponse>::err_with_code(
-                &format!("数据库连接失败: {}", e),
+                &crate::utils::db_err("数据库连接失败", &e),
                 SYS_DB_UNAVAILABLE,
             ));
         }
@@ -66,7 +66,7 @@ pub async fn login(
         Ok(s) => s,
         Err(e) => {
             return Json(ApiResponse::<LoginResponse>::err_with_code(
-                &format!("查询用户失败: {}", e),
+                &crate::utils::db_err("查询用户失败", &e),
                 SYS_DB_ERROR,
             ));
         }
@@ -234,7 +234,7 @@ pub async fn change_password(
         Ok(c) => c,
         Err(e) => {
             return Json(ApiResponse::err_with_code(
-                &format!("数据库连接失败: {}", e),
+                &crate::utils::db_err("数据库连接失败", &e),
                 SYS_DB_UNAVAILABLE,
             ));
         }
@@ -245,7 +245,7 @@ pub async fn change_password(
         Ok(s) => s,
         Err(e) => {
             return Json(ApiResponse::err_with_code(
-                &format!("查询用户失败: {}", e),
+                &crate::utils::db_err("查询用户失败", &e),
                 SYS_DB_ERROR,
             ));
         }
@@ -295,7 +295,7 @@ pub async fn change_password(
                     Json(ApiResponse::msg("密码修改成功"))
                 }
                 Err(e) => Json(ApiResponse::err_with_code(
-                    &format!("更新密码失败: {}", e),
+                    &crate::utils::db_err("更新密码失败", &e),
                     SYS_DB_ERROR,
                 )),
             }
@@ -305,7 +305,7 @@ pub async fn change_password(
             AUTH_USER_NOT_FOUND,
         )),
         Err(e) => Json(ApiResponse::err_with_code(
-            &format!("读取用户数据失败: {}", e),
+            &crate::utils::db_err("读取用户数据失败", &e),
             SYS_DB_ERROR,
         )),
     }
@@ -337,7 +337,7 @@ pub async fn admin_reset_password(
         Ok(c) => c,
         Err(e) => {
             return Json(ApiResponse::err_with_code(
-                &format!("数据库连接失败: {}", e),
+                &crate::utils::db_err("数据库连接失败", &e),
                 SYS_DB_UNAVAILABLE,
             ));
         }
@@ -349,7 +349,7 @@ pub async fn admin_reset_password(
         Ok(s) => s,
         Err(e) => {
             return Json(ApiResponse::err_with_code(
-                &format!("查询用户失败: {}", e),
+                &crate::utils::db_err("查询用户失败", &e),
                 SYS_DB_ERROR,
             ));
         }
@@ -367,7 +367,7 @@ pub async fn admin_reset_password(
         }
         Err(e) => {
             return Json(ApiResponse::err_with_code(
-                &format!("读取用户数据失败: {}", e),
+                &crate::utils::db_err("读取用户数据失败", &e),
                 SYS_DB_ERROR,
             ));
         }
@@ -411,7 +411,7 @@ pub async fn admin_reset_password(
             Json(ApiResponse::msg("密码重置成功"))
         }
         Err(e) => Json(ApiResponse::err_with_code(
-            &format!("更新密码失败: {}", e),
+            &crate::utils::db_err("更新密码失败", &e),
             SYS_DB_ERROR,
         )),
     }
@@ -505,7 +505,7 @@ pub async fn set_user_pref(
         Ok(c) => c,
         Err(e) => {
             return Json(ApiResponse::err_with_code(
-                &format!("数据库连接失败: {}", e),
+                &crate::utils::db_err("数据库连接失败", &e),
                 SYS_DB_UNAVAILABLE,
             ));
         }

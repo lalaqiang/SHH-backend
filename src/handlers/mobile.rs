@@ -1374,7 +1374,9 @@ pub async fn get_mobile_commission(
     let stk_id = stk_id.unwrap();
 
     // 默认本月
-    let now = chrono::Utc::now();
+    // P2 修复：原用 Utc::now()，东八区每天 20:00 后"今天/本月"会算错（差一天/跨月），
+    // 与全库其余日期逻辑统一改用本地时区
+    let now = chrono::Local::now();
     let default_start = format!("{:04}-{:02}-01", now.year(), now.month());
     let default_end = format!("{:04}-{:02}-{:02}", now.year(), now.month(), now.day());
     let start_date = params

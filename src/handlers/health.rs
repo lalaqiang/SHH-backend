@@ -312,8 +312,10 @@ fn render_metrics_prom(
 fn read_memory_usage() -> Option<(u64, u64)> {
     use std::process::Command;
     // 调用 tasklist 获取当前进程内存
+    // P2 修复：进程名原写 erp-backend.exe（容器名），Windows 原生部署的二进制实际是
+    // Cargo.toml 定义的 erp_server.exe，此前 filter 永远不匹配导致 RSS 恒为 0
     let output = Command::new("tasklist")
-        .args(["/FI", "IMAGENAME eq erp-backend.exe", "/FO", "CSV", "/NH"])
+        .args(["/FI", "IMAGENAME eq erp_server.exe", "/FO", "CSV", "/NH"])
         .output()
         .ok()?;
     let s = String::from_utf8_lossy(&output.stdout);
